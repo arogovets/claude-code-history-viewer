@@ -24,6 +24,7 @@ import {
 import { AgentTaskGroupRenderer, TaskOperationGroupRenderer } from "../../toolResultRenderer";
 import { extractClaudeMessageContent, hasCommandTags } from "../../../utils/messageUtils";
 import { isEmptyMessage } from "../helpers/messageHelpers";
+import { COMMAND_SYSTEM_SUBTYPES } from "../helpers/messageDisplayFilter";
 import { isToolUseContent, isToolResultContent } from "../../../utils/typeGuards";
 import { isActionModifier } from "../../../utils/platform";
 import { MessageHeader } from "./MessageHeader";
@@ -252,6 +253,9 @@ export const ClaudeMessageNode = React.memo(({
 
   // Summary messages
   if (message.type === "summary") {
+    if (!messageFilter.roles.user || !messageFilter.roles.assistant || !messageFilter.contentTypes.text) {
+      return null;
+    }
     const summaryContent = typeof message.content === "string"
       ? message.content
       : "";
@@ -334,7 +338,24 @@ export const ClaudeMessageNode = React.memo(({
 
   // System messages (local_command, compact_boundary, api_error, etc.)
   if (message.type === "system") {
+    // Role filter: if filtering to only user or only assistant, hide system messages
+    if (!messageFilter.roles.user || !messageFilter.roles.assistant) {
+      return null;
+    }
+
     const contentStr = extractClaudeMessageContent(message) ?? undefined;
+    const isCommand =
+      (message.subtype ? COMMAND_SYSTEM_SUBTYPES.has(message.subtype) : false) ||
+      Boolean(message.compactMetadata) ||
+      Boolean(message.microcompactMetadata) ||
+      (contentStr ? hasCommandTags(contentStr) : false);
+
+    if (isCommand) {
+      if (!messageFilter.contentTypes.commands) return null;
+    } else if (message.subtype === "system_prompt" || contentStr) {
+      if (!messageFilter.contentTypes.text) return null;
+    }
+
     return (
       <ExpandKeyProvider value={message.uuid}>
         <div
@@ -404,7 +425,10 @@ export const ClaudeMessageNode = React.memo(({
             {(() => {
               const content = extractClaudeMessageContent(message);
               if (!content) return null;
-              const isCommand = hasCommandTags(content);
+              const isCommand =
+                message.type === "command" ||
+                (message.subtype ? COMMAND_SYSTEM_SUBTYPES.has(message.subtype) : false) ||
+                hasCommandTags(content);
               const isVisible = isCommand
                 ? messageFilter.contentTypes.commands
                 : messageFilter.contentTypes.text;

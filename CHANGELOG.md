@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.27.0-fork.5] - 2026-09-07
+
+Patch release: fix Commands filter to properly hide "Conversation Compacted" and system command events.
+
+### Fixed
+- **Commands filter hides "Conversation Compacted" boundaries** — Toggling off the "Commands" filter now correctly hides compaction boundary messages (`subtype: "compact_boundary"`, "Conversation Compacted" / `Trigger: compacted`), microcompaction boundaries (`microcompact_boundary`), local commands (`local_command`), stop hook summaries (`stop_hook_summary`), and turn durations (`turn_duration`).
+- **Role filtering on system events** — When filtering to a single role (e.g. User only or Assistant only), non-role system events including compaction markers are hidden so the message stream strictly reflects the selected participant.
+- **Defense-in-depth rendering guards** — Added filter visibility checks directly to `ClaudeMessageNode` for system messages and summary messages to prevent empty placeholder gaps, ensuring consistent synchronization with virtualization, toolbar counts, search match navigation, and session export.
+
 ## [1.27.0-fork.4] - 2026-09-07
 
 Feature release: Provider badges and Remote vs. Local host indicators in Cmd+K Global Search project filter.
