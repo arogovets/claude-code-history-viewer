@@ -85,6 +85,16 @@ impl Serialize for ClaudeProject {
     where
         S: serde::Serializer,
     {
+        let path_status = if self.path.starts_with("remote://") {
+            if self.path.contains("?status=unavailable#") {
+                Some(ProjectPathStatus::Unavailable)
+            } else {
+                None
+            }
+        } else {
+            project_path_status(&self.actual_path)
+        };
+
         ClaudeProjectPayload {
             name: &self.name,
             path: &self.path,
@@ -92,7 +102,7 @@ impl Serialize for ClaudeProject {
             session_count: self.session_count,
             message_count: self.message_count,
             last_modified: &self.last_modified,
-            path_status: project_path_status(&self.actual_path),
+            path_status,
             git_info: &self.git_info,
             provider: &self.provider,
             storage_type: &self.storage_type,

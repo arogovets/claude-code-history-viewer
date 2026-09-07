@@ -75,6 +75,7 @@
   "common.provider.crush": "Crush",
   "common.provider.cursor": "Cursor",
   "common.provider.cursorAgent": "Cursor Agent",
+  "common.provider.deepseek": "DeepSeek Harness",
   "common.provider.detectError": "プロバイダーの検出に失敗しました。以前のプロバイダー設定を維持します。",
   "common.provider.forgecode": "ForgeCode",
   "common.provider.gemini": "Gemini CLI",

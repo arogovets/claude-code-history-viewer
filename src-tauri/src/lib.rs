@@ -4,6 +4,7 @@ pub mod commands;
 pub mod export;
 pub mod models;
 pub mod providers;
+pub mod remote;
 pub mod utils;
 pub mod wsl;
 

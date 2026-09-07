@@ -59,6 +59,7 @@ describe("providers utils", () => {
       "crush",
       "cursor",
       "cursor-agent",
+      "deepseek",
       "forgecode",
       "gemini",
       "goose",
@@ -82,6 +83,7 @@ describe("providers utils", () => {
   it("knows which providers support conversation breakdown", () => {
     expect(supportsConversationBreakdown("claude")).toBe(true);
     expect(supportsConversationBreakdown("antigravity")).toBe(true);
+    expect(supportsConversationBreakdown("deepseek")).toBe(true);
     expect(supportsConversationBreakdown("forgecode")).toBe(true);
     expect(supportsConversationBreakdown("codex")).toBe(false);
     expect(supportsConversationBreakdown("kimi")).toBe(false);

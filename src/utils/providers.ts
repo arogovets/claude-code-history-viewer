@@ -1,7 +1,7 @@
 import type { ProviderId } from "../types";
 import { isWindows } from "./platform";
 
-export const PROVIDER_IDS: ProviderId[] = ["aider", "amazonq", "antigravity", "claude", "cline", "codebuddy", "codex", "continue", "copilot", "crush", "cursor", "cursor-agent", "forgecode", "gemini", "goose", "grok", "kimi", "kiro", "llm", "ompi", "opencode", "openhands", "openinterpreter", "pearai", "pi", "qwen", "trae", "vibe", "zed"];
+export const PROVIDER_IDS: ProviderId[] = ["aider", "amazonq", "antigravity", "claude", "cline", "codebuddy", "codex", "continue", "copilot", "crush", "cursor", "cursor-agent", "deepseek", "forgecode", "gemini", "goose", "grok", "kimi", "kiro", "llm", "ompi", "opencode", "openhands", "openinterpreter", "pearai", "pi", "qwen", "trae", "vibe", "zed"];
 export const DEFAULT_PROVIDER_ID: ProviderId = "claude";
 
 // WSL provider loaders use UNC-backed paths and are not interchangeable with
@@ -30,6 +30,7 @@ const PROVIDER_TRANSLATIONS: Record<
   crush: { key: "common.provider.crush", fallback: "Crush" },
   cursor: { key: "common.provider.cursor", fallback: "Cursor" },
   "cursor-agent": { key: "common.provider.cursorAgent", fallback: "Cursor Agent" },
+  deepseek: { key: "common.provider.deepseek", fallback: "DeepSeek Harness" },
   forgecode: { key: "common.provider.forgecode", fallback: "ForgeCode" },
   gemini: { key: "common.provider.gemini", fallback: "Gemini CLI" },
   goose: { key: "common.provider.goose", fallback: "Goose" },
@@ -142,6 +143,13 @@ const PROVIDER_SESSION_CAPABILITIES: Record<ProviderId, ProviderSessionCapabilit
   },
   "cursor-agent": {
     supportsConversationBreakdown: false,
+    supportsNativeRename: false,
+    supportsResumeCommand: false,
+    supportsSessionDeletion: false,
+    supportsArchiveCreation: false,
+  },
+  deepseek: {
+    supportsConversationBreakdown: true,
     supportsNativeRename: false,
     supportsResumeCommand: false,
     supportsSessionDeletion: false,
@@ -293,6 +301,7 @@ export function getProviderId(provider?: ProviderId | string): ProviderId {
     case "crush":
     case "cursor":
     case "cursor-agent":
+    case "deepseek":
     case "gemini":
     case "goose":
     case "grok":
@@ -506,6 +515,7 @@ export const PROVIDER_BADGE_STYLES: Record<ProviderId, string> = {
   aider: "bg-rose-500/15 text-rose-600 dark:text-rose-400",
   amazonq: "bg-zinc-500/15 text-zinc-600 dark:text-zinc-400",
   antigravity: "bg-indigo-500/15 text-indigo-600 dark:text-indigo-400",
+  deepseek: "bg-cyan-500/15 text-cyan-600 dark:text-cyan-400",
 };
 
 export function getProviderBadgeStyle(provider?: ProviderId | string): string {

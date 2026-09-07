@@ -16,6 +16,7 @@ pub mod copilot_cli;
 pub mod crush;
 pub mod cursor;
 pub mod cursor_agent;
+pub mod deepseek;
 pub mod forgecode;
 pub mod gemini;
 pub mod goose;
@@ -86,6 +87,8 @@ pub enum ProviderId {
     /// Qwen Code (Gemini-CLI fork) — JSONL transcripts under `~/.qwen/projects`.
     Qwen,
     Antigravity,
+    /// `DeepSeek` Harness CLI (`~/.dsh/sessions`).
+    DeepSeek,
     /// Zed Agent Panel threads (`SQLite` + Zstd JSON at `…/Zed/threads/threads.db`).
     Zed,
     /// Trae IDE chat (reverse-engineered icube JSON in per-workspace `state.vscdb`).
@@ -123,6 +126,7 @@ impl ProviderId {
             Self::Ompi => "ompi",
             Self::Qwen => "qwen",
             Self::Antigravity => "antigravity",
+            Self::DeepSeek => "deepseek",
             Self::Zed => "zed",
             Self::Trae => "trae",
             Self::Vibe => "vibe",
@@ -157,6 +161,7 @@ impl ProviderId {
             "ompi" => Some(Self::Ompi),
             "qwen" => Some(Self::Qwen),
             "antigravity" => Some(Self::Antigravity),
+            "deepseek" => Some(Self::DeepSeek),
             "zed" => Some(Self::Zed),
             "trae" => Some(Self::Trae),
             "vibe" => Some(Self::Vibe),
@@ -192,6 +197,7 @@ impl ProviderId {
             Self::Ompi => "oh-my-pi",
             Self::Qwen => "Qwen Code",
             Self::Antigravity => "Antigravity",
+            Self::DeepSeek => "DeepSeek Harness",
             Self::Zed => "Zed",
             Self::Trae => "Trae",
             Self::Vibe => "Mistral Vibe",
@@ -282,6 +288,9 @@ pub fn detect_providers() -> Vec<ProviderInfo> {
         providers.push(info);
     }
     if let Some(info) = antigravity::detect() {
+        providers.push(info);
+    }
+    if let Some(info) = deepseek::detect() {
         providers.push(info);
     }
     if let Some(info) = codebuddy::detect() {

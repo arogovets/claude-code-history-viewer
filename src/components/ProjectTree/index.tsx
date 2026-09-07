@@ -111,6 +111,7 @@ export const ProjectTree: React.FC<ProjectTreeProps> = ({
   } = useProjectTreeState(groupingMode);
 
   const [searchTerm, setSearchTerm] = useState("");
+  const [selectedHostFilter, setSelectedHostFilter] = useState<string>("all");
   const [areProviderFiltersOpen, setAreProviderFiltersOpen] = useState(
     loadProviderFiltersOpenState
   );
@@ -151,6 +152,7 @@ export const ProjectTree: React.FC<ProjectTreeProps> = ({
       crush: 0,
       cursor: 0,
       "cursor-agent": 0,
+      deepseek: 0,
       forgecode: 0,
       gemini: 0,
       goose: 0,
@@ -346,16 +348,35 @@ export const ProjectTree: React.FC<ProjectTreeProps> = ({
     [normalizedSearchTerm]
   );
 
+  const availableHosts = useMemo(() => {
+    const hosts = new Set<string>();
+    for (const p of projects) {
+      if (p.custom_directory_label) {
+        hosts.add(p.custom_directory_label);
+      }
+    }
+    return Array.from(hosts);
+  }, [projects]);
+
+  const matchesHostFilter = useCallback(
+    (project: (typeof projects)[number]) => {
+      if (selectedHostFilter === "all") return true;
+      if (selectedHostFilter === "local") return !project.custom_directory_label;
+      return project.custom_directory_label === selectedHostFilter;
+    },
+    [selectedHostFilter]
+  );
+
   const filteredProjects = useMemo(
-    () => projects.filter((p) => matchesProviderFilter(p) && matchesSearch(p)),
-    [projects, matchesProviderFilter, matchesSearch]
+    () => projects.filter((p) => matchesHostFilter(p) && matchesProviderFilter(p) && matchesSearch(p)),
+    [projects, matchesHostFilter, matchesProviderFilter, matchesSearch]
   );
 
   const filteredDirectoryGroups = useMemo(() => {
     const filterFn = (p: (typeof projects)[number]) =>
-      matchesProviderFilter(p) && matchesSearch(p);
+      matchesHostFilter(p) && matchesProviderFilter(p) && matchesSearch(p);
 
-    if (isAllProvidersSelected && !normalizedSearchTerm) {
+    if (isAllProvidersSelected && !normalizedSearchTerm && selectedHostFilter === "all") {
       return directoryGroups;
     }
 
@@ -365,14 +386,14 @@ export const ProjectTree: React.FC<ProjectTreeProps> = ({
         projects: group.projects.filter(filterFn),
       }))
       .filter((group) => group.projects.length > 0);
-  }, [directoryGroups, isAllProvidersSelected, matchesProviderFilter, matchesSearch, normalizedSearchTerm]);
+  }, [directoryGroups, isAllProvidersSelected, matchesHostFilter, matchesProviderFilter, matchesSearch, normalizedSearchTerm, selectedHostFilter]);
 
   const { filteredWorktreeGroups, filteredUngroupedProjects } = useMemo(() => {
     const baseUngrouped = ungroupedProjects ?? projects;
     const filterFn = (p: (typeof projects)[number]) =>
-      matchesProviderFilter(p) && matchesSearch(p);
+      matchesHostFilter(p) && matchesProviderFilter(p) && matchesSearch(p);
 
-    if (isAllProvidersSelected && !normalizedSearchTerm) {
+    if (isAllProvidersSelected && !normalizedSearchTerm && selectedHostFilter === "all") {
       return {
         filteredWorktreeGroups: worktreeGroups,
         filteredUngroupedProjects: baseUngrouped,
@@ -1038,6 +1059,56 @@ export const ProjectTree: React.FC<ProjectTreeProps> = ({
             </CollapsibleContent>
           </Collapsible>
         </div>
+
+        {/* Host Filter (when remote hosts are present) */}
+        {availableHosts.length > 0 && (
+          <div className="px-3 pt-2 pb-1 flex flex-wrap gap-1 items-center border-b border-accent/10">
+            <button
+              type="button"
+              onClick={() => setSelectedHostFilter("all")}
+              className={cn(
+                "px-2 py-0.5 rounded text-2xs font-medium border transition-colors",
+                selectedHostFilter === "all"
+                  ? "bg-accent/20 text-accent border-accent/30"
+                  : "bg-muted/30 text-muted-foreground border-transparent hover:bg-muted/50"
+              )}
+            >
+              All Hosts ({projects.length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setSelectedHostFilter("local")}
+              className={cn(
+                "px-2 py-0.5 rounded text-2xs font-medium border transition-colors",
+                selectedHostFilter === "local"
+                  ? "bg-accent/20 text-accent border-accent/30"
+                  : "bg-muted/30 text-muted-foreground border-transparent hover:bg-muted/50"
+              )}
+            >
+              Local ({projects.filter((p) => !p.custom_directory_label).length})
+            </button>
+            {availableHosts.map((host) => {
+              const count = projects.filter((p) => p.custom_directory_label === host).length;
+              const shortLabel = host.includes("@") ? host.split("@")[0] + " (remote)" : host;
+              return (
+                <button
+                  key={host}
+                  type="button"
+                  onClick={() => setSelectedHostFilter(host)}
+                  className={cn(
+                    "px-2 py-0.5 rounded text-2xs font-medium border transition-colors truncate max-w-[160px]",
+                    selectedHostFilter === host
+                      ? "bg-accent/20 text-accent border-accent/30"
+                      : "bg-muted/30 text-muted-foreground border-transparent hover:bg-muted/50"
+                  )}
+                  title={host}
+                >
+                  {shortLabel} ({count})
+                </button>
+              );
+            })}
+          </div>
+        )}
 
         {/* Search */}
         <div className="px-3 py-2 border-b border-accent/10">

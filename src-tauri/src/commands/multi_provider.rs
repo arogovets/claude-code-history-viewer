@@ -76,6 +76,7 @@ pub async fn scan_all_projects(
     custom_claude_paths: Option<Vec<CustomClaudePathParam>>,
     wsl_enabled: Option<bool>,
     wsl_excluded_distros: Option<Vec<String>>,
+    include_remote: Option<bool>,
 ) -> Result<Vec<ClaudeProject>, String> {
     let providers_to_scan = active_providers.unwrap_or_else(|| {
         vec![
@@ -101,6 +102,7 @@ pub async fn scan_all_projects(
             "aider".to_string(),
             "amazonq".to_string(),
             "antigravity".to_string(),
+            "deepseek".to_string(),
             "codebuddy".to_string(),
             "kiro".to_string(),
             "llm".to_string(),
@@ -193,6 +195,7 @@ pub async fn scan_all_projects(
         ("aider", providers::aider::scan_projects),
         ("amazonq", providers::amazon_q::scan_projects),
         ("antigravity", providers::antigravity::scan_projects),
+        ("deepseek", providers::deepseek::scan_projects),
         ("codebuddy", providers::codebuddy::scan_projects),
         ("kiro", providers::kiro::scan_projects),
         ("llm", providers::llm::scan_projects),
@@ -325,6 +328,29 @@ pub async fn scan_all_projects(
         }
     }
 
+    // Remote hosts scanning
+    if include_remote.unwrap_or(true) {
+        let remote_hosts = crate::remote::get_remote_hosts();
+        let remote_handles: Vec<_> = remote_hosts
+            .into_iter()
+            .filter(|h| h.enabled)
+            .map(|host| {
+                let providers = providers_to_scan.clone();
+                tauri::async_runtime::spawn(async move {
+                    crate::remote::scan_remote_projects(&host, &providers).await
+                })
+            })
+            .collect();
+
+        for handle in remote_handles {
+            match handle.await {
+                Ok(Ok(projects)) => all_projects.extend(projects),
+                Ok(Err(e)) => log::warn!("Remote host scan error: {e}"),
+                Err(e) => log::warn!("Remote host scan task failed: {e}"),
+            }
+        }
+    }
+
     // Hide empty containers that have no session files regardless of provider.
     all_projects.retain(|project| project.session_count > 0);
 
@@ -349,6 +375,18 @@ pub async fn load_provider_sessions(
     project_path: String,
     exclude_sidechain: Option<bool>,
 ) -> Result<Vec<ClaudeSession>, String> {
+    if crate::remote::is_remote_path(&project_path) {
+        if let Some((endpoint, inner_path)) = crate::remote::parse_remote_path(&project_path) {
+            return crate::remote::load_remote_sessions(
+                endpoint,
+                &provider,
+                inner_path,
+                exclude_sidechain,
+            )
+            .await;
+        }
+    }
+
     let exclude = exclude_sidechain.unwrap_or(false);
 
     match provider.as_str() {
@@ -384,6 +422,7 @@ pub async fn load_provider_sessions(
         "aider" => providers::aider::load_sessions(&project_path, exclude),
         "amazonq" => providers::amazon_q::load_sessions(&project_path, exclude),
         "antigravity" => providers::antigravity::load_sessions(&project_path, exclude),
+        "deepseek" => providers::deepseek::load_sessions(&project_path, exclude),
         "codebuddy" => providers::codebuddy::load_sessions(&project_path, exclude),
         "kiro" => providers::kiro::load_sessions(&project_path, exclude),
         "llm" => providers::llm::load_sessions(&project_path, exclude),
@@ -424,6 +463,20 @@ pub async fn load_provider_sessions_page(
 ) -> Result<crate::commands::session::SessionPage, String> {
     let offset = offset.unwrap_or(0);
     let limit = limit.unwrap_or(250).clamp(1, 500);
+
+    if crate::remote::is_remote_path(&project_path) {
+        if let Some((endpoint, inner_path)) = crate::remote::parse_remote_path(&project_path) {
+            return crate::remote::load_remote_sessions_page(
+                endpoint,
+                &provider,
+                inner_path,
+                exclude_sidechain,
+                offset,
+                limit,
+            )
+            .await;
+        }
+    }
 
     if provider == "claude" {
         let mut page = crate::commands::session::load_project_sessions_page(
@@ -497,6 +550,7 @@ fn load_non_claude_messages(
         "aider" => providers::aider::load_messages(session_path),
         "amazonq" => providers::amazon_q::load_messages(session_path),
         "antigravity" => providers::antigravity::load_messages(session_path),
+        "deepseek" => providers::deepseek::load_messages(session_path),
         "codebuddy" => providers::codebuddy::load_messages(session_path),
         "kiro" => providers::kiro::load_messages(session_path),
         "llm" => providers::llm::load_messages(session_path),
@@ -514,6 +568,12 @@ pub async fn load_provider_messages(
     provider: String,
     session_path: String,
 ) -> Result<Vec<ClaudeMessage>, String> {
+    if crate::remote::is_remote_path(&session_path) {
+        if let Some((endpoint, inner_path)) = crate::remote::parse_remote_path(&session_path) {
+            return crate::remote::load_remote_messages(endpoint, &provider, inner_path).await;
+        }
+    }
+
     let messages = if provider == "claude" {
         let mut messages = crate::commands::session::load_session_messages(session_path).await?;
         for m in &mut messages {
@@ -575,6 +635,20 @@ pub async fn load_provider_messages_paginated(
         .unwrap_or(DEFAULT_MESSAGE_PAGE_SIZE)
         .clamp(1, MAX_MESSAGE_PAGE_LIMIT);
 
+    if crate::remote::is_remote_path(&session_path) {
+        if let Some((endpoint, inner_path)) = crate::remote::parse_remote_path(&session_path) {
+            return crate::remote::load_remote_messages_paginated(
+                endpoint,
+                &provider,
+                inner_path,
+                offset,
+                limit,
+                exclude_sidechain,
+            )
+            .await;
+        }
+    }
+
     if provider == "claude" {
         let mut page = crate::commands::session::load_session_messages_paginated(
             session_path,
@@ -615,6 +689,19 @@ pub async fn get_provider_message_offset(
     message_uuid: String,
     exclude_sidechain: Option<bool>,
 ) -> Result<Option<usize>, String> {
+    if crate::remote::is_remote_path(&session_path) {
+        if let Some((endpoint, inner_path)) = crate::remote::parse_remote_path(&session_path) {
+            return crate::remote::get_remote_message_offset(
+                endpoint,
+                &provider,
+                inner_path,
+                &message_uuid,
+                exclude_sidechain,
+            )
+            .await;
+        }
+    }
+
     if provider == "claude" {
         return crate::commands::session::get_session_message_offset(
             session_path,
@@ -644,6 +731,7 @@ pub async fn search_all_providers(
     custom_claude_paths: Option<Vec<CustomClaudePathParam>>,
     wsl_enabled: Option<bool>,
     wsl_excluded_distros: Option<Vec<String>>,
+    include_remote: Option<bool>,
 ) -> Result<Vec<ClaudeMessage>, String> {
     let max_results = limit.unwrap_or(100);
     let search_filters =
@@ -674,6 +762,7 @@ pub async fn search_all_providers(
             "aider".to_string(),
             "amazonq".to_string(),
             "antigravity".to_string(),
+            "deepseek".to_string(),
             "codebuddy".to_string(),
             "kiro".to_string(),
             "llm".to_string(),
@@ -1112,6 +1201,24 @@ pub async fn search_all_providers(
                         }
                     }
                 }
+            }
+        }
+    }
+
+    // Remote hosts search
+    if include_remote.unwrap_or(true) {
+        let remote_hosts = crate::remote::get_remote_hosts();
+        for host in remote_hosts.iter().filter(|h| h.enabled) {
+            match crate::remote::search_remote_providers(
+                host,
+                &query,
+                max_results,
+                &providers_to_search,
+            )
+            .await
+            {
+                Ok(results) => all_results.extend(results),
+                Err(e) => log::warn!("Remote search failed for {}: {e}", host.name),
             }
         }
     }

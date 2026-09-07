@@ -66,7 +66,7 @@ const CACHE_VERSION: u32 = 11;
 const DEFAULT_SESSION_PAGE_LIMIT: usize = 250;
 const MAX_SESSION_PAGE_LIMIT: usize = 500;
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionPage {
     pub sessions: Vec<ClaudeSession>,
@@ -1071,6 +1071,20 @@ pub async fn load_project_sessions_page(
     offset: Option<usize>,
     limit: Option<usize>,
 ) -> Result<SessionPage, String> {
+    if crate::remote::is_remote_path(&project_path) {
+        if let Some((endpoint, inner_path)) = crate::remote::parse_remote_path(&project_path) {
+            return crate::remote::load_remote_sessions_page(
+                endpoint,
+                "claude",
+                inner_path,
+                exclude_sidechain,
+                offset.unwrap_or(0),
+                limit.unwrap_or(250),
+            )
+            .await;
+        }
+    }
+
     tauri::async_runtime::spawn_blocking(move || {
         load_project_sessions_page_blocking(project_path, exclude_sidechain, offset, limit)
     })
@@ -1363,6 +1377,18 @@ pub async fn load_project_sessions(
     project_path: String,
     exclude_sidechain: Option<bool>,
 ) -> Result<Vec<ClaudeSession>, String> {
+    if crate::remote::is_remote_path(&project_path) {
+        if let Some((endpoint, inner_path)) = crate::remote::parse_remote_path(&project_path) {
+            return crate::remote::load_remote_sessions(
+                endpoint,
+                "claude",
+                inner_path,
+                exclude_sidechain,
+            )
+            .await;
+        }
+    }
+
     tauri::async_runtime::spawn_blocking(move || {
         load_project_sessions_blocking(project_path, exclude_sidechain)
     })
@@ -1880,6 +1906,12 @@ fn parse_line_simd(
 #[tauri::command]
 #[allow(unsafe_code)] // Required for mmap performance optimization
 pub async fn load_session_messages(session_path: String) -> Result<Vec<ClaudeMessage>, String> {
+    if crate::remote::is_remote_path(&session_path) {
+        if let Some((endpoint, inner_path)) = crate::remote::parse_remote_path(&session_path) {
+            return crate::remote::load_remote_messages(endpoint, "claude", inner_path).await;
+        }
+    }
+
     #[cfg(debug_assertions)]
     let start_time = std::time::Instant::now();
 
@@ -2050,6 +2082,12 @@ fn opencode_subagents(session_path: &str) -> Vec<SubagentSession> {
 pub async fn get_session_subagents(session_path: String) -> Result<Vec<SubagentSession>, String> {
     use crate::utils::find_subagent_files;
 
+    if crate::remote::is_remote_path(&session_path) {
+        if let Some((endpoint, inner_path)) = crate::remote::parse_remote_path(&session_path) {
+            return crate::remote::get_remote_session_subagents(endpoint, inner_path).await;
+        }
+    }
+
     // OpenCode keeps subagent runs as child rows in SQLite rather than as
     // sidechain files beside the parent, so the file scan below has nothing to
     // find and the absolute-path check would reject the URI outright (#560).
@@ -2059,7 +2097,7 @@ pub async fn get_session_subagents(session_path: String) -> Result<Vec<SubagentS
 
     let path = PathBuf::from(&session_path);
     if !path.is_absolute() {
-        return Err("session_path must be an absolute path".to_string());
+        return Ok(Vec::new());
     }
     let subagent_files = find_subagent_files(&path);
 
@@ -2414,6 +2452,20 @@ pub async fn load_session_messages_paginated(
     limit: usize,
     exclude_sidechain: Option<bool>,
 ) -> Result<MessagePage, String> {
+    if crate::remote::is_remote_path(&session_path) {
+        if let Some((endpoint, inner_path)) = crate::remote::parse_remote_path(&session_path) {
+            return crate::remote::load_remote_messages_paginated(
+                endpoint,
+                "claude",
+                inner_path,
+                offset,
+                limit,
+                exclude_sidechain,
+            )
+            .await;
+        }
+    }
+
     #[cfg(debug_assertions)]
     let start_time = std::time::Instant::now();
 

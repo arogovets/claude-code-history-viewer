@@ -326,6 +326,8 @@ pub struct ScanAllProjectsParams {
     pub wsl_enabled: Option<bool>,
     #[serde(default)]
     pub wsl_excluded_distros: Option<Vec<String>>,
+    #[serde(default)]
+    pub include_remote: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -400,6 +402,8 @@ pub struct SearchAllProvidersParams {
     pub wsl_enabled: Option<bool>,
     #[serde(default)]
     pub wsl_excluded_distros: Option<Vec<String>>,
+    #[serde(default)]
+    pub include_remote: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -892,6 +896,7 @@ handler_json!(
             p.custom_claude_paths,
             p.wsl_enabled,
             p.wsl_excluded_distros,
+            p.include_remote,
         )
         .await
     }
@@ -976,6 +981,7 @@ handler_json!(
             p.custom_claude_paths,
             p.wsl_enabled,
             p.wsl_excluded_distros,
+            p.include_remote,
         )
         .await
     }

@@ -1,6 +1,6 @@
 [package]
 name = "claude-code-history-viewer"
-version = "1.26.3"
+version = "1.27.0"
 description = "Claude Code 대화 기록을 탐색하고 분석하는 데스크톱 애플리케이션"
 authors = ["JaeHyeok Lee"]
 license = "MIT"
@@ -56,6 +56,7 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 zstd = "0.13"
 notify = { version = "7.0", default-features = false, features = ["macos_fsevent"] }
 notify-debouncer-mini = "0.5"
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
 
 # WebUI server mode (optional)
 argon2 = { version = "0.5", optional = true }

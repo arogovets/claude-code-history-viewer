@@ -113,11 +113,12 @@ export const GlobalSearchModal = ({
     // Get session display name for a search result
     const getSessionName = useCallback((result: GlobalSearchResult): string | undefined => {
         if (!result.sessionId || result.sessionId === "unknown-session") return undefined;
-        const name = getSessionDisplayName(result.sessionId);
+        const cleanId = (result.sessionId.includes("#") ? result.sessionId.split("#")[1] : result.sessionId) || result.sessionId;
+        const name = getSessionDisplayName(cleanId) || getSessionDisplayName(result.sessionId);
         if (name) return name;
         // No custom/known name: show a short, stable conversation handle so results
         // from different conversations are still distinguishable (#420).
-        return t("globalSearch.conversationId", { id: result.sessionId.slice(0, 8) });
+        return t("globalSearch.conversationId", { id: cleanId.slice(0, 8) });
     }, [getSessionDisplayName, t]);
 
     // Debounced search
@@ -202,11 +203,20 @@ export const GlobalSearchModal = ({
     const handleSelectResult = useCallback(
         async (result: GlobalSearchResult) => {
             try {
-                const targetSession = sessions.find(
-                    (s) =>
-                        s.session_id === result.sessionId ||
-                        s.actual_session_id === result.sessionId,
-                );
+                const sessionMatches = (s: ClaudeSession, targetId?: string): boolean => {
+                    if (!targetId) return false;
+                    if (s.session_id === targetId || s.actual_session_id === targetId) return true;
+                    const cleanTarget = (targetId.includes("#") ? targetId.split("#")[1] : targetId) || targetId;
+                    const cleanSession = (s.session_id.includes("#") ? s.session_id.split("#")[1] : s.session_id) || s.session_id;
+                    return (
+                        s.actual_session_id === cleanTarget ||
+                        cleanSession === cleanTarget ||
+                        s.session_id === cleanTarget ||
+                        (cleanSession ? cleanSession.endsWith(cleanTarget) : false)
+                    );
+                };
+
+                const targetSession = sessions.find((s) => sessionMatches(s, result.sessionId));
 
                 if (targetSession) {
                     // Ensure the conversation pane is the active view — otherwise
@@ -260,11 +270,7 @@ export const GlobalSearchModal = ({
                                 ? { provider: projectProvider, projectPath: project.path, excludeSidechain }
                                 : { projectPath: project.path, excludeSidechain },
                         );
-                        const session = projectSessions.find(
-                            (s) =>
-                                s.session_id === result.sessionId ||
-                                s.actual_session_id === result.sessionId,
-                        );
+                        const session = projectSessions.find((s) => sessionMatches(s, result.sessionId));
                         return session ? { project, session } : null;
                     } catch (error) {
                         console.error(

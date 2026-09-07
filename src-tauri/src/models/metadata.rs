@@ -248,6 +248,27 @@ pub struct UserSettings {
     /// Providers explicitly discovered by the user and allowed to scan on startup
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub discovered_provider_ids: Vec<String>,
+
+    /// Remote hosts running CCHV server to aggregate
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub remote_hosts: Vec<RemoteHostConfig>,
+}
+
+/// Remote host configuration for multi-machine history aggregation
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteHostConfig {
+    pub id: String,
+    pub name: String,
+    pub endpoint: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_token: Option<String>,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[cfg(test)]
