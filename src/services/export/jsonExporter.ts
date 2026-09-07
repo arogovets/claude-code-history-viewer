@@ -29,7 +29,7 @@ export function exportToJson(messages: ClaudeMessage[], sessionName: string, con
       role: msg.type === "user" ? "user" : "assistant",
       timestamp: msg.timestamp,
       content: blocksToPlainText(
-        contentTypeFilter && msg.type === "assistant"
+        contentTypeFilter
           ? filterBlocksByContentType(extractBlocks(msg.content), contentTypeFilter)
           : extractBlocks(msg.content)
       ),

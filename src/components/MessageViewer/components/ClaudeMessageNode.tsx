@@ -401,7 +401,7 @@ export const ClaudeMessageNode = React.memo(({
           <MessageHeader message={message} />
 
           <div className="w-full">
-            {(message.type !== "assistant" || messageFilter.contentTypes.text) && (
+            {messageFilter.contentTypes.text && (
               <MessageContentDisplay
                 content={extractClaudeMessageContent(message)}
                 messageType={message.type}
@@ -422,13 +422,12 @@ export const ClaudeMessageNode = React.memo(({
                     currentMatchIndex={currentMatchIndex}
                     skipToolResults={shouldRenderLegacyToolResult}
                     skipText={
-                      (message.type === "assistant" && !messageFilter.contentTypes.text) ||
-                      (message.type === "assistant" &&
-                      !!extractClaudeMessageContent(message))
+                      !messageFilter.contentTypes.text ||
+                      !!extractClaudeMessageContent(message)
                     }
-                    skipThinking={message.type === "assistant" && !messageFilter.contentTypes.thinking}
-                    skipCommands={message.type === "assistant" && !messageFilter.contentTypes.commands}
-                    skipToolCalls={message.type === "assistant" && !messageFilter.contentTypes.toolCalls}
+                    skipThinking={!messageFilter.contentTypes.thinking}
+                    skipCommands={!messageFilter.contentTypes.commands}
+                    skipToolCalls={!messageFilter.contentTypes.toolCalls}
                     onViewSubagent={handleViewSubagent}
                   />
                 </div>
@@ -442,7 +441,7 @@ export const ClaudeMessageNode = React.memo(({
                 message.content.some(isToolUseContent)
               ) && <ClaudeToolUseDisplay toolUse={message.toolUse} />}
 
-            {(message.type !== "assistant" || messageFilter.contentTypes.toolCalls) && shouldRenderLegacyToolResult && (
+            {messageFilter.contentTypes.toolCalls && shouldRenderLegacyToolResult && (
                 <ToolExecutionResultRouter
                   toolResult={message.toolUseResult!}
                   searchQuery={searchQuery}
