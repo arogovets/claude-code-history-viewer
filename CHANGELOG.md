@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.27.0-fork.1] - 2026-09-07
+
+Feature release: DeepSeek Harness provider, Tailscale SSH remote host aggregation, text content filtering, and remote session global search.
+
+### Added
+- **DeepSeek Harness provider** — Support for sessions logged by DeepSeek Harness (`~/.deepseek/sessions` and `~/.deepseek-harness/sessions`), including zstd-compressed transcripts and raw JSONL formats. Workspaces are automatically extracted from project slugs, and token usage statistics are mapped to DeepSeek models.
+- **Remote Tailscale host aggregation** — Native multi-host support aggregating sessions from remote machines via Tailscale SSH (`cchv-server` instance on port 3728). Projects and sessions across both local and remote nodes are combined seamlessly in the sidebar, search, and analytics.
+- **Remote subagent inspection** — Subagents executed on remote hosts are resolved and displayed in the subagent panel without requiring local directory mounts.
+
+### Fixed
+- **Global search remote session deep linking** — Session UUIDs for remote sessions are preserved in search results, enabling instant navigation to remote conversations from Cmd+K search.
+- **Text content filter** — Toggling off the "Text" filter now correctly hides text turns for both user and assistant messages, instead of only applying to assistant messages.
+- **Export content filters** — HTML, Markdown, and JSON exporters now respect the text content filter consistently across all message roles.
+- **Graceful subagent loading** — Non-Claude and remote providers that do not use local absolute filesystem paths now return empty subagent lists instead of triggering path validation errors.
+
 ## [1.26.3] - 2026-08-29
 
 Patch release: restore is authorised by what the project actually edited.
