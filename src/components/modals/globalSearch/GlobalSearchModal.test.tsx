@@ -19,7 +19,10 @@ vi.mock("@/components/ui", () => ({
     Input: (props: InputHTMLAttributes<HTMLInputElement>) => <input {...props} />,
     Select: ({ children }: MockProps) => <div>{children}</div>,
     SelectContent: ({ children }: MockProps) => <div>{children}</div>,
-    SelectItem: ({ children, ...props }: MockProps) => <div {...props}>{children}</div>,
+    SelectItem: ({ children, ...props }: MockProps) => {
+        delete props.textValue;
+        return <div {...props}>{children}</div>;
+    },
     SelectTrigger: ({ children, ...props }: MockProps) => <button {...props}>{children}</button>,
     SelectValue: ({ children }: MockProps) => <span>{children}</span>,
     Badge: ({ children, ...props }: MockProps) => <div {...props}>{children}</div>,
@@ -156,5 +159,43 @@ describe("GlobalSearchModal WSL search routing", () => {
                 }),
             );
         });
+    });
+
+    it("renders project filter with provider and remote/local badges", () => {
+        storeState.projects = [
+            {
+                name: "cchv",
+                path: "/Users/emac/Dev/cchv",
+                actual_path: "/Users/emac/Dev/cchv",
+                provider: "claude",
+                session_count: 5,
+                message_count: 50,
+                last_modified: "2026-09-07T00:00:00Z",
+            },
+            {
+                name: "master",
+                path: "remote://http://100.93.94.80:3728#/home/arogovets/.codex/sessions",
+                actual_path: "/home/arogovets/master",
+                provider: "codex",
+                custom_directory_label: "arogovets@100.93.94.80",
+                session_count: 3,
+                message_count: 30,
+                last_modified: "2026-09-07T00:00:00Z",
+            },
+        ];
+
+        render(<GlobalSearchModal isOpen onClose={vi.fn()} />);
+
+        // Check project names
+        expect(screen.getByText("cchv")).toBeDefined();
+        expect(screen.getByText("master")).toBeDefined();
+
+        // Check providers
+        expect(screen.getByText("Claude Code")).toBeDefined();
+        expect(screen.getByText("Codex CLI")).toBeDefined();
+
+        // Check local and remote badges
+        expect(screen.getByText("Local")).toBeDefined();
+        expect(screen.getByText("arogovets@100.93.94.80")).toBeDefined();
     });
 });

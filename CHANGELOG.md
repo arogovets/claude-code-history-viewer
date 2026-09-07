@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.27.0-fork.4] - 2026-09-07
+
+Feature release: Provider badges and Remote vs. Local host indicators in Cmd+K Global Search project filter.
+
+### Added
+- **Provider badges in Project Filter** — Projects in the Cmd+K Global Search dropdown now display a distinct provider badge (e.g., Claude Code, Codex CLI, OpenCode) with matching brand color palettes.
+- **Remote / Local host badges in Project Filter** — Each project item displays whether it is Local (with laptop icon) or Remote (with server icon and remote host label e.g. `arogovets@100.93.94.80`), resolving ambiguity when identical project names exist across hosts.
+- **Rich Select Trigger layout** — When a project is selected, the dropdown trigger displays the project name, its provider badge, and host badge with an expanded dynamic container width.
+- **Scoped search routing** — Selecting a specific project scopes the query to that project's provider and host, preventing false positive matches across different environments that share directory names.
+- **Provider & Remote badges in search results** — Search result group headers now show the matching provider and remote/local badge alongside the project name.
+
 ## [1.27.0-fork.3] - 2026-09-07
 
 Patch release: remote Tailscale resilience, extended HTTP timeouts, detailed decode diagnostics, and non-blocking error recovery.
