@@ -73,7 +73,8 @@ pub fn parse_remote_path(path: &str) -> Option<(&str, &str)> {
 
 fn create_client() -> reqwest::Client {
     reqwest::Client::builder()
-        .timeout(Duration::from_secs(8))
+        .timeout(Duration::from_secs(60))
+        .connect_timeout(Duration::from_secs(10))
         .build()
         .unwrap_or_else(|_| reqwest::Client::new())
 }
@@ -131,10 +132,20 @@ pub async fn scan_remote_projects(
         ));
     }
 
-    let raw_projects: Vec<RemoteProjectRaw> = resp
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse remote projects from {}: {e}", host.name))?;
+    let bytes = resp.bytes().await.map_err(|e| {
+        format!(
+            "Failed to read remote projects response body from {}: {e}",
+            host.name
+        )
+    })?;
+
+    let raw_projects: Vec<RemoteProjectRaw> = serde_json::from_slice(&bytes).map_err(|e| {
+        let preview = String::from_utf8_lossy(&bytes[..std::cmp::min(bytes.len(), 250)]);
+        format!(
+            "Failed to parse remote projects from {}: {e}. Payload start: {preview}",
+            host.name
+        )
+    })?;
 
     let mut projects = Vec::with_capacity(raw_projects.len());
     for raw in raw_projects {
@@ -204,17 +215,23 @@ pub async fn load_remote_sessions(
         .await
         .map_err(|e| format!("Failed to load remote sessions from {endpoint}: {e}"))?;
 
-    if !resp.status().is_success() {
+    let status = resp.status();
+    if !status.is_success() {
+        let err_text = resp.text().await.unwrap_or_default();
         return Err(format!(
-            "Remote sessions request failed with status {}",
-            resp.status()
+            "Remote sessions request failed with status {status}: {err_text}"
         ));
     }
 
-    let mut sessions: Vec<ClaudeSession> = resp
-        .json()
+    let bytes = resp
+        .bytes()
         .await
-        .map_err(|e| format!("Failed to parse remote sessions: {e}"))?;
+        .map_err(|e| format!("Failed to read remote sessions response body: {e}"))?;
+
+    let mut sessions: Vec<ClaudeSession> = serde_json::from_slice(&bytes).map_err(|e| {
+        let preview = String::from_utf8_lossy(&bytes[..std::cmp::min(bytes.len(), 250)]);
+        format!("Failed to parse remote sessions: {e}. Payload start: {preview}")
+    })?;
 
     for s in &mut sessions {
         s.file_path = format_remote_path(endpoint, &s.file_path);
@@ -251,17 +268,23 @@ pub async fn load_remote_sessions_page(
         .await
         .map_err(|e| format!("Failed to load remote sessions page from {endpoint}: {e}"))?;
 
-    if !resp.status().is_success() {
+    let status = resp.status();
+    if !status.is_success() {
+        let err_text = resp.text().await.unwrap_or_default();
         return Err(format!(
-            "Remote sessions page request failed with status {}",
-            resp.status()
+            "Remote sessions page request failed with status {status}: {err_text}"
         ));
     }
 
-    let mut page: SessionPage = resp
-        .json()
+    let bytes = resp
+        .bytes()
         .await
-        .map_err(|e| format!("Failed to parse remote sessions page: {e}"))?;
+        .map_err(|e| format!("Failed to read remote sessions page response body: {e}"))?;
+
+    let mut page: SessionPage = serde_json::from_slice(&bytes).map_err(|e| {
+        let preview = String::from_utf8_lossy(&bytes[..std::cmp::min(bytes.len(), 250)]);
+        format!("Failed to parse remote sessions page: {e}. Payload start: {preview}")
+    })?;
 
     for s in &mut page.sessions {
         s.file_path = format_remote_path(endpoint, &s.file_path);
@@ -299,16 +322,23 @@ pub async fn load_remote_messages(
         .await
         .map_err(|e| format!("Failed to load remote messages from {endpoint}: {e}"))?;
 
-    if !resp.status().is_success() {
+    let status = resp.status();
+    if !status.is_success() {
+        let err_text = resp.text().await.unwrap_or_default();
         return Err(format!(
-            "Remote messages request failed with status {}",
-            resp.status()
+            "Remote messages request failed with status {status}: {err_text}"
         ));
     }
 
-    resp.json()
+    let bytes = resp
+        .bytes()
         .await
-        .map_err(|e| format!("Failed to parse remote messages: {e}"))
+        .map_err(|e| format!("Failed to read remote messages response body: {e}"))?;
+
+    serde_json::from_slice::<Vec<ClaudeMessage>>(&bytes).map_err(|e| {
+        let preview = String::from_utf8_lossy(&bytes[..std::cmp::min(bytes.len(), 250)]);
+        format!("Failed to parse remote messages: {e}. Payload start: {preview}")
+    })
 }
 
 #[derive(Serialize)]
@@ -349,16 +379,23 @@ pub async fn load_remote_messages_paginated(
         .await
         .map_err(|e| format!("Failed to load remote paginated messages from {endpoint}: {e}"))?;
 
-    if !resp.status().is_success() {
+    let status = resp.status();
+    if !status.is_success() {
+        let err_text = resp.text().await.unwrap_or_default();
         return Err(format!(
-            "Remote paginated messages request failed with status {}",
-            resp.status()
+            "Remote paginated messages request failed with status {status}: {err_text}"
         ));
     }
 
-    resp.json()
+    let bytes = resp
+        .bytes()
         .await
-        .map_err(|e| format!("Failed to parse remote paginated messages: {e}"))
+        .map_err(|e| format!("Failed to read remote paginated messages response body: {e}"))?;
+
+    serde_json::from_slice::<MessagePage>(&bytes).map_err(|e| {
+        let preview = String::from_utf8_lossy(&bytes[..std::cmp::min(bytes.len(), 250)]);
+        format!("Failed to parse remote paginated messages: {e}. Payload start: {preview}")
+    })
 }
 
 #[derive(Serialize)]

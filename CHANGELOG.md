@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.27.0-fork.3] - 2026-09-07
+
+Patch release: remote Tailscale resilience, extended HTTP timeouts, detailed decode diagnostics, and non-blocking error recovery.
+
+### Fixed
+- **Remote HTTP timeouts & network resilience** — Increased reqwest client timeouts from 8s to 60s (with a 10s connect timeout) to prevent transient network pauses or large paginated message transfers over Tailscale from prematurely aborting.
+- **Detailed remote error diagnostics** — Response bodies from remote provider endpoints are now read as bytes before JSON deserialization, producing precise serde error diagnostics and payload snippets rather than opaque "error decoding response body" failures.
+- **Remote daemon service cleanup** — Terminated orphaned instances and ensured the macOS LaunchAgent cleanly binds to port 3728 without port conflicts.
+- **Error screen recovery escape hatch** — Added a "Close" button to the fatal error fallback screen in `AppLayout` so users can dismiss transient errors and return to the main interface without reloading the whole page.
+
 ## [1.27.0-fork.2] - 2026-09-07
 
 Patch release: URL deep linking, session opening loading indicators, command filtering, and in-session search synchronization.

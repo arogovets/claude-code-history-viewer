@@ -260,12 +260,23 @@ export const AppLayout: React.FC<AppLayoutProps> = (props) => {
             {t("common.errorOccurred")}
           </h1>
           <p className="text-sm text-muted-foreground mb-6">{error.message}</p>
-          <button
-            onClick={() => window.location.reload()}
-            className="action-btn primary"
-          >
-            {t("common.retry")}
-          </button>
+          <div className="flex items-center justify-center gap-3">
+            <button
+              onClick={() => {
+                setError(null);
+                window.history.replaceState({}, "", window.location.pathname);
+              }}
+              className="action-btn secondary"
+            >
+              {t("common.close", "Close")}
+            </button>
+            <button
+              onClick={() => window.location.reload()}
+              className="action-btn primary"
+            >
+              {t("common.retry")}
+            </button>
+          </div>
         </div>
       </div>
     );
