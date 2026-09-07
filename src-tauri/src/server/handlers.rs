@@ -354,6 +354,12 @@ pub struct ProviderSessionsPageParams {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct LocateSessionParams {
+    pub session_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ProviderMessagesParams {
     pub provider: String,
     pub session_path: String,
@@ -928,6 +934,12 @@ handler_json!(
         )
         .await
     }
+);
+
+handler_json!(
+    locate_session,
+    LocateSessionParams,
+    |p: LocateSessionParams| async move { commands::session::locate_session(p.session_id).await }
 );
 
 handler_json!(

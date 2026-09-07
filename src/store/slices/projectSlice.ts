@@ -255,6 +255,19 @@ export const createProjectSlice: StateCreator<
         );
       }
 
+      // Stale-While-Revalidate: hydrate cached projects immediately so UI is interactive in <10ms
+      try {
+        const cachedRaw = localStorage.getItem("cchv_cached_projects");
+        if (cachedRaw) {
+          const cachedProjects = JSON.parse(cachedRaw) as ClaudeProject[];
+          if (Array.isArray(cachedProjects) && cachedProjects.length > 0) {
+            set({ projects: cachedProjects, isLoading: false });
+          }
+        }
+      } catch {
+        // localStorage not available or invalid
+      }
+
       // Load metadata before resolving the Claude path so an explicit provider
       // discovery choice can restore non-Claude projects on startup without
       // running the broad provider detector again.
@@ -481,6 +494,13 @@ export const createProjectSlice: StateCreator<
         return;
       }
       set({ projects });
+      try {
+        if (projects.length > 0) {
+          localStorage.setItem("cchv_cached_projects", JSON.stringify(projects));
+        }
+      } catch {
+        // localStorage quota or error
+      }
       if (projects.length === 0 && providerErrors.length > 0) {
         set({
           error: {

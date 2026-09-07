@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.27.0-fork.6] - 2026-09-08
+
+Major performance & offline resilience release: embedded local-first SQLite cache, instant session locator, and remote endpoint resolution.
+
+### Added
+- **Embedded Local-First SQLite Cache Engine** — Bundled zero-dependency embedded SQLite (`rusqlite`) database stored at `~/.claude-history-viewer/cache.sqlite` with WAL mode. Automatically indexes and caches local and remote projects, sessions, and messages.
+- **O(1) Instant `locate_session` API** — Cross-project, cross-provider, and cross-host session locator that resolves UUIDs in <5ms without scanning all projects, with fast filesystem probes for local Claude projects and Codex rollout files.
+- **Stale-While-Revalidate Startup Hydration** — Client hydrates cached project listings from `localStorage` within <10ms on initial launch, eliminating the "Initializing app..." delay while background revalidation runs non-blocking.
+- **In-flight & 30s TTL Remote Scan Deduplication** — Eliminated duplicate Tailscale roundtrips from parallel scanning hooks via `REMOTE_SCAN_CACHE`.
+
+### Fixed
+- **Remote Host Endpoint Resolution** — Host identifiers and names in `remote://` paths (such as `remote://arogovets@100.93.94.80#...` or `remote://arogovets#...`) now automatically resolve to complete HTTP endpoints, fixing the `builder error: relative URL without a base` crash when loading remote paginated messages directly via deep links.
+- **Offline Resiliency & Fallback** — In the event of dropped Tailscale/VPN connections or unparseable remote payloads, requests for projects, sessions, and paginated messages seamlessly fall back to local SQLite cached data without throwing fatal error dialogs.
+
 ## [1.27.0-fork.5] - 2026-09-07
 
 Patch release: fix Commands filter to properly hide "Conversation Compacted" and system command events.

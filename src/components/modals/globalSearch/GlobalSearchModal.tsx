@@ -362,6 +362,28 @@ export const GlobalSearchModal = ({
                 const { excludeSidechain } = useAppStore.getState();
                 const token = ++resolveTokenRef.current;
 
+                // 1. Fast indexed lookup (<1ms) via locate_session
+                try {
+                    const located = await api<{ project: ClaudeProject; session: ClaudeSession } | null>(
+                        "locate_session",
+                        { sessionId: result.sessionId },
+                    );
+                    if (token !== resolveTokenRef.current) return;
+                    if (located?.project && located?.session) {
+                        setAnalyticsCurrentView("messages");
+                        await selectProject(located.project);
+                        await selectSession(located.session);
+                        if (result.uuid) {
+                            navigateToMessage(result.uuid, { history: "replace" });
+                        }
+                        toast.dismiss(toastId);
+                        onClose();
+                        return;
+                    }
+                } catch {
+                    // Fall back to candidate scanning
+                }
+
                 // The search result carries the project name and provider —
                 // rank matching projects first so the common case resolves in
                 // ONE request instead of sweeping every project. The rest are

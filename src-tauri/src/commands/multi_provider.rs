@@ -365,6 +365,7 @@ pub async fn scan_all_projects(
             (None, None) => b.last_modified.cmp(&a.last_modified),
         }
     });
+    crate::cache::cache_projects(&all_projects, None);
     Ok(all_projects)
 }
 
@@ -389,49 +390,54 @@ pub async fn load_provider_sessions(
 
     let exclude = exclude_sidechain.unwrap_or(false);
 
-    match provider.as_str() {
+    let sessions = match provider.as_str() {
         "claude" => {
-            let mut sessions =
-                crate::commands::session::load_project_sessions(project_path, Some(exclude))
-                    .await?;
+            let mut sessions = crate::commands::session::load_project_sessions(
+                project_path.clone(),
+                Some(exclude),
+            )
+            .await?;
             for s in &mut sessions {
                 if s.provider.is_none() {
                     s.provider = Some("claude".to_string());
                 }
             }
-            Ok(sessions)
+            sessions
         }
-        "codex" => providers::codex::load_sessions(&project_path, exclude),
-        "continue" => providers::continue_dev::load_sessions(&project_path, exclude),
-        "pearai" => providers::pearai::load_sessions(&project_path, exclude),
-        "copilot" => providers::copilot::load_sessions(&project_path, exclude),
-        "gemini" => providers::gemini::load_sessions(&project_path, exclude),
-        "goose" => providers::goose::load_sessions(&project_path, exclude),
-        "grok" => providers::grok::load_sessions(&project_path, exclude),
-        "kimi" => providers::kimi::load_sessions(&project_path, exclude),
-        "forgecode" => providers::forgecode::load_sessions(&project_path, exclude),
-        "opencode" => providers::opencode::load_sessions(&project_path, exclude),
-        "openinterpreter" => providers::openinterpreter::load_sessions(&project_path, exclude),
-        "pi" => providers::pi::load_sessions(&project_path, exclude),
-        "ompi" => providers::ompi::load_sessions(&project_path, exclude),
-        "qwen" => providers::qwen::load_sessions(&project_path, exclude),
-        "cline" => providers::cline::load_sessions(&project_path, exclude),
-        "crush" => providers::crush::load_sessions(&project_path, exclude),
-        "cursor" => providers::cursor::load_sessions(&project_path, exclude),
-        "cursor-agent" => providers::cursor_agent::load_sessions(&project_path, exclude),
-        "aider" => providers::aider::load_sessions(&project_path, exclude),
-        "amazonq" => providers::amazon_q::load_sessions(&project_path, exclude),
-        "antigravity" => providers::antigravity::load_sessions(&project_path, exclude),
-        "deepseek" => providers::deepseek::load_sessions(&project_path, exclude),
-        "codebuddy" => providers::codebuddy::load_sessions(&project_path, exclude),
-        "kiro" => providers::kiro::load_sessions(&project_path, exclude),
-        "llm" => providers::llm::load_sessions(&project_path, exclude),
-        "zed" => providers::zed::load_sessions(&project_path, exclude),
-        "openhands" => providers::openhands::load_sessions(&project_path, exclude),
-        "trae" => providers::trae::load_sessions(&project_path, exclude),
-        "vibe" => providers::vibe::load_sessions(&project_path, exclude),
-        _ => Err(format!("Unknown provider: {provider}")),
-    }
+        "codex" => providers::codex::load_sessions(&project_path, exclude)?,
+        "continue" => providers::continue_dev::load_sessions(&project_path, exclude)?,
+        "pearai" => providers::pearai::load_sessions(&project_path, exclude)?,
+        "copilot" => providers::copilot::load_sessions(&project_path, exclude)?,
+        "gemini" => providers::gemini::load_sessions(&project_path, exclude)?,
+        "goose" => providers::goose::load_sessions(&project_path, exclude)?,
+        "grok" => providers::grok::load_sessions(&project_path, exclude)?,
+        "kimi" => providers::kimi::load_sessions(&project_path, exclude)?,
+        "forgecode" => providers::forgecode::load_sessions(&project_path, exclude)?,
+        "opencode" => providers::opencode::load_sessions(&project_path, exclude)?,
+        "openinterpreter" => providers::openinterpreter::load_sessions(&project_path, exclude)?,
+        "pi" => providers::pi::load_sessions(&project_path, exclude)?,
+        "ompi" => providers::ompi::load_sessions(&project_path, exclude)?,
+        "qwen" => providers::qwen::load_sessions(&project_path, exclude)?,
+        "cline" => providers::cline::load_sessions(&project_path, exclude)?,
+        "crush" => providers::crush::load_sessions(&project_path, exclude)?,
+        "cursor" => providers::cursor::load_sessions(&project_path, exclude)?,
+        "cursor-agent" => providers::cursor_agent::load_sessions(&project_path, exclude)?,
+        "aider" => providers::aider::load_sessions(&project_path, exclude)?,
+        "amazonq" => providers::amazon_q::load_sessions(&project_path, exclude)?,
+        "antigravity" => providers::antigravity::load_sessions(&project_path, exclude)?,
+        "deepseek" => providers::deepseek::load_sessions(&project_path, exclude)?,
+        "codebuddy" => providers::codebuddy::load_sessions(&project_path, exclude)?,
+        "kiro" => providers::kiro::load_sessions(&project_path, exclude)?,
+        "llm" => providers::llm::load_sessions(&project_path, exclude)?,
+        "zed" => providers::zed::load_sessions(&project_path, exclude)?,
+        "openhands" => providers::openhands::load_sessions(&project_path, exclude)?,
+        "trae" => providers::trae::load_sessions(&project_path, exclude)?,
+        "vibe" => providers::vibe::load_sessions(&project_path, exclude)?,
+        _ => return Err(format!("Unknown provider: {provider}")),
+    };
+
+    crate::cache::cache_sessions(&project_path, &provider, &sessions);
+    Ok(sessions)
 }
 
 fn sort_sessions_by_recency(sessions: &mut [ClaudeSession]) {
@@ -495,7 +501,7 @@ pub async fn load_provider_sessions_page(
     }
 
     let mut sessions =
-        load_provider_sessions(provider.clone(), project_path, exclude_sidechain).await?;
+        load_provider_sessions(provider.clone(), project_path.clone(), exclude_sidechain).await?;
     for session in &mut sessions {
         if session.provider.is_none() {
             session.provider = Some(provider.clone());
@@ -506,6 +512,7 @@ pub async fn load_provider_sessions_page(
     let total = sessions.len();
     let page_sessions: Vec<ClaudeSession> = sessions.into_iter().skip(offset).take(limit).collect();
     let next_offset = offset.saturating_add(page_sessions.len());
+    crate::cache::cache_sessions(&project_path, &provider, &page_sessions);
 
     Ok(crate::commands::session::SessionPage {
         sessions: page_sessions,

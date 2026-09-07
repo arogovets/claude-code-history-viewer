@@ -93,6 +93,7 @@ const READ_ONLY_ALLOWED_API_PATHS: &[&str] = &[
     "/load_session_messages_paginated",
     "/load_unified_presets",
     "/load_user_metadata",
+    "/locate_session",
     "/open_github_issues",
     "/read_text_file",
     "/scan_all_projects",
@@ -314,6 +315,7 @@ pub fn build_router(
             post(h::get_provider_message_offset),
         )
         .route("/search_all_providers", post(h::search_all_providers))
+        .route("/locate_session", post(h::locate_session))
         // Archive commands
         .route("/get_archive_base_path", post(h::get_archive_base_path))
         .route("/list_archives", post(h::list_archives))

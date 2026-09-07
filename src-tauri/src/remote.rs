@@ -6,7 +6,13 @@
 use crate::commands::session::{SessionPage, SubagentSession};
 use crate::models::{ClaudeMessage, ClaudeProject, ClaudeSession, MessagePage, RemoteHostConfig};
 use serde::Serialize;
-use std::time::Duration;
+use std::collections::HashMap;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
+
+lazy_static::lazy_static! {
+    static ref REMOTE_SCAN_CACHE: Mutex<HashMap<String, (Instant, Vec<ClaudeProject>)>> = Mutex::new(HashMap::new());
+}
 
 pub const DEFAULT_REMOTE_HOST_ID: &str = "arogovets";
 pub const DEFAULT_REMOTE_HOST_NAME: &str = "arogovets@100.93.94.80";
@@ -61,6 +67,35 @@ pub fn format_remote_path(endpoint: &str, path: &str) -> String {
     format!("remote://{clean_endpoint}#{path}")
 }
 
+pub fn resolve_endpoint(raw: &str) -> String {
+    let raw = raw.trim();
+    if raw.starts_with("http://") || raw.starts_with("https://") {
+        return raw.to_string();
+    }
+    for host in get_remote_hosts() {
+        if host.id.eq_ignore_ascii_case(raw)
+            || host.name.eq_ignore_ascii_case(raw)
+            || host.endpoint.contains(raw)
+        {
+            return host.endpoint;
+        }
+        if let Some((_, ip_or_host)) = host.name.split_once('@') {
+            if raw == ip_or_host || raw.starts_with(ip_or_host) {
+                return host.endpoint;
+            }
+        }
+    }
+    if raw.contains(':') && !raw.contains('@') {
+        return format!("http://{raw}");
+    }
+    if let Some((_, host_part)) = raw.split_once('@') {
+        if host_part.contains(':') {
+            return format!("http://{host_part}");
+        }
+    }
+    DEFAULT_REMOTE_HOST_ENDPOINT.to_string()
+}
+
 pub fn parse_remote_path(path: &str) -> Option<(&str, &str)> {
     let rest = path.strip_prefix("remote://")?;
     let (endpoint_part, inner_path) = rest.split_once('#')?;
@@ -105,6 +140,19 @@ pub async fn scan_remote_projects(
     host: &RemoteHostConfig,
     active_providers: &[String],
 ) -> Result<Vec<ClaudeProject>, String> {
+    let cache_key = format!("{}:{}", host.endpoint, active_providers.join(","));
+
+    // 1. Check in-memory 30s TTL deduplication cache
+    {
+        if let Ok(cache) = REMOTE_SCAN_CACHE.lock() {
+            if let Some((instant, projects)) = cache.get(&cache_key) {
+                if instant.elapsed() < Duration::from_secs(30) {
+                    return Ok(projects.clone());
+                }
+            }
+        }
+    }
+
     let client = create_client();
     let url = format!(
         "{}/api/scan_all_projects",
@@ -119,18 +167,37 @@ pub async fn scan_remote_projects(
         req = req.bearer_auth(token);
     }
 
-    let resp = req
-        .send()
-        .await
-        .map_err(|e| format!("Remote host {} scan failed: {e}", host.name))?;
-
-    if !resp.status().is_success() {
-        let err_text = resp.text().await.unwrap_or_default();
-        return Err(format!(
-            "Remote host {} returned status {}: {err_text}",
-            host.name, err_text
-        ));
-    }
+    let resp_res = req.send().await;
+    let resp = match resp_res {
+        Ok(r) if r.status().is_success() => r,
+        Ok(r) => {
+            let status = r.status();
+            let err_text = r.text().await.unwrap_or_default();
+            log::warn!(
+                "Remote host {} returned {status}: {err_text}, falling back to local SQLite cache",
+                host.name,
+            );
+            let cached = crate::cache::load_projects(Some(&host.name));
+            if !cached.is_empty() {
+                return Ok(cached);
+            }
+            return Err(format!(
+                "Remote host {} returned status {status}: {err_text}",
+                host.name,
+            ));
+        }
+        Err(e) => {
+            log::warn!(
+                "Remote host {} scan failed ({e}), falling back to local SQLite cache",
+                host.name
+            );
+            let cached = crate::cache::load_projects(Some(&host.name));
+            if !cached.is_empty() {
+                return Ok(cached);
+            }
+            return Err(format!("Remote host {} scan failed: {e}", host.name));
+        }
+    };
 
     let bytes = resp.bytes().await.map_err(|e| {
         format!(
@@ -174,6 +241,14 @@ pub async fn scan_remote_projects(
         });
     }
 
+    // Update in-memory TTL deduplication cache
+    if let Ok(mut cache) = REMOTE_SCAN_CACHE.lock() {
+        cache.insert(cache_key, (Instant::now(), projects.clone()));
+    }
+
+    // Persist to local SQLite cache for offline resiliency
+    crate::cache::cache_projects(&projects, Some(&host.name));
+
     Ok(projects)
 }
 
@@ -196,13 +271,15 @@ pub async fn load_remote_sessions(
     inner_project_path: &str,
     exclude_sidechain: Option<bool>,
 ) -> Result<Vec<ClaudeSession>, String> {
+    let resolved_endpoint = resolve_endpoint(endpoint);
+    let remote_project_path = format_remote_path(&resolved_endpoint, inner_project_path);
     let client = create_client();
     let url = format!(
         "{}/api/load_provider_sessions",
-        endpoint.trim_end_matches('/')
+        resolved_endpoint.trim_end_matches('/')
     );
 
-    let resp = client
+    let resp_res = client
         .post(&url)
         .json(&LoadSessionsPayload {
             provider,
@@ -212,30 +289,68 @@ pub async fn load_remote_sessions(
             limit: None,
         })
         .send()
-        .await
-        .map_err(|e| format!("Failed to load remote sessions from {endpoint}: {e}"))?;
+        .await;
 
-    let status = resp.status();
-    if !status.is_success() {
-        let err_text = resp.text().await.unwrap_or_default();
-        return Err(format!(
-            "Remote sessions request failed with status {status}: {err_text}"
-        ));
-    }
+    let resp = match resp_res {
+        Ok(r) if r.status().is_success() => r,
+        Ok(r) => {
+            log::warn!(
+                "Remote sessions request failed with status {}, falling back to local SQLite cache",
+                r.status()
+            );
+            let cached = crate::cache::load_sessions(&remote_project_path, provider);
+            if !cached.is_empty() {
+                return Ok(cached);
+            }
+            return Err(format!(
+                "Remote sessions request failed with status {}",
+                r.status()
+            ));
+        }
+        Err(e) => {
+            log::warn!(
+                "Failed to load remote sessions from {endpoint} ({e}), falling back to local SQLite cache"
+            );
+            let cached = crate::cache::load_sessions(&remote_project_path, provider);
+            if !cached.is_empty() {
+                return Ok(cached);
+            }
+            return Err(format!(
+                "Failed to load remote sessions from {endpoint}: {e}"
+            ));
+        }
+    };
 
     let bytes = resp
         .bytes()
         .await
         .map_err(|e| format!("Failed to read remote sessions response body: {e}"))?;
 
-    let mut sessions: Vec<ClaudeSession> = serde_json::from_slice(&bytes).map_err(|e| {
-        let preview = String::from_utf8_lossy(&bytes[..std::cmp::min(bytes.len(), 250)]);
-        format!("Failed to parse remote sessions: {e}. Payload start: {preview}")
-    })?;
+    let mut sessions: Vec<ClaudeSession> = match serde_json::from_slice(&bytes) {
+        Ok(s) => s,
+        Err(e) => {
+            log::warn!("Failed to parse remote sessions from {endpoint} ({e}), checking cache");
+            let cached = crate::cache::load_sessions(&remote_project_path, provider);
+            if !cached.is_empty() {
+                return Ok(cached);
+            }
+            let preview = String::from_utf8_lossy(&bytes[..std::cmp::min(bytes.len(), 250)]);
+            return Err(format!(
+                "Failed to parse remote sessions: {e}. Payload start: {preview}"
+            ));
+        }
+    };
 
     for s in &mut sessions {
-        s.file_path = format_remote_path(endpoint, &s.file_path);
-        s.session_id = format_remote_path(endpoint, &s.session_id);
+        s.file_path = format_remote_path(&resolved_endpoint, &s.file_path);
+        s.session_id = format_remote_path(&resolved_endpoint, &s.session_id);
+    }
+
+    // Persist to local SQLite cache
+    crate::cache::cache_sessions(&remote_project_path, provider, &sessions);
+    if endpoint != resolved_endpoint {
+        let legacy_project_path = format_remote_path(endpoint, inner_project_path);
+        crate::cache::cache_sessions(&legacy_project_path, provider, &sessions);
     }
 
     Ok(sessions)
@@ -249,13 +364,15 @@ pub async fn load_remote_sessions_page(
     offset: usize,
     limit: usize,
 ) -> Result<SessionPage, String> {
+    let resolved_endpoint = resolve_endpoint(endpoint);
+    let remote_project_path = format_remote_path(&resolved_endpoint, inner_project_path);
     let client = create_client();
     let url = format!(
         "{}/api/load_provider_sessions_page",
-        endpoint.trim_end_matches('/')
+        resolved_endpoint.trim_end_matches('/')
     );
 
-    let resp = client
+    let resp_res = client
         .post(&url)
         .json(&LoadSessionsPayload {
             provider,
@@ -265,30 +382,97 @@ pub async fn load_remote_sessions_page(
             limit: Some(limit),
         })
         .send()
-        .await
-        .map_err(|e| format!("Failed to load remote sessions page from {endpoint}: {e}"))?;
+        .await;
 
-    let status = resp.status();
-    if !status.is_success() {
-        let err_text = resp.text().await.unwrap_or_default();
-        return Err(format!(
-            "Remote sessions page request failed with status {status}: {err_text}"
-        ));
-    }
+    let resp = match resp_res {
+        Ok(r) if r.status().is_success() => r,
+        Ok(r) => {
+            log::warn!(
+                "Remote sessions page request failed with status {}, falling back to local SQLite cache",
+                r.status()
+            );
+            if let Ok(conn) = crate::cache::open_connection() {
+                if let Ok(page) = crate::cache::get_cached_sessions_page(
+                    &conn,
+                    &remote_project_path,
+                    provider,
+                    offset,
+                    limit,
+                ) {
+                    if page.total > 0 {
+                        return Ok(page);
+                    }
+                }
+            }
+            return Err(format!(
+                "Remote sessions page request failed with status {}",
+                r.status()
+            ));
+        }
+        Err(e) => {
+            log::warn!(
+                "Failed to load remote sessions page from {endpoint} ({e}), falling back to local SQLite cache"
+            );
+            if let Ok(conn) = crate::cache::open_connection() {
+                if let Ok(page) = crate::cache::get_cached_sessions_page(
+                    &conn,
+                    &remote_project_path,
+                    provider,
+                    offset,
+                    limit,
+                ) {
+                    if page.total > 0 {
+                        return Ok(page);
+                    }
+                }
+            }
+            return Err(format!(
+                "Failed to load remote sessions page from {endpoint}: {e}"
+            ));
+        }
+    };
 
     let bytes = resp
         .bytes()
         .await
         .map_err(|e| format!("Failed to read remote sessions page response body: {e}"))?;
 
-    let mut page: SessionPage = serde_json::from_slice(&bytes).map_err(|e| {
-        let preview = String::from_utf8_lossy(&bytes[..std::cmp::min(bytes.len(), 250)]);
-        format!("Failed to parse remote sessions page: {e}. Payload start: {preview}")
-    })?;
+    let mut page: SessionPage = match serde_json::from_slice(&bytes) {
+        Ok(p) => p,
+        Err(e) => {
+            log::warn!(
+                "Failed to parse remote sessions page from {endpoint} ({e}), checking cache"
+            );
+            if let Ok(conn) = crate::cache::open_connection() {
+                if let Ok(cached_page) = crate::cache::get_cached_sessions_page(
+                    &conn,
+                    &remote_project_path,
+                    provider,
+                    offset,
+                    limit,
+                ) {
+                    if cached_page.total > 0 {
+                        return Ok(cached_page);
+                    }
+                }
+            }
+            let preview = String::from_utf8_lossy(&bytes[..std::cmp::min(bytes.len(), 250)]);
+            return Err(format!(
+                "Failed to parse remote sessions page: {e}. Payload start: {preview}"
+            ));
+        }
+    };
 
     for s in &mut page.sessions {
-        s.file_path = format_remote_path(endpoint, &s.file_path);
-        s.session_id = format_remote_path(endpoint, &s.session_id);
+        s.file_path = format_remote_path(&resolved_endpoint, &s.file_path);
+        s.session_id = format_remote_path(&resolved_endpoint, &s.session_id);
+    }
+
+    // Persist to local SQLite cache
+    crate::cache::cache_sessions(&remote_project_path, provider, &page.sessions);
+    if endpoint != resolved_endpoint {
+        let legacy_project_path = format_remote_path(endpoint, inner_project_path);
+        crate::cache::cache_sessions(&legacy_project_path, provider, &page.sessions);
     }
 
     Ok(page)
@@ -306,39 +490,92 @@ pub async fn load_remote_messages(
     provider: &str,
     inner_session_path: &str,
 ) -> Result<Vec<ClaudeMessage>, String> {
+    let resolved_endpoint = resolve_endpoint(endpoint);
+    let remote_session_path = format_remote_path(&resolved_endpoint, inner_session_path);
     let client = create_client();
     let url = format!(
         "{}/api/load_provider_messages",
-        endpoint.trim_end_matches('/')
+        resolved_endpoint.trim_end_matches('/')
     );
 
-    let resp = client
+    let resp_res = client
         .post(&url)
         .json(&LoadMessagesPayload {
             provider,
             session_path: inner_session_path,
         })
         .send()
-        .await
-        .map_err(|e| format!("Failed to load remote messages from {endpoint}: {e}"))?;
+        .await;
 
-    let status = resp.status();
-    if !status.is_success() {
-        let err_text = resp.text().await.unwrap_or_default();
-        return Err(format!(
-            "Remote messages request failed with status {status}: {err_text}"
-        ));
-    }
+    let resp = match resp_res {
+        Ok(r) if r.status().is_success() => r,
+        Ok(r) => {
+            log::warn!(
+                "Remote messages request failed with status {}, falling back to local SQLite cache",
+                r.status()
+            );
+            if let Ok(conn) = crate::cache::open_connection() {
+                if let Ok(Some(cached)) =
+                    crate::cache::get_cached_session_messages(&conn, &remote_session_path, provider)
+                {
+                    return Ok(cached);
+                }
+            }
+            return Err(format!(
+                "Remote messages request failed with status {}",
+                r.status()
+            ));
+        }
+        Err(e) => {
+            log::warn!(
+                "Failed to load remote messages from {endpoint} ({e}), falling back to local SQLite cache"
+            );
+            if let Ok(conn) = crate::cache::open_connection() {
+                if let Ok(Some(cached)) =
+                    crate::cache::get_cached_session_messages(&conn, &remote_session_path, provider)
+                {
+                    return Ok(cached);
+                }
+            }
+            return Err(format!(
+                "Failed to load remote messages from {endpoint}: {e}"
+            ));
+        }
+    };
 
     let bytes = resp
         .bytes()
         .await
         .map_err(|e| format!("Failed to read remote messages response body: {e}"))?;
 
-    serde_json::from_slice::<Vec<ClaudeMessage>>(&bytes).map_err(|e| {
-        let preview = String::from_utf8_lossy(&bytes[..std::cmp::min(bytes.len(), 250)]);
-        format!("Failed to parse remote messages: {e}. Payload start: {preview}")
-    })
+    let messages = match serde_json::from_slice::<Vec<ClaudeMessage>>(&bytes) {
+        Ok(m) => m,
+        Err(e) => {
+            log::warn!(
+                "Failed to parse remote messages from {endpoint} ({e}), checking local SQLite cache"
+            );
+            if let Ok(conn) = crate::cache::open_connection() {
+                if let Ok(Some(cached)) =
+                    crate::cache::get_cached_session_messages(&conn, &remote_session_path, provider)
+                {
+                    return Ok(cached);
+                }
+            }
+            let preview = String::from_utf8_lossy(&bytes[..std::cmp::min(bytes.len(), 250)]);
+            return Err(format!(
+                "Failed to parse remote messages: {e}. Payload start: {preview}"
+            ));
+        }
+    };
+
+    // Persist to local SQLite cache
+    crate::cache::cache_messages(&remote_session_path, provider, &messages);
+    if endpoint != resolved_endpoint {
+        let legacy_path = format_remote_path(endpoint, inner_session_path);
+        crate::cache::cache_messages(&legacy_path, provider, &messages);
+    }
+
+    Ok(messages)
 }
 
 #[derive(Serialize)]
@@ -360,13 +597,15 @@ pub async fn load_remote_messages_paginated(
     limit: usize,
     exclude_sidechain: Option<bool>,
 ) -> Result<MessagePage, String> {
+    let resolved_endpoint = resolve_endpoint(endpoint);
+    let remote_session_path = format_remote_path(&resolved_endpoint, inner_session_path);
     let client = create_client();
     let url = format!(
         "{}/api/load_provider_messages_paginated",
-        endpoint.trim_end_matches('/')
+        resolved_endpoint.trim_end_matches('/')
     );
 
-    let resp = client
+    let resp_res = client
         .post(&url)
         .json(&LoadMessagesPaginatedPayload {
             provider,
@@ -376,26 +615,93 @@ pub async fn load_remote_messages_paginated(
             exclude_sidechain,
         })
         .send()
-        .await
-        .map_err(|e| format!("Failed to load remote paginated messages from {endpoint}: {e}"))?;
+        .await;
 
-    let status = resp.status();
-    if !status.is_success() {
-        let err_text = resp.text().await.unwrap_or_default();
-        return Err(format!(
-            "Remote paginated messages request failed with status {status}: {err_text}"
-        ));
-    }
+    let resp = match resp_res {
+        Ok(r) if r.status().is_success() => r,
+        Ok(r) => {
+            log::warn!(
+                "Remote paginated messages request failed with status {}, falling back to local SQLite cache",
+                r.status()
+            );
+            if let Ok(conn) = crate::cache::open_connection() {
+                if let Ok(Some(page)) = crate::cache::get_cached_session_messages_paginated(
+                    &conn,
+                    &remote_session_path,
+                    provider,
+                    offset,
+                    limit,
+                    exclude_sidechain,
+                ) {
+                    return Ok(page);
+                }
+            }
+            return Err(format!(
+                "Remote paginated messages request failed with status {}",
+                r.status()
+            ));
+        }
+        Err(e) => {
+            log::warn!(
+                "Failed to load remote paginated messages from {endpoint} ({e}), falling back to local SQLite cache"
+            );
+            if let Ok(conn) = crate::cache::open_connection() {
+                if let Ok(Some(page)) = crate::cache::get_cached_session_messages_paginated(
+                    &conn,
+                    &remote_session_path,
+                    provider,
+                    offset,
+                    limit,
+                    exclude_sidechain,
+                ) {
+                    return Ok(page);
+                }
+            }
+            return Err(format!(
+                "Failed to load remote paginated messages from {endpoint}: {e}"
+            ));
+        }
+    };
 
     let bytes = resp
         .bytes()
         .await
         .map_err(|e| format!("Failed to read remote paginated messages response body: {e}"))?;
 
-    serde_json::from_slice::<MessagePage>(&bytes).map_err(|e| {
-        let preview = String::from_utf8_lossy(&bytes[..std::cmp::min(bytes.len(), 250)]);
-        format!("Failed to parse remote paginated messages: {e}. Payload start: {preview}")
-    })
+    let page = match serde_json::from_slice::<MessagePage>(&bytes) {
+        Ok(p) => p,
+        Err(e) => {
+            log::warn!(
+                "Failed to parse remote paginated messages from {endpoint} ({e}), checking local SQLite cache"
+            );
+            if let Ok(conn) = crate::cache::open_connection() {
+                if let Ok(Some(page)) = crate::cache::get_cached_session_messages_paginated(
+                    &conn,
+                    &remote_session_path,
+                    provider,
+                    offset,
+                    limit,
+                    exclude_sidechain,
+                ) {
+                    return Ok(page);
+                }
+            }
+            let preview = String::from_utf8_lossy(&bytes[..std::cmp::min(bytes.len(), 250)]);
+            return Err(format!(
+                "Failed to parse remote paginated messages: {e}. Payload start: {preview}"
+            ));
+        }
+    };
+
+    if !page.messages.is_empty() {
+        crate::cache::cache_messages(&remote_session_path, provider, &page.messages);
+        if endpoint != resolved_endpoint {
+            let legacy_path = format_remote_path(endpoint, inner_session_path);
+            crate::cache::cache_messages(&legacy_path, provider, &page.messages);
+        }
+    }
+
+    Ok(page)
 }
 
 #[derive(Serialize)]
@@ -415,10 +721,11 @@ pub async fn get_remote_message_offset(
     message_uuid: &str,
     exclude_sidechain: Option<bool>,
 ) -> Result<Option<usize>, String> {
+    let resolved_endpoint = resolve_endpoint(endpoint);
     let client = create_client();
     let url = format!(
         "{}/api/get_provider_message_offset",
-        endpoint.trim_end_matches('/')
+        resolved_endpoint.trim_end_matches('/')
     );
 
     let resp = client
@@ -455,10 +762,11 @@ pub async fn get_remote_session_subagents(
     endpoint: &str,
     inner_session_path: &str,
 ) -> Result<Vec<SubagentSession>, String> {
+    let resolved_endpoint = resolve_endpoint(endpoint);
     let client = create_client();
     let url = format!(
         "{}/api/get_session_subagents",
-        endpoint.trim_end_matches('/')
+        resolved_endpoint.trim_end_matches('/')
     );
 
     let resp = client
@@ -480,7 +788,7 @@ pub async fn get_remote_session_subagents(
         .map_err(|e| format!("Failed to parse remote subagents: {e}"))?;
 
     for sub in &mut subagents {
-        sub.file_path = format_remote_path(endpoint, &sub.file_path);
+        sub.file_path = format_remote_path(&resolved_endpoint, &sub.file_path);
     }
 
     Ok(subagents)
@@ -549,8 +857,28 @@ mod tests {
         );
     }
 
+    #[test]
+    #[serial_test::serial]
+    fn test_resolve_endpoint() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
+        assert_eq!(
+            resolve_endpoint("http://100.93.94.80:3728"),
+            "http://100.93.94.80:3728"
+        );
+        assert_eq!(
+            resolve_endpoint("arogovets@100.93.94.80"),
+            "http://100.93.94.80:3728"
+        );
+        assert_eq!(resolve_endpoint("arogovets"), "http://100.93.94.80:3728");
+        assert_eq!(
+            resolve_endpoint("192.168.1.50:3728"),
+            "http://192.168.1.50:3728"
+        );
+    }
+
     #[tokio::test]
     async fn test_remote_scan_live() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let host = get_default_remote_host();
         let providers = vec![
             "claude".to_string(),

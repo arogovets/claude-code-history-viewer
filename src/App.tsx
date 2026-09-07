@@ -168,6 +168,10 @@ function App() {
       void preloadSessionFromCli({
         getStartupSessionHint: () => Promise.resolve(hint),
         projects: projectsRef.current,
+        locateSession: (sessionId) =>
+          api<{ project: ClaudeProject; session: ClaudeSession } | null>("locate_session", {
+            sessionId,
+          }),
         selectProject,
         selectSession: (session) =>
           selectSession(session, { history: "none" }),
