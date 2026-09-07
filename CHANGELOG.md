@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.27.0-fork.7] - 2026-09-08
+
+Google Antigravity provider enhancements: auto-detect brain transcripts, workspace mapping, full tool_use / thinking / tool_result message reconstruction, and accurate step counts.
+
+### Added
+- **Full Antigravity Transcript & Message Support** — Transcripts in `~/.gemini/antigravity/brain/<session-id>/.system_generated/logs/transcript*.jsonl` are now seamlessly parsed and displayed. Supports `transcript.jsonl` fallback when `transcript_full.jsonl` is absent.
+- **Tool Calls & Thinking Reconstruction** — Parses `rec.get("tool_calls")` into typed `tool_use` blocks with cleanly unquoted JSON arguments, extracts `rec.get("thinking")` blocks, and reconstructs paired tool results from following `GENERIC` steps.
+- **Automatic Workspace Inference** — Sessions with tool calls or state records referencing workspace paths (e.g. `/Users/emac/Dev/cchv`) are automatically mapped to their respective project (e.g. `cchv`) alongside the top-level "Antigravity" desktop project.
+- **Session Titles from Artifacts** — Automatically resolves friendly session titles from `task.md`, `implementation_plan.md`, or `walkthrough.md` headings when available, falling back to cleaned user prompt requests.
+
+### Fixed
+- **Accurate Step & Message Counts** — Recognizes modern Antigravity `"step_index"` records in addition to legacy `"recordType": "step"`, avoiding 0 message counts or misleading `(0 calls · 0 steps)` labels. Deduplicates `transcript.jsonl` when `transcript_full.jsonl` is present.
+- **Root Path Resolution** — `antigravity_cli` provider now recognizes both `~/.gemini/antigravity-cli` and `~/.gemini/antigravity` candidate roots and validates arbitrary brain directory structures.
+- **Clean User Prompt Stripping** — Automatically strips outer `<USER_REQUEST>...</USER_REQUEST>` prompt wrapper tags for clean session summaries.
+
 ## [1.27.0-fork.6] - 2026-09-08
 
 Major performance & offline resilience release: embedded local-first SQLite cache, instant session locator, and remote endpoint resolution.

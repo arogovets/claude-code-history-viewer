@@ -266,12 +266,13 @@ fn is_valid_antigravity_session_id(session_id: &str) -> bool {
             .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-'))
 }
 
-/// Counts step records in a JSON value (records with `"recordType": "step"`).
+/// Counts step records in a JSON value (records with `"recordType": "step"` or `"step_index"`).
 fn count_step_rows(value: &Value) -> u32 {
     match value {
-        Value::Object(record) => {
-            u32::from(record.get("recordType").and_then(Value::as_str) == Some("step"))
-        }
+        Value::Object(record) => u32::from(
+            record.get("recordType").and_then(Value::as_str) == Some("step")
+                || record.contains_key("step_index"),
+        ),
         _ => 0,
     }
 }
@@ -381,6 +382,10 @@ fn collect_files(dir: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
         let file_name = entry.file_name();
         let file_name = file_name.to_string_lossy().to_lowercase();
         if file_name == ".ds_store" || file_name == "thumbs.db" || file_name.ends_with('~') {
+            continue;
+        }
+        if file_name == "transcript.jsonl" && path.with_file_name("transcript_full.jsonl").is_file()
+        {
             continue;
         }
 

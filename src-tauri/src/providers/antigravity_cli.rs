@@ -53,8 +53,7 @@ const UNKNOWN_WORKSPACE: &str = "unknown";
 const FALLBACK_PROJECT_NAME: &str = "Antigravity CLI";
 const SUMMARY_MAX_CHARS: usize = 200;
 
-/// Default CLI store root. The existing antigravity provider has no env
-/// override pattern, so none is honored here either.
+/// Default CLI store root.
 pub(crate) fn default_root() -> Option<PathBuf> {
     // Through the sandboxed helper, not `dirs::home_dir()`: on Windows the
     // latter goes to the known-folder API and ignores `HOME`, so the tests'
@@ -63,9 +62,31 @@ pub(crate) fn default_root() -> Option<PathBuf> {
     crate::utils::home_dir().map(|h| h.join(".gemini").join("antigravity-cli"))
 }
 
-/// True when the default CLI root looks like an antigravity-cli store.
+/// All candidate roots for Antigravity conversation stores:
+/// both `~/.gemini/antigravity-cli` and `~/.gemini/antigravity`.
+pub(crate) fn candidate_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Some(cli_root) = default_root() {
+        if cli_root.is_dir() {
+            roots.push(cli_root);
+        }
+    }
+    if let Some(desktop_root) = crate::commands::antigravity::resolve_antigravity_root() {
+        if desktop_root.is_dir() && !roots.contains(&desktop_root) {
+            roots.push(desktop_root);
+        }
+    }
+    if roots.is_empty() {
+        if let Some(cli_root) = default_root() {
+            roots.push(cli_root);
+        }
+    }
+    roots
+}
+
+/// True when any candidate root looks like an antigravity store.
 pub(crate) fn is_available() -> bool {
-    default_root().is_some_and(|root| is_available_at(&root))
+    candidate_roots().iter().any(|root| is_available_at(root))
 }
 
 fn is_available_at(root: &Path) -> bool {
@@ -79,48 +100,111 @@ fn is_available_at(root: &Path) -> bool {
 // Provider interface (default-root wrappers)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// CLI projects grouped by `workspace` from `history.jsonl`. Tolerant: a
+/// CLI projects grouped by `workspace` from all candidate roots. Tolerant: a
 /// missing or unreadable store yields an empty list, never an error.
 pub fn scan_projects() -> Vec<ClaudeProject> {
-    default_root()
-        .filter(|root| !is_symlink(root) && root.is_dir())
-        .map(|root| scan_projects_from_root(&root))
-        .unwrap_or_default()
+    let mut all_sessions = Vec::new();
+    for root in candidate_roots() {
+        if !is_symlink(&root) && root.is_dir() {
+            all_sessions.extend(collect_sessions(&root));
+        }
+    }
+    aggregate_projects(all_sessions)
 }
 
 /// Sessions for one workspace (the `antigravity-cli://`-stripped project path).
 pub fn load_sessions(workspace: &str) -> Result<Vec<ClaudeSession>, String> {
-    Ok(default_root()
-        .filter(|root| !is_symlink(root) && root.is_dir())
-        .map(|root| load_sessions_from_root(&root, workspace))
-        .unwrap_or_default())
+    let mut sessions: Vec<ClaudeSession> = Vec::new();
+    for root in candidate_roots() {
+        if !is_symlink(&root) && root.is_dir() {
+            sessions.extend(
+                collect_sessions(&root)
+                    .into_iter()
+                    .filter(|session| session.workspace == workspace)
+                    .map(CliSession::into_claude_session),
+            );
+        }
+    }
+    sessions.sort_by(|a, b| b.last_modified.cmp(&a.last_modified));
+    Ok(sessions)
 }
 
-/// True when `session_path` is a valid CLI session directory under the
-/// default root — used by the shared provider to route `load_messages`.
+/// True when `session_path` is a valid Antigravity session directory under any
+/// candidate root — used by the shared provider to route `load_messages`.
 pub(crate) fn owns_session_path(session_path: &str) -> bool {
-    default_root().is_some_and(|root| validate_session_dir(&root, session_path).is_ok())
+    find_owning_root(session_path).is_some()
+}
+
+pub(crate) fn find_owning_root(session_path: &str) -> Option<PathBuf> {
+    for root in candidate_roots() {
+        if validate_session_dir(&root, session_path).is_ok() {
+            return Some(root);
+        }
+    }
+    let p = Path::new(session_path);
+    if p.is_dir() {
+        let logs = p.join(".system_generated").join("logs");
+        if logs.join("transcript_full.jsonl").is_file() || logs.join("transcript.jsonl").is_file() {
+            if let Some(parent_root) = p.parent().and_then(Path::parent) {
+                return Some(parent_root.to_path_buf());
+            }
+        }
+    }
+    None
 }
 
 pub fn load_messages(session_path: &str) -> Result<Vec<ClaudeMessage>, String> {
-    let root = default_root().ok_or("Antigravity CLI root not found")?;
+    if let Some(root) = find_owning_root(session_path) {
+        if let Ok(msgs) = load_messages_from_root(&root, session_path) {
+            return Ok(msgs);
+        }
+    }
+    let session_dir = Path::new(session_path);
+    if session_dir.is_dir() {
+        let transcript = transcript_path(session_dir);
+        if transcript.is_file() {
+            let conversation_id = session_dir
+                .file_name()
+                .map(|name| name.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let fallback_ts = file_modified_iso(&transcript).unwrap_or_default();
+            return Ok(parse_transcript(
+                &transcript,
+                &conversation_id,
+                &fallback_ts,
+            ));
+        }
+    }
+    let root = default_root().ok_or("Antigravity root not found")?;
     load_messages_from_root(&root, session_path)
 }
 
 /// Content search across CLI transcripts. Tolerant: errors degrade to an
 /// empty result set.
 pub fn search(query: &str, limit: usize) -> Vec<ClaudeMessage> {
-    default_root()
-        .filter(|root| !is_symlink(root) && root.is_dir())
-        .map(|root| search_from_root(&root, query, limit))
-        .unwrap_or_default()
+    let mut results = Vec::new();
+    for root in candidate_roots() {
+        if !is_symlink(&root) && root.is_dir() {
+            let root_results = search_from_root(&root, query, limit.saturating_sub(results.len()));
+            results.extend(root_results);
+            if results.len() >= limit {
+                break;
+            }
+        }
+    }
+    results
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Root-parameterized implementation (fixture-testable)
 // ─────────────────────────────────────────────────────────────────────────────
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn scan_projects_from_root(root: &Path) -> Vec<ClaudeProject> {
+    aggregate_projects(collect_sessions(root))
+}
+
+fn aggregate_projects(sessions: Vec<CliSession>) -> Vec<ClaudeProject> {
     #[derive(Default)]
     struct Acc {
         session_count: usize,
@@ -129,7 +213,7 @@ pub(crate) fn scan_projects_from_root(root: &Path) -> Vec<ClaudeProject> {
     }
 
     let mut by_workspace: HashMap<String, Acc> = HashMap::new();
-    for session in collect_sessions(root) {
+    for session in sessions {
         let last = session
             .messages
             .last()
@@ -163,6 +247,7 @@ pub(crate) fn scan_projects_from_root(root: &Path) -> Vec<ClaudeProject> {
     projects
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn load_sessions_from_root(root: &Path, workspace: &str) -> Vec<ClaudeSession> {
     let mut sessions: Vec<ClaudeSession> = collect_sessions(root)
         .into_iter()
@@ -328,13 +413,19 @@ fn non_empty_str(value: Option<&Value>) -> Option<String> {
 }
 
 fn transcript_path(session_dir: &Path) -> PathBuf {
-    session_dir
-        .join(".system_generated")
-        .join("logs")
-        .join("transcript_full.jsonl")
+    let logs = session_dir.join(".system_generated").join("logs");
+    let full = logs.join("transcript_full.jsonl");
+    if full.is_file() {
+        return full;
+    }
+    let compact = logs.join("transcript.jsonl");
+    if compact.is_file() {
+        return compact;
+    }
+    full
 }
 
-/// `brain/<uuid>` directories that carry a readable full transcript.
+/// `brain/<uuid>` directories that carry a readable full or compact transcript.
 /// Symlinked directories/files are skipped per repo convention.
 fn list_session_dirs(root: &Path) -> Vec<(String, PathBuf)> {
     let brain = root.join(BRAIN_DIR);
@@ -365,7 +456,8 @@ fn list_session_dirs(root: &Path) -> Vec<(String, PathBuf)> {
 }
 
 /// Join the on-disk sessions with the index; sessions the index cannot place
-/// fall into the `UNKNOWN_WORKSPACE` ("Antigravity CLI") bucket. Transcripts
+/// attempt workspace inference from the session's database or transcript steps,
+/// falling back to the `UNKNOWN_WORKSPACE` ("Antigravity CLI") bucket. Transcripts
 /// mapping to zero viewer messages are dropped.
 fn collect_sessions(root: &Path) -> Vec<CliSession> {
     let index = read_index(root);
@@ -388,10 +480,12 @@ fn collect_sessions(root: &Path) -> Vec<CliSession> {
 
             let summary = entry
                 .and_then(|e| e.display.clone())
+                .or_else(|| resolve_label_from_session_dir(&dir))
                 .or_else(|| first_user_text(&messages))
                 .map(|text| truncate_chars(&text, SUMMARY_MAX_CHARS));
             let workspace = entry
                 .and_then(|e| e.workspace.clone())
+                .or_else(|| detect_session_workspace(root, &conversation_id, &messages))
                 .unwrap_or_else(|| UNKNOWN_WORKSPACE.to_string());
 
             Some(CliSession {
@@ -405,6 +499,113 @@ fn collect_sessions(root: &Path) -> Vec<CliSession> {
         .collect()
 }
 
+fn detect_session_workspace(
+    root: &Path,
+    conversation_id: &str,
+    messages: &[ClaudeMessage],
+) -> Option<String> {
+    let db_path = root
+        .join("conversations")
+        .join(format!("{conversation_id}.db"));
+    if let Some(ws) = workspace_from_db(&db_path) {
+        return Some(ws);
+    }
+    if let Some(ws) = workspace_from_messages(messages) {
+        return Some(ws);
+    }
+    None
+}
+
+fn workspace_from_db(db_path: &Path) -> Option<String> {
+    if is_symlink(db_path) || !db_path.is_file() {
+        return None;
+    }
+    let conn = rusqlite::Connection::open_with_flags(
+        db_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .ok()?;
+    let mut stmt = conn
+        .prepare_cached("SELECT data FROM trajectory_metadata_blob WHERE id = 'main'")
+        .ok()?;
+    let data: Vec<u8> = stmt.query_row([], |row| row.get(0)).ok()?;
+    extract_file_uri_path(&data)
+}
+
+fn extract_file_uri_path(bytes: &[u8]) -> Option<String> {
+    let needle = b"file://";
+    let start_idx = bytes.windows(needle.len()).position(|w| w == needle)?;
+    let path_start = start_idx + needle.len();
+    let mut end = path_start;
+    while end < bytes.len() {
+        let b = bytes[end];
+        if b < 32 || b == b'"' || b == b'\'' || b == b'\\' || b == b'`' {
+            break;
+        }
+        end += 1;
+    }
+    if end <= path_start {
+        return None;
+    }
+    let path_str = std::str::from_utf8(&bytes[path_start..end]).ok()?;
+    let path = Path::new(path_str);
+    if path.is_absolute() && path.is_dir() {
+        Some(path_str.to_string())
+    } else {
+        None
+    }
+}
+
+fn workspace_from_messages(messages: &[ClaudeMessage]) -> Option<String> {
+    for msg in messages.iter().take(20) {
+        let Some(blocks) = msg.content.as_ref().and_then(Value::as_array) else {
+            continue;
+        };
+        for block in blocks {
+            if block.get("type").and_then(Value::as_str) == Some("tool_use") {
+                let Some(input) = block.get("input").and_then(Value::as_object) else {
+                    continue;
+                };
+                for key in ["Cwd", "DirectoryPath", "cwd", "directory_path"] {
+                    if let Some(val) = input.get(key) {
+                        let candidate_str = match val {
+                            Value::String(s) => s.trim_matches('"').to_string(),
+                            _ => val.to_string(),
+                        };
+                        let p = Path::new(&candidate_str);
+                        if p.is_absolute() && p.is_dir() {
+                            return Some(candidate_str);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+fn resolve_label_from_session_dir(session_dir: &Path) -> Option<String> {
+    for label_file in ["task.md", "implementation_plan.md", "walkthrough.md"] {
+        let path = session_dir.join(label_file);
+        if is_symlink(&path) || !path.is_file() {
+            continue;
+        }
+        let Ok(content) = fs::read_to_string(&path) else {
+            continue;
+        };
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if let Some(rest) = trimmed.strip_prefix("# ") {
+                let cleaned = rest.trim().trim_start_matches("Task:").trim();
+                if !cleaned.is_empty() {
+                    return Some(cleaned.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
 fn project_name_for_workspace(workspace: &str) -> String {
     if workspace == UNKNOWN_WORKSPACE {
         return FALLBACK_PROJECT_NAME.to_string();
@@ -413,6 +614,31 @@ fn project_name_for_workspace(workspace: &str) -> String {
         .file_name()
         .map(|name| name.to_string_lossy().to_string())
         .unwrap_or_else(|| workspace.to_string())
+}
+
+/// Clean up string values inside tool arguments that are serialized as JSON strings.
+fn clean_tool_args(raw: &Value) -> Value {
+    match raw {
+        Value::Object(map) => {
+            let mut cleaned = serde_json::Map::new();
+            for (k, v) in map {
+                let new_v = match v {
+                    Value::String(s) => {
+                        if let Ok(parsed) = serde_json::from_str::<Value>(s) {
+                            parsed
+                        } else {
+                            Value::String(s.clone())
+                        }
+                    }
+                    _ => v.clone(),
+                };
+                cleaned.insert(k.clone(), new_v);
+            }
+            Value::Object(cleaned)
+        }
+        Value::String(s) => serde_json::from_str(s).unwrap_or_else(|_| raw.clone()),
+        _ => raw.clone(),
+    }
 }
 
 /// Parse `transcript_full.jsonl` into viewer messages. Best-effort:
@@ -428,6 +654,7 @@ fn parse_transcript(path: &Path, conversation_id: &str, fallback_ts: &str) -> Ve
 
     let mut messages = Vec::new();
     let mut last_ts = fallback_ts.to_string();
+    let mut last_tool_use_id: Option<String> = None;
 
     for (line_idx, line) in content.lines().enumerate() {
         if line.trim().is_empty() {
@@ -443,7 +670,13 @@ fn parse_transcript(path: &Path, conversation_id: &str, fallback_ts: &str) -> Ve
         {
             last_ts = ts;
         }
-        if let Some(message) = convert_step(&rec, conversation_id, line_idx as u64, &last_ts) {
+        if let Some(message) = convert_step(
+            &rec,
+            conversation_id,
+            line_idx as u64,
+            &last_ts,
+            &mut last_tool_use_id,
+        ) {
             messages.push(message);
         }
     }
@@ -451,18 +684,18 @@ fn parse_transcript(path: &Path, conversation_id: &str, fallback_ts: &str) -> Ve
     messages
 }
 
-/// Map one step record to a viewer message, per the documented step shapes:
+/// Map one step record to a viewer message:
 /// - `USER_EXPLICIT` / `USER_INPUT` with content → user
-/// - `MODEL` with content → assistant; a non-`PLANNER_RESPONSE` step type
-///   (e.g. `SEARCH_WEB`) is kept visible as a `tool_use` block
-/// - `CONVERSATION_HISTORY` / `SYSTEM` → skip (replay/context, not turns)
-/// - content-less steps (thinking-only / tool-call-only) → skip
-/// - unknown `source` values → skip, never error (format is best-effort)
+/// - `MODEL` with `GENERIC` type and preceding tool call → user `tool_result`
+/// - `MODEL` with thinking, tool calls, and/or content → assistant
+/// - `CONVERSATION_HISTORY` / `SYSTEM` → skip
+/// - empty / payload-less steps → skip
 fn convert_step(
     rec: &Value,
     conversation_id: &str,
     line_idx: u64,
     timestamp: &str,
+    last_tool_use_id: &mut Option<String>,
 ) -> Option<ClaudeMessage> {
     let source = rec.get("source").and_then(Value::as_str).unwrap_or("");
     let step_type = rec.get("type").and_then(Value::as_str).unwrap_or("");
@@ -470,11 +703,6 @@ fn convert_step(
     if step_type == "CONVERSATION_HISTORY" || source == "SYSTEM" {
         return None;
     }
-    let content = rec
-        .get("content")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|content| !content.is_empty())?;
 
     let step_index = rec
         .get("step_index")
@@ -482,7 +710,15 @@ fn convert_step(
         .unwrap_or(line_idx);
     let uuid = format!("{conversation_id}-step-{step_index}");
 
+    let content = rec
+        .get("content")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|c| !c.is_empty());
+
     if source == "USER_EXPLICIT" || step_type == "USER_INPUT" {
+        *last_tool_use_id = None;
+        let text = content?;
         return Some(build_provider_message(
             PROVIDER_ID,
             uuid,
@@ -490,28 +726,85 @@ fn convert_step(
             timestamp.to_string(),
             "user",
             Some("user"),
-            Some(json!([{ "type": "text", "text": content }])),
+            Some(json!([{ "type": "text", "text": text }])),
             None,
         ));
     }
 
     if source == "MODEL" {
-        let blocks = if step_type.is_empty() || step_type == "PLANNER_RESPONSE" {
-            json!([{ "type": "text", "text": content }])
-        } else {
-            // Keep the raw step type visible for non-planner model steps
-            // (e.g. SEARCH_WEB) — rendered as a tool_use marker before the
-            // step's text payload.
-            json!([
-                {
+        if step_type == "GENERIC" {
+            if let Some(tool_use_id) = last_tool_use_id.take() {
+                if let Some(text) = content {
+                    return Some(build_provider_message(
+                        PROVIDER_ID,
+                        uuid,
+                        conversation_id,
+                        timestamp.to_string(),
+                        "user",
+                        Some("user"),
+                        Some(json!([{
+                            "type": "tool_result",
+                            "tool_use_id": tool_use_id,
+                            "content": text
+                        }])),
+                        None,
+                    ));
+                }
+            }
+        }
+
+        let mut blocks = Vec::new();
+
+        // 1. Thinking block if present
+        if let Some(thinking) = rec
+            .get("thinking")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+        {
+            blocks.push(json!({
+                "type": "thinking",
+                "thinking": thinking
+            }));
+        }
+
+        // 2. Tool calls if present in rec.get("tool_calls")
+        if let Some(tool_calls) = rec.get("tool_calls").and_then(Value::as_array) {
+            for (i, tc) in tool_calls.iter().enumerate() {
+                let name = tc.get("name").and_then(Value::as_str).unwrap_or("unknown");
+                let tool_id = format!("{uuid}-tc-{i}");
+                let raw_args = tc.get("args").cloned().unwrap_or(json!({}));
+                let input = clean_tool_args(&raw_args);
+                *last_tool_use_id = Some(tool_id.clone());
+                blocks.push(json!({
+                    "type": "tool_use",
+                    "id": tool_id,
+                    "name": name,
+                    "input": input
+                }));
+            }
+        }
+
+        // 3. Text content or legacy non-planner tool_use marker
+        if let Some(text) = content {
+            if step_type.is_empty() || step_type == "PLANNER_RESPONSE" || !blocks.is_empty() {
+                blocks.push(json!({ "type": "text", "text": text }));
+            } else {
+                // Non-planner MODEL step without tool_calls array (e.g. legacy SEARCH_WEB in tests)
+                blocks.push(json!({
                     "type": "tool_use",
                     "id": format!("{uuid}-tool"),
                     "name": step_type,
                     "input": {}
-                },
-                { "type": "text", "text": content }
-            ])
-        };
+                }));
+                blocks.push(json!({ "type": "text", "text": text }));
+            }
+        }
+
+        if blocks.is_empty() {
+            return None;
+        }
+
         return Some(build_provider_message(
             PROVIDER_ID,
             uuid,
@@ -519,7 +812,7 @@ fn convert_step(
             timestamp.to_string(),
             "assistant",
             Some("assistant"),
-            Some(blocks),
+            Some(Value::Array(blocks)),
             None,
         ));
     }
@@ -538,9 +831,23 @@ fn first_user_text(messages: &[ClaudeMessage]) -> Option<String> {
                 .iter()
                 .find_map(|block| block.get("text").and_then(Value::as_str))
         })
-        .map(str::trim)
+        .map(clean_user_prompt_text)
         .filter(|text| !text.is_empty())
-        .map(ToOwned::to_owned)
+}
+
+fn clean_user_prompt_text(text: &str) -> String {
+    let trimmed = text.trim();
+    if let Some(rest) = trimmed.strip_prefix("<USER_REQUEST>") {
+        let inner = if let Some((req, _)) = rest.split_once("</USER_REQUEST>") {
+            req.trim()
+        } else {
+            rest.trim()
+        };
+        if !inner.is_empty() {
+            return inner.to_string();
+        }
+    }
+    trimmed.to_string()
 }
 
 fn truncate_chars(text: &str, max_chars: usize) -> String {
@@ -863,5 +1170,89 @@ mod tests {
 
         let limited = search_from_root(&root, "e", 2);
         assert_eq!(limited.len(), 2, "limit respected");
+    }
+
+    #[test]
+    fn load_messages_converts_tool_calls_thinking_and_generic_results() {
+        let temp = TempDir::new().expect("temp dir");
+        let root = cli_root(&temp);
+        write_transcript(
+            &root,
+            "conv-tools",
+            &[
+                r#"{"step_index": 0, "source": "USER_EXPLICIT", "type": "USER_INPUT", "content": "<USER_REQUEST>\nRun a test\n</USER_REQUEST>"}"#,
+                r#"{"step_index": 1, "source": "MODEL", "type": "PLANNER_RESPONSE", "thinking": "planning to list files", "tool_calls": [{"name": "list_dir", "args": {"DirectoryPath": "\"/tmp\""}}]}"#,
+                r#"{"step_index": 2, "source": "MODEL", "type": "GENERIC", "content": "file1.txt\nfile2.txt"}"#,
+                r#"{"step_index": 3, "source": "MODEL", "type": "PLANNER_RESPONSE", "content": "Done listing files."}"#,
+            ],
+        );
+        let session_dir = root.join(BRAIN_DIR).join("conv-tools");
+
+        let messages =
+            load_messages_from_root(&root, &session_dir.to_string_lossy()).expect("load messages");
+
+        assert_eq!(messages.len(), 4);
+
+        // Step 0: User message with text
+        assert_eq!(messages[0].message_type, "user");
+        assert!(messages[0].content.as_ref().unwrap()[0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("Run a test"));
+
+        // Step 1: Assistant message with thinking + tool_use
+        assert_eq!(messages[1].message_type, "assistant");
+        let blocks = messages[1].content.as_ref().unwrap().as_array().unwrap();
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0]["type"], "thinking");
+        assert_eq!(blocks[0]["thinking"], "planning to list files");
+        assert_eq!(blocks[1]["type"], "tool_use");
+        assert_eq!(blocks[1]["name"], "list_dir");
+        assert_eq!(blocks[1]["input"]["DirectoryPath"], "/tmp");
+
+        // Step 2: Tool result converted to user tool_result message
+        assert_eq!(messages[2].message_type, "user");
+        let res_blocks = messages[2].content.as_ref().unwrap().as_array().unwrap();
+        assert_eq!(res_blocks[0]["type"], "tool_result");
+        assert_eq!(res_blocks[0]["tool_use_id"], "conv-tools-step-1-tc-0");
+        assert_eq!(res_blocks[0]["content"], "file1.txt\nfile2.txt");
+
+        // Step 3: Final assistant text
+        assert_eq!(messages[3].message_type, "assistant");
+        let final_blocks = messages[3].content.as_ref().unwrap().as_array().unwrap();
+        assert_eq!(final_blocks[0]["type"], "text");
+        assert_eq!(final_blocks[0]["text"], "Done listing files.");
+    }
+
+    #[test]
+    fn workspace_inference_from_tool_call_directory() {
+        let temp = TempDir::new().expect("temp dir");
+        let root = cli_root(&temp);
+        let ws_dir = temp.path().join("my-inferred-workspace");
+        fs::create_dir_all(&ws_dir).expect("create ws dir");
+
+        let ws_str = ws_dir.to_string_lossy().to_string();
+        let step1 = format!(
+            r#"{{"step_index": 1, "source": "MODEL", "type": "PLANNER_RESPONSE", "tool_calls": [{{"name": "list_dir", "args": {{"DirectoryPath": "\"{ws_str}\""}}}}]}}"#
+        );
+
+        write_transcript(
+            &root,
+            "conv-inferred",
+            &[
+                r#"{"step_index": 0, "source": "USER_EXPLICIT", "type": "USER_INPUT", "content": "Check files"}"#,
+                &step1,
+            ],
+        );
+
+        let projects = scan_projects_from_root(&root);
+        let found = projects
+            .iter()
+            .find(|p| p.path == format!("{SCHEME}{ws_str}"));
+        assert!(
+            found.is_some(),
+            "Project path should match inferred workspace: {projects:?}"
+        );
+        assert_eq!(found.unwrap().name, "my-inferred-workspace");
     }
 }

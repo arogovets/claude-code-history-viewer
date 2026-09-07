@@ -428,32 +428,56 @@ pub fn load_sessions(path: &str, _exclude_sidechain: bool) -> Result<Vec<ClaudeS
             ms_to_rfc3339(session_state.latest.last_modified_ms)
         };
 
-        let display_label = format!(
-            "{} ({} calls · {} steps · in={} out={} total={})",
-            session_state.latest.label,
+        let transcript_logs = session_dir.join(".system_generated").join("logs");
+        let has_transcript = transcript_logs.is_dir();
+
+        let message_count = if has_transcript {
             session_state
                 .latest
                 .message_count
-                .unwrap_or(summary.call_count as u32),
-            step_count,
-            fmt_tokens(session_state.latest.input_tokens),
-            fmt_tokens(session_state.latest.output_tokens),
-            fmt_tokens(session_state.latest.total_tokens),
-        );
+                .filter(|&c| c > 0)
+                .unwrap_or(summary.call_count as u32) as usize
+        } else {
+            session_state
+                .latest
+                .message_count
+                .unwrap_or(summary.call_count as u32) as usize
+        };
+
+        let has_tool_use = has_transcript;
+
+        let display_label = if summary.call_count > 0 || step_count > 0 {
+            format!(
+                "{} ({} calls · {} steps · in={} out={} total={})",
+                session_state.latest.label,
+                message_count,
+                step_count,
+                fmt_tokens(session_state.latest.input_tokens),
+                fmt_tokens(session_state.latest.output_tokens),
+                fmt_tokens(session_state.latest.total_tokens),
+            )
+        } else if session_state.latest.total_tokens > 0 {
+            format!(
+                "{} (in={} out={} total={})",
+                session_state.latest.label,
+                fmt_tokens(session_state.latest.input_tokens),
+                fmt_tokens(session_state.latest.output_tokens),
+                fmt_tokens(session_state.latest.total_tokens),
+            )
+        } else {
+            session_state.latest.label.clone()
+        };
 
         sessions.push(ClaudeSession {
             session_id: session_id.clone(),
             actual_session_id: session_id,
             file_path: session_dir.to_string_lossy().to_string(),
             project_name: "Antigravity".to_string(),
-            message_count: session_state
-                .latest
-                .message_count
-                .unwrap_or(summary.call_count as u32) as usize,
+            message_count,
             first_message_time: first_ts.clone(),
             last_message_time: last_ts.clone(),
             last_modified: last_ts,
-            has_tool_use: false,
+            has_tool_use,
             has_errors: false,
             summary: Some(display_label),
             is_renamed: false,
@@ -525,6 +549,10 @@ pub(crate) fn resolve_usage_jsonl_path(session_path: &str) -> Option<PathBuf> {
 /// route to the transcript parser instead.
 pub fn load_messages(session_path: &str) -> Result<Vec<ClaudeMessage>, String> {
     if super::antigravity_cli::owns_session_path(session_path) {
+        return super::antigravity_cli::load_messages(session_path);
+    }
+    let session_dir = Path::new(session_path);
+    if session_dir.join(".system_generated").join("logs").exists() {
         return super::antigravity_cli::load_messages(session_path);
     }
     let session_id = PathBuf::from(session_path)
