@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.27.0-fork.2] - 2026-09-07
+
+Patch release: URL deep linking, session opening loading indicators, command filtering, and in-session search synchronization.
+
+### Fixed
+- **URL deep linking (`?session=...` and `&msg=...`)** — Navigating to a session directly via URL parameters in a new browser tab or bookmark now properly transitions the view to the message viewer and loads the target session even if no specific message ID was specified.
+- **Session opening loading feedback** — Clicking search results in the Cmd+K Global Search modal now displays an immediate inline loading spinner and toast notification while the session is resolving, preventing frozen UI perception during multi-project scans. Also checks the currently selected project first for instant opening.
+- **Commands filter independence** — Command executions embedded within text messages (`<command-name>`, `<command-args>`, `<bash-stdout>`, etc.) are now controlled exclusively by the "Commands" filter toggle rather than the "Text" toggle across the message viewer, node trees, and exported files.
+- **In-session search filter synchronization** — Match counts and jump navigation for in-session keyword searches now filter matches against active role (User/Assistant) and content-type filters, dynamically recalculating matches when filters are toggled.
+- **Content vs. Tool ID search toggle UX** — Switching between Content and Tool ID search modes no longer clears the search input query, and provides distinct placeholder text, monospace styling, and descriptive tooltips.
+
 ## [1.27.0-fork.1] - 2026-09-07
 
 Feature release: DeepSeek Harness provider, Tailscale SSH remote host aggregation, text content filtering, and remote session global search.

@@ -22,7 +22,7 @@ import {
   SystemMessageRenderer,
 } from "../../messageRenderer";
 import { AgentTaskGroupRenderer, TaskOperationGroupRenderer } from "../../toolResultRenderer";
-import { extractClaudeMessageContent } from "../../../utils/messageUtils";
+import { extractClaudeMessageContent, hasCommandTags } from "../../../utils/messageUtils";
 import { isEmptyMessage } from "../helpers/messageHelpers";
 import { isToolUseContent, isToolResultContent } from "../../../utils/typeGuards";
 import { isActionModifier } from "../../../utils/platform";
@@ -401,15 +401,24 @@ export const ClaudeMessageNode = React.memo(({
           <MessageHeader message={message} />
 
           <div className="w-full">
-            {messageFilter.contentTypes.text && (
-              <MessageContentDisplay
-                content={extractClaudeMessageContent(message)}
-                messageType={message.type}
-                searchQuery={searchQuery}
-                isCurrentMatch={isCurrentMatch}
-                currentMatchIndex={currentMatchIndex}
-              />
-            )}
+            {(() => {
+              const content = extractClaudeMessageContent(message);
+              if (!content) return null;
+              const isCommand = hasCommandTags(content);
+              const isVisible = isCommand
+                ? messageFilter.contentTypes.commands
+                : messageFilter.contentTypes.text;
+              if (!isVisible) return null;
+              return (
+                <MessageContentDisplay
+                  content={content}
+                  messageType={message.type}
+                  searchQuery={searchQuery}
+                  isCurrentMatch={isCurrentMatch}
+                  currentMatchIndex={currentMatchIndex}
+                />
+              );
+            })()}
 
             {message.content &&
               Array.isArray(message.content) && (

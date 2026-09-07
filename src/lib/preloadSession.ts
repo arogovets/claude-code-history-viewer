@@ -208,7 +208,14 @@ async function resolveUuid(
   projects: ClaudeProject[],
   isCurrent: () => boolean,
 ): Promise<SessionPickerCandidate | null> {
-  const { excludeSidechain } = useAppStore.getState();
+  const { excludeSidechain, sessions, selectedProject } = useAppStore.getState();
+
+  // Quick check: is the session already in currently loaded sessions?
+  if (selectedProject) {
+    const session = matchByUuid(sessions, uuid);
+    if (session) return { project: selectedProject, session };
+  }
+
   for (const project of projects) {
     if (!isCurrent() || useAppStore.getState().selectedSession) return null;
     try {
@@ -228,7 +235,14 @@ async function resolvePath(
   projects: ClaudeProject[],
   isCurrent: () => boolean,
 ): Promise<SessionPickerCandidate | null> {
-  const { excludeSidechain } = useAppStore.getState();
+  const { excludeSidechain, sessions, selectedProject } = useAppStore.getState();
+
+  // Quick check: is the session already in currently loaded sessions?
+  if (selectedProject) {
+    const session = matchByPath(sessions, absPath);
+    if (session) return { project: selectedProject, session };
+  }
+
   for (const project of projects) {
     if (!isCurrent() || useAppStore.getState().selectedSession) return null;
     try {

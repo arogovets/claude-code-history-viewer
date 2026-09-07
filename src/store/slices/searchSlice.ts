@@ -18,6 +18,7 @@ import {
   createEmptySearchState,
 } from "./types";
 import { getWslSearchableProviderIds, hasNonDefaultProvider } from "../../utils/providers";
+import { applyMessageDisplayFilter } from "../../components/MessageViewer/helpers/messageDisplayFilter";
 
 // ============================================================================
 // State Interface
@@ -195,12 +196,17 @@ export const createSearchSlice: StateCreator<
       // it here.
       if (!isStillLatest()) return;
 
-      // Convert to SearchMatch format (filter valid indices)
+      const messageFilter = get().messageFilter;
+      const visibleMessages = applyMessageDisplayFilter(searchableMessages, messageFilter);
+      const visibleUuidSet = new Set(visibleMessages.map((m) => m.uuid));
+
+      // Convert to SearchMatch format (filter valid indices and respect active message filter)
       const matches: SearchMatch[] = searchResults
         .filter(
           (result) =>
             result.messageIndex >= 0 &&
-            result.messageIndex < searchableMessages.length
+            result.messageIndex < searchableMessages.length &&
+            visibleUuidSet.has(result.messageUuid)
         )
         .map((result) => ({
           messageUuid: result.messageUuid,
@@ -300,9 +306,17 @@ export const createSearchSlice: StateCreator<
   },
 
   setSearchFilterType: (filterType: SearchFilterType) => {
-    set(() => ({
-      sessionSearch: createEmptySearchState(filterType),
+    const { sessionSearch, setSessionSearchQuery } = get();
+    const query = sessionSearch.query;
+    set((state) => ({
+      sessionSearch: {
+        ...state.sessionSearch,
+        filterType,
+      },
     }));
+    if (query.trim()) {
+      void setSessionSearchQuery(query);
+    }
   },
   };
 };

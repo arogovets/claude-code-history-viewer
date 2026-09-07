@@ -8,19 +8,25 @@
 
 import type { ClaudeMessage } from "../../../types";
 import type { MessageFilter } from "../../../store/slices/filterSlice";
-import { extractClaudeMessageContent } from "../../../utils/messageUtils";
+import { extractClaudeMessageContent, hasCommandTags } from "../../../utils/messageUtils";
 import { filterMessagesByCategory } from "./messageCategories";
 
 function hasVisibleContent(
   msg: ClaudeMessage,
   contentTypes: MessageFilter["contentTypes"],
 ): boolean {
-  const hasText = contentTypes.text && !!extractClaudeMessageContent(msg);
+  const content = extractClaudeMessageContent(msg);
+  const isCommand = content ? hasCommandTags(content) : false;
+  const hasText = !isCommand && contentTypes.text && !!content;
+  const hasCommand = isCommand && contentTypes.commands;
   const hasContentArray = Array.isArray(msg.content) && msg.content.some((item: unknown) => {
     if (!item || typeof item !== "object") return false;
     const typed = item as Record<string, unknown>;
     const t = typed.type as string;
-    if (t === "text") return contentTypes.text;
+    if (t === "text") {
+      const isItemCommand = typeof typed.text === "string" && hasCommandTags(typed.text);
+      return isItemCommand ? contentTypes.commands : contentTypes.text;
+    }
     if (t === "thinking" || t === "redacted_thinking") return contentTypes.thinking;
     if (t === "tool_use" || t === "tool_result" || t === "server_tool_use"
       || t === "web_search_tool_result" || t === "mcp_tool_use" || t === "mcp_tool_result"
@@ -32,7 +38,7 @@ function hasVisibleContent(
   });
   const msgRecord = msg as unknown as Record<string, unknown>;
   const hasLegacyTool = contentTypes.toolCalls && !!(msgRecord.toolUse || msgRecord.toolUseResult);
-  return hasText || hasContentArray || hasLegacyTool;
+  return hasText || hasCommand || hasContentArray || hasLegacyTool;
 }
 
 export function applyMessageDisplayFilter(

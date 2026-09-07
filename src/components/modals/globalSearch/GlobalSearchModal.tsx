@@ -54,6 +54,7 @@ export const GlobalSearchModal = ({
     const [query, setQuery] = useState("");
     const [results, setResults] = useState<GlobalSearchResult[]>([]);
     const [isSearching, setIsSearching] = useState(false);
+    const [resolvingResultUuid, setResolvingResultUuid] = useState<string | null>(null);
     const [selectedIndex, setSelectedIndex] = useState(0);
     const [messageTypeFilter, setMessageTypeFilter] = useState<MessageTypeFilter>("all");
     const inputRef = useRef<HTMLInputElement>(null);
@@ -202,6 +203,11 @@ export const GlobalSearchModal = ({
     // Navigate to selected result
     const handleSelectResult = useCallback(
         async (result: GlobalSearchResult) => {
+            if (resolvingResultUuid) return;
+            const targetKey = result.uuid || result.sessionId;
+            setResolvingResultUuid(targetKey);
+            const toastId = toast.loading(t("globalSearch.openingSession", "Opening session..."));
+
             try {
                 const sessionMatches = (s: ClaudeSession, targetId?: string): boolean => {
                     if (!targetId) return false;
@@ -227,6 +233,7 @@ export const GlobalSearchModal = ({
                     if (result.uuid) {
                         navigateToMessage(result.uuid, { history: "replace" });
                     }
+                    toast.dismiss(toastId);
                     onClose();
                     return;
                 }
@@ -281,7 +288,7 @@ export const GlobalSearchModal = ({
                     }
                 };
 
-                const BATCH_SIZE = 4;
+                const BATCH_SIZE = 6;
                 for (let i = 0; i < candidates.length; i += BATCH_SIZE) {
                     if (token !== resolveTokenRef.current) return; // cancelled
                     const batch = candidates.slice(i, i + BATCH_SIZE);
@@ -296,6 +303,7 @@ export const GlobalSearchModal = ({
                         if (result.uuid) {
                             navigateToMessage(result.uuid, { history: "replace" });
                         }
+                        toast.dismiss(toastId);
                         onClose();
                         return;
                     }
@@ -303,16 +311,19 @@ export const GlobalSearchModal = ({
 
                 // Session not found in any project
                 clearTargetMessage();
-                toast.error(t("globalSearch.sessionNotFound"));
+                toast.error(t("globalSearch.sessionNotFound", "Session not found"));
                 onClose();
             } catch (error) {
                 clearTargetMessage();
                 console.error("Failed to navigate to search result:", error);
-                toast.error(t("globalSearch.navigationFailed"));
+                toast.error(t("globalSearch.navigationFailed", "Failed to open session"));
                 onClose();
+            } finally {
+                toast.dismiss(toastId);
+                setResolvingResultUuid(null);
             }
         },
-        [projects, sessions, selectProject, selectSession, navigateToMessage, clearTargetMessage, setAnalyticsCurrentView, onClose, t],
+        [resolvingResultUuid, projects, sessions, selectProject, selectSession, navigateToMessage, clearTargetMessage, setAnalyticsCurrentView, onClose, t],
     );
 
     // Keyboard navigation
@@ -365,6 +376,7 @@ export const GlobalSearchModal = ({
         } else {
             // Cancel any in-flight result-resolution sweep.
             resolveTokenRef.current++;
+            setResolvingResultUuid(null);
             setQuery("");
             setResults([]);
             setSelectedIndex(0);
@@ -664,15 +676,18 @@ export const GlobalSearchModal = ({
                                         {group.items.map((result) => {
                                             const index = currentResultIndex++;
                                             const isSelected = index === selectedIndex;
+                                            const isResolvingThis = resolvingResultUuid === (result.uuid || result.sessionId);
 
                                             return (
                                                 <button
                                                     key={result.uuid}
                                                     data-index={index}
+                                                    disabled={!!resolvingResultUuid}
                                                     onClick={() => handleSelectResult(result)}
                                                     className={cn(
                                                         "w-full text-left px-4 py-2.5 hover:bg-muted/50 transition-colors",
-                                                        isSelected && "bg-muted"
+                                                        isSelected && "bg-muted",
+                                                        isResolvingThis && "bg-primary/10 opacity-90 cursor-wait"
                                                     )}
                                                 >
                                                     <div className="flex items-start gap-3">
@@ -695,6 +710,12 @@ export const GlobalSearchModal = ({
                                                                 <span className="text-xs text-muted-foreground">
                                                                     {formatTimestamp(result.timestamp)}
                                                                 </span>
+                                                                {isResolvingThis && (
+                                                                    <span className="inline-flex items-center gap-1 text-xs text-primary font-medium ml-auto animate-pulse">
+                                                                        <Loader2 className="w-3 h-3 animate-spin shrink-0" />
+                                                                        {t("common.loading", "Loading...")}
+                                                                    </span>
+                                                                )}
                                                             </div>
                                                             {(() => {
                                                                 const sessionName = getSessionName(result);

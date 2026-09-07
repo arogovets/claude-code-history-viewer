@@ -164,3 +164,21 @@ export const extractImageFromContent = (content: unknown): string | null => {
 export const hasImageContent = (message: ClaudeMessage): boolean => {
   return extractImageFromContent(message.content) !== null;
 };
+
+/**
+ * Detects command XML tags within message text (e.g. <command-name>, <bash-stdout>, etc.)
+ */
+export function hasCommandTags(text: string | null | undefined): boolean {
+  if (!text || typeof text !== "string") return false;
+  const contentWithoutCode = text
+    .replace(/```[\s\S]*?```/g, "")
+    .replace(/`[^`\n]*`/g, "");
+  return (
+    /<command-name>[\s\S]*?<\/command-name>/.test(contentWithoutCode) ||
+    /<command-message>[\s\S]*?<\/command-message>/.test(contentWithoutCode) ||
+    /<command-args>[\s\S]*?<\/command-args>/.test(contentWithoutCode) ||
+    /<local-command-caveat>[\s\S]*?<\/local-command-caveat>/.test(contentWithoutCode) ||
+    /<[^>]*-stdout>[\s\S]*?<\/[^>]*>/.test(contentWithoutCode) ||
+    /<[^>]*-stderr>[\s\S]*?<\/[^>]*>/.test(contentWithoutCode)
+  );
+}

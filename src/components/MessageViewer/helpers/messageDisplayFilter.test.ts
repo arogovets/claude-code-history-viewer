@@ -130,4 +130,37 @@ describe("applyMessageDisplayFilter", () => {
     const result = applyMessageDisplayFilter(messages, filter);
     expect(result.map((m) => m.uuid)).toEqual(["asst-text"]);
   });
+
+  it("hides command messages when commands filter is disabled", () => {
+    const messages = [
+      makeMessage("user-cmd", {
+        type: "user",
+        content: "<command-name>npm test</command-name><command-args></command-args>",
+      }),
+      makeMessage("user-text", { type: "user", content: "Regular text message" }),
+    ];
+    const filter: MessageFilter = {
+      ...defaultFilter,
+      contentTypes: { ...defaultFilter.contentTypes, commands: false },
+    };
+    const result = applyMessageDisplayFilter(messages, filter);
+    expect(result.map((m) => m.uuid)).toEqual(["user-text"]);
+  });
+
+  it("preserves command messages when text filter is disabled but commands is enabled", () => {
+    const messages = [
+      makeMessage("user-cmd", {
+        type: "user",
+        content: "<command-name>npm test</command-name><command-args></command-args>",
+      }),
+      makeMessage("user-text", { type: "user", content: "Regular text message" }),
+    ];
+    const filter: MessageFilter = {
+      ...defaultFilter,
+      contentTypes: { ...defaultFilter.contentTypes, text: false, commands: true },
+    };
+    const result = applyMessageDisplayFilter(messages, filter);
+    expect(result.map((m) => m.uuid)).toEqual(["user-cmd"]);
+  });
 });
+

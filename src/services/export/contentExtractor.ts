@@ -7,6 +7,7 @@
 
 import type { ContentItem } from "@/types/core/tool";
 import type { ClaudeMessage } from "@/types";
+import { hasCommandTags } from "@/utils/messageUtils";
 
 export interface ExtractedBlock {
   kind: "text" | "thinking" | "tool" | "result" | "media" | "search" | "code";
@@ -251,7 +252,10 @@ export function filterBlocksByContentType(
 ): ExtractedBlock[] {
   return blocks.filter((block) => {
     switch (block.kind) {
-      case "text": return contentTypes.text;
+      case "text": {
+        const isCommand = hasCommandTags(block.text);
+        return isCommand ? contentTypes.commands : contentTypes.text;
+      }
       case "thinking": return contentTypes.thinking;
       case "tool":
       case "result":

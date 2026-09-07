@@ -5,8 +5,8 @@
  * 직접 수정하지 마세요.
  *
  * 생성 명령: pnpm run generate:i18n-types
- * 생성 시간: 2026-08-26T18:00:54.440Z
- * 총 키 개수: 1928
+ * 생성 시간: 2026-09-07T11:57:43.021Z
+ * 총 키 개수: 1932
  * Namespace 수: 11
  */
 
@@ -40,7 +40,7 @@ export type I18nNamespace =
   | 'recentEdits';
 
 /**
- * common namespace의 번역 키 (184개)
+ * common namespace의 번역 키 (185개)
  * 파일: locales/{lang}/common.json
  */
 export type CommonKeys =
@@ -120,6 +120,7 @@ export type CommonKeys =
   | 'common.provider.crush'
   | 'common.provider.cursor'
   | 'common.provider.cursorAgent'
+  | 'common.provider.deepseek'
   | 'common.provider.detectError'
   | 'common.provider.forgecode'
   | 'common.provider.gemini'
@@ -1335,7 +1336,7 @@ export type ErrorKeys =
   | 'error.viewDetails';
 
 /**
- * message namespace의 번역 키 (103개)
+ * message namespace의 번역 키 (106개)
  * 파일: locales/{lang}/message.json
  */
 export type MessageKeys =
@@ -1397,7 +1398,9 @@ export type MessageKeys =
   | 'messageViewer.debugInfo.virtual'
   | 'messageViewer.debugInfo.yes'
   | 'messageViewer.filterContent'
+  | 'messageViewer.filterContentTooltip'
   | 'messageViewer.filterToolId'
+  | 'messageViewer.filterToolIdTooltip'
   | 'messageViewer.filterType'
   | 'messageViewer.hasErrors'
   | 'messageViewer.loadMoreMessages'
@@ -1414,6 +1417,7 @@ export type MessageKeys =
   | 'messageViewer.reply'
   | 'messageViewer.scrollToBottom'
   | 'messageViewer.scrollToTop'
+  | 'messageViewer.searchByToolId'
   | 'messageViewer.searchPlaceholder'
   | 'messageViewer.searchResults'
   | 'messageViewer.searching'
@@ -2416,6 +2420,7 @@ export type TranslationKey =
   | 'common.provider.crush'
   | 'common.provider.cursor'
   | 'common.provider.cursorAgent'
+  | 'common.provider.deepseek'
   | 'common.provider.detectError'
   | 'common.provider.forgecode'
   | 'common.provider.gemini'
@@ -2754,7 +2759,9 @@ export type TranslationKey =
   | 'messageViewer.debugInfo.virtual'
   | 'messageViewer.debugInfo.yes'
   | 'messageViewer.filterContent'
+  | 'messageViewer.filterContentTooltip'
   | 'messageViewer.filterToolId'
+  | 'messageViewer.filterToolIdTooltip'
   | 'messageViewer.filterType'
   | 'messageViewer.hasErrors'
   | 'messageViewer.loadMoreMessages'
@@ -2771,6 +2778,7 @@ export type TranslationKey =
   | 'messageViewer.reply'
   | 'messageViewer.scrollToBottom'
   | 'messageViewer.scrollToTop'
+  | 'messageViewer.searchByToolId'
   | 'messageViewer.searchPlaceholder'
   | 'messageViewer.searchResults'
   | 'messageViewer.searching'

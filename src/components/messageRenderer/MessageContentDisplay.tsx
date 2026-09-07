@@ -3,7 +3,7 @@ import ReactMarkdown from "react-markdown";
 import { Copy, ChevronDown } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { CommandRenderer, ImageRenderer, TaskNotificationRenderer, hasTaskNotification } from "../contentRenderer";
-import { isImageUrl, isBase64Image } from "../../utils/messageUtils";
+import { isImageUrl, isBase64Image, hasCommandTags } from "../../utils/messageUtils";
 import { TooltipButton } from "../../shared/TooltipButton";
 import { HighlightedText } from "../common";
 import { layout } from "@/components/renderers";
@@ -149,15 +149,7 @@ export const MessageContentDisplay: React.FC<MessageContentDisplayProps> = ({
       return <TaskNotificationRenderer text={content} />;
     }
 
-    const hasCommandTags =
-      /<command-name>[\s\S]*?<\/command-name>/.test(contentWithoutCode) ||
-      /<command-message>[\s\S]*?<\/command-message>/.test(contentWithoutCode) ||
-      /<command-args>[\s\S]*?<\/command-args>/.test(contentWithoutCode) ||
-      /<local-command-caveat>[\s\S]*?<\/local-command-caveat>/.test(contentWithoutCode) ||
-      /<[^>]*-stdout>[\s\S]*?<\/[^>]*>/.test(contentWithoutCode) ||
-      /<[^>]*-stderr>[\s\S]*?<\/[^>]*>/.test(contentWithoutCode);
-
-    if (hasCommandTags) {
+    if (hasCommandTags(contentWithoutCode)) {
       return <CommandRenderer text={content} />;
     }
 

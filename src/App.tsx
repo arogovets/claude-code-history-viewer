@@ -163,6 +163,8 @@ function App() {
       const generation = ++preloadGenerationRef.current;
       const isCurrent = () => preloadGenerationRef.current === generation;
 
+      const toastId = toast.loading(t("preload.openingSession", "Opening session..."));
+
       void preloadSessionFromCli({
         getStartupSessionHint: () => Promise.resolve(hint),
         projects: projectsRef.current,
@@ -173,12 +175,16 @@ function App() {
         t: (key, fallback) => t(key, fallback ?? key),
         isCurrent,
       }).then(({ matched }) => {
-        if (isCurrent() && matched && messageId) {
+        toast.dismiss(toastId);
+        if (isCurrent() && matched) {
           const state = useAppStore.getState();
           state.setAnalyticsCurrentView("messages");
-          state.navigateToMessage(messageId, { history: "none" });
+          if (messageId) {
+            state.navigateToMessage(messageId, { history: "none" });
+          }
         }
       }).catch((error) => {
+        toast.dismiss(toastId);
         if (!isCurrent()) return;
         console.error("Failed to preload session:", error);
         toast.error(t("common.error.unexpected", "Failed to open session"));

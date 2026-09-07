@@ -833,18 +833,21 @@ export const MessageViewer: React.FC<MessageViewerProps> = ({
           </button>
         )}
 
-        {/* Filter Toggle - Segmented control style */}
-        <div className="shrink-0 flex items-center bg-zinc-800/60 rounded-lg p-0.5 border border-zinc-700/40 order-2 lg:order-none">
+        {/* Search Mode Toggle - Segmented control style */}
+        <div
+          className="shrink-0 flex items-center bg-zinc-800/60 rounded-lg p-0.5 border border-zinc-700/40 order-2 lg:order-none"
+          title={t("messageViewer.filterType", "Search filter type")}
+        >
           <button
             type="button"
             onClick={() => onFilterTypeChange("content")}
             className={cn(
               "text-xs px-2.5 py-1 rounded-md transition-all duration-200 whitespace-nowrap",
               sessionSearch.filterType === "content"
-                ? "bg-zinc-600/80 text-zinc-100 shadow-sm"
+                ? "bg-zinc-600/80 text-zinc-100 shadow-sm font-medium"
                 : "text-zinc-400 hover:text-zinc-200"
             )}
-            title={t("messageViewer.filterType")}
+            title={t("messageViewer.filterContentTooltip", "Search in message content")}
           >
             {t("messageViewer.filterContent")}
           </button>
@@ -854,10 +857,10 @@ export const MessageViewer: React.FC<MessageViewerProps> = ({
             className={cn(
               "text-xs px-2.5 py-1 rounded-md transition-all duration-200 whitespace-nowrap",
               sessionSearch.filterType === "toolId"
-                ? "bg-zinc-600/80 text-zinc-100 shadow-sm"
+                ? "bg-zinc-600/80 text-zinc-100 shadow-sm font-medium"
                 : "text-zinc-400 hover:text-zinc-200"
             )}
-            title={t("messageViewer.filterType")}
+            title={t("messageViewer.filterToolIdTooltip", "Search by tool use ID")}
           >
             {t("messageViewer.filterToolId")}
           </button>
@@ -875,8 +878,16 @@ export const MessageViewer: React.FC<MessageViewerProps> = ({
             value={searchQuery}
             onChange={handleSearchInput}
             onKeyDown={handleSearchKeyDown}
-            placeholder={t("messageViewer.searchPlaceholder")}
-            aria-label={t("messageViewer.searchPlaceholder")}
+            placeholder={
+              sessionSearch.filterType === "toolId"
+                ? t("messageViewer.searchByToolId", "Search by tool ID...")
+                : t("messageViewer.searchPlaceholder")
+            }
+            aria-label={
+              sessionSearch.filterType === "toolId"
+                ? t("messageViewer.searchByToolId", "Search by tool ID...")
+                : t("messageViewer.searchPlaceholder")
+            }
             className={cn(
               "w-full pl-9 pr-9 py-2 rounded-lg text-sm",
               "bg-zinc-800/50 border border-zinc-700/50",

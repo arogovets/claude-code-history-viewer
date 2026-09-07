@@ -163,6 +163,10 @@ export const createFilterSlice: StateCreator<
         };
         persistMessageFilter(next);
         set({ messageFilter: next });
+        const { sessionSearch, setSessionSearchQuery } = get();
+        if (sessionSearch?.query?.trim()) {
+            void setSessionSearchQuery(sessionSearch.query);
+        }
     },
 
     toggleContentType: (contentType) => {
@@ -176,12 +180,20 @@ export const createFilterSlice: StateCreator<
         };
         persistMessageFilter(next);
         set({ messageFilter: next });
+        const { sessionSearch, setSessionSearchQuery } = get();
+        if (sessionSearch?.query?.trim()) {
+            void setSessionSearchQuery(sessionSearch.query);
+        }
     },
 
     resetMessageFilter: () => {
         const next = defaultMessageFilter();
         persistMessageFilter(next);
         set({ messageFilter: next });
+        const { sessionSearch, setSessionSearchQuery } = get();
+        if (sessionSearch?.query?.trim()) {
+            void setSessionSearchQuery(sessionSearch.query);
+        }
     },
 
     isMessageFilterActive: () => {

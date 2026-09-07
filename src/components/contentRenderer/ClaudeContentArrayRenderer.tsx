@@ -39,6 +39,7 @@ import { cn } from "@/lib/utils";
 import { getVariantStyles, layout } from "../renderers";
 import { TruncatedPre } from "../common/TruncatedPre";
 import type { SearchFilterType } from "../../store/useAppStore";
+import { hasCommandTags } from "@/utils/messageUtils";
 import {
   isServerToolUseContent,
   isWebSearchToolResultContent,
@@ -192,8 +193,16 @@ export const ClaudeContentArrayRenderer = memo(({
 
         switch (itemType) {
           case "text":
-            if (skipText) return null;
             if (typeof item.text === "string") {
+              const isCommand = hasCommandTags(item.text);
+              if (isCommand ? skipCommands : skipText) return null;
+              if (isCommand) {
+                return (
+                  <div key={entry.key} className={cn("border", layout.containerPadding, layout.rounded, getVariantStyles("system").container)}>
+                    <CommandRenderer text={item.text} searchQuery={searchQuery} />
+                  </div>
+                );
+              }
               return (
                 <div
                   key={entry.key}
