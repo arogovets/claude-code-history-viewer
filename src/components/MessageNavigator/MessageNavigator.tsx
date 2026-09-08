@@ -38,7 +38,8 @@ export const MessageNavigator: React.FC<MessageNavigatorProps> = ({
 }) => {
   const { t } = useTranslation();
   const keyboardHelpId = `${asideId}-keyboard-help`;
-  const scrollElementRef = useRef<HTMLDivElement>(null);
+  const [scrollElement, setScrollElement] = useState<HTMLDivElement | null>(null);
+  const scrollElementRef = useRef<HTMLDivElement | null>(null);
   const entryRefs = useRef(new Map<string, HTMLButtonElement>());
   const [filterText, setFilterText] = useState("");
   const [focusedIndex, setFocusedIndex] = useState(0);
@@ -50,20 +51,62 @@ export const MessageNavigator: React.FC<MessageNavigatorProps> = ({
     toggleUserOnlyFilter,
     showParallelTasksInNavigator,
     toggleShowParallelTasksInNavigator,
+    selectedSession,
+    fetchFullSessionMessages,
+    pagination,
   } = useAppStore();
+
+  const [fullMessages, setFullMessages] = useState<ClaudeMessage[] | null>(null);
+
+  useEffect(() => {
+    if (!selectedSession) {
+      setFullMessages(null);
+      return;
+    }
+
+    const hasMore = pagination?.hasMore ?? false;
+    const totalCount = pagination?.totalCount ?? 0;
+
+    if (!hasMore && totalCount > 0) {
+      setFullMessages(null);
+      return;
+    }
+
+    let cancelled = false;
+    const sessionPath = selectedSession.file_path;
+
+    if (fetchFullSessionMessages) {
+      void fetchFullSessionMessages()
+        .then((all) => {
+          if (!cancelled && useAppStore.getState().selectedSession?.file_path === sessionPath) {
+            setFullMessages(all);
+          }
+        })
+        .catch((err) => {
+          console.warn("[MessageNavigator] Failed to fetch full session messages:", err);
+        });
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedSession, pagination?.hasMore, pagination?.totalCount, fetchFullSessionMessages]);
+
+  const effectiveMessages = fullMessages ?? messages;
+
   const hasParallelTasks = useMemo(
-    () => getMessageUuidsByCategory(messages, "parallel-task").size > 0,
-    [messages],
+    () => getMessageUuidsByCategory(effectiveMessages, "parallel-task").size > 0,
+    [effectiveMessages],
   );
 
   // Transform messages to navigator entries
   const navigatorMessages = useMemo(
     () => filterMessagesByCategory(
-      messages,
+      effectiveMessages,
       "parallel-task",
       showParallelTasksInNavigator,
     ),
-    [messages, showParallelTasksInNavigator],
+    [effectiveMessages, showParallelTasksInNavigator],
   );
   const allEntries = useNavigatorEntries(navigatorMessages);
 
@@ -100,13 +143,22 @@ export const MessageNavigator: React.FC<MessageNavigatorProps> = ({
     return BASE_ENTRY_HEIGHT + estimatedLines * PREVIEW_LINE_HEIGHT;
   }, [entries]);
 
+  const handleScrollElementRef = useCallback((element: HTMLDivElement | null) => {
+    scrollElementRef.current = element;
+    setScrollElement(element);
+  }, []);
+
   // Initialize virtualizer
   const virtualizer = useVirtualizer({
     count: entries.length,
-    getScrollElement: () => scrollElementRef.current,
+    getScrollElement: () => scrollElement,
     estimateSize,
-    overscan: 5,
+    overscan: 10,
+    useAnimationFrameWithResizeObserver: true,
   });
+
+  const virtualizerRef = useRef(virtualizer);
+  virtualizerRef.current = virtualizer;
 
   const handleEntryClick = useCallback(
     (uuid: string) => {
@@ -115,9 +167,12 @@ export const MessageNavigator: React.FC<MessageNavigatorProps> = ({
     [navigateToMessage]
   );
 
+  const lastTargetUuidRef = useRef<string | null>(null);
+
   useEffect(() => {
     if (entries.length === 0) {
       setFocusedIndex(0);
+      lastTargetUuidRef.current = null;
       return;
     }
 
@@ -125,6 +180,10 @@ export const MessageNavigator: React.FC<MessageNavigatorProps> = ({
       const selectedIndex = entries.findIndex((entry) => entry.uuid === targetMessageUuid);
       if (selectedIndex >= 0) {
         setFocusedIndex(selectedIndex);
+        if (lastTargetUuidRef.current !== targetMessageUuid) {
+          lastTargetUuidRef.current = targetMessageUuid;
+          virtualizerRef.current.scrollToIndex(selectedIndex, { align: "auto" });
+        }
         return;
       }
     }
@@ -317,21 +376,21 @@ export const MessageNavigator: React.FC<MessageNavigatorProps> = ({
       </div>
 
       {/* Entry list with virtual scrolling */}
-      {entries.length === 0 ? (
-        <div className="flex-1 flex items-center justify-center p-4">
-          <p className="text-xs text-muted-foreground text-center">
-            {filterText ? t("messageViewer.noSearchResults") : t("navigator.noMessages")}
-          </p>
-        </div>
-      ) : (
-        <div
-          ref={scrollElementRef}
-          role="listbox"
-          aria-label={t("navigator.title")}
-          aria-describedby={keyboardHelpId}
-          className="flex-1 overflow-auto"
-          style={{ contain: "strict" }}
-        >
+      <div
+        ref={handleScrollElementRef}
+        role="listbox"
+        aria-label={t("navigator.title")}
+        aria-describedby={keyboardHelpId}
+        className="flex-1 overflow-auto"
+        style={{ contain: "strict" }}
+      >
+        {entries.length === 0 ? (
+          <div className="h-full flex items-center justify-center p-4">
+            <p className="text-xs text-muted-foreground text-center">
+              {filterText ? t("messageViewer.noSearchResults") : t("navigator.noMessages")}
+            </p>
+          </div>
+        ) : (
           <div
             style={{
               height: `${virtualizer.getTotalSize()}px`,
@@ -370,8 +429,8 @@ export const MessageNavigator: React.FC<MessageNavigatorProps> = ({
               );
             })}
           </div>
-        </div>
-      )}
+        )}
+      </div>
 
       <p id={keyboardHelpId} className="sr-only">
         {t(

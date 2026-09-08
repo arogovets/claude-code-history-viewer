@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.27.0-fork.8] - 2026-09-08
+
+Multi-host remote provider aggregation (`gortamazian`), persistent project exclusion and spam filter in Global Search, and massive directory traversal speedups.
+
+### Added
+- **New Remote Provider (`gortamazian`)** — Full support for remote host `gortamazian@s-macbook-pro.tail69ac27.ts.net` (`100.123.58.67:3728`) running Claude Code daemon under launchd. The local server automatically scans and aggregates sessions from both `arogovets` and `gortamazian`.
+- **Persistent Project Exclusions & Spam Filter** — Selected project filters and project exclusions in Global Search (Cmd+K) are now persisted in `localStorage` (`cchv_global_search_project_filter`) across browser sessions and modal closures.
+- **`exclude:<project>` Filter** — Users can now exclude specific spammy or noisy projects from Global Search results directly from the project dropdown.
+- **Cross-Session Filter Persistence** — Added cross-session `localStorage` persistence for `excludeSidechain` and `showSystemMessages` settings.
+- **Hidden Project Tree Filtering** — Ensured hidden projects are properly filtered from the `ProjectTree` when grouping is set to "none".
+
+### Performance & Fixes
+- **Massive Multi-Provider Scan Speedup** — Fixed directory traversal in `crush` and `aider` providers by skipping system directories (`~/Library`, `~/Applications`, `~/Downloads`, etc.) and limiting `$HOME` root scanning to immediate children, cutting scan times from >60s timeouts down to <1s.
+- **Message Navigator Deep Links** — Fixed right-panel message catalog visibility when loading deep-linked sessions.
+
 ## [1.27.0-fork.7] - 2026-09-08
 
 Google Antigravity provider enhancements: auto-detect brain transcripts, workspace mapping, full tool_use / thinking / tool_result message reconstruction, and accurate step counts.

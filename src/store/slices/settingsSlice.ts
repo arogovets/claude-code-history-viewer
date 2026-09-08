@@ -62,15 +62,28 @@ const normalizeFontScale = (value: unknown): number => {
   return Math.min(MAX_FONT_SCALE, Math.max(MIN_FONT_SCALE, Math.round(value / 10) * 10));
 };
 
-const initialSettingsState: SettingsSliceState = {
-  excludeSidechain: true,
-  showSystemMessages: false,
+const EXCLUDE_SIDECHAIN_STORAGE_KEY = "cchv_exclude_sidechain";
+const SHOW_SYSTEM_MESSAGES_STORAGE_KEY = "cchv_show_system_messages";
+
+const loadPersistedBoolean = (key: string, defaultValue: boolean): boolean => {
+  try {
+    const val = localStorage.getItem(key);
+    if (val === null) return defaultValue;
+    return val === "true";
+  } catch {
+    return defaultValue;
+  }
+};
+
+const getInitialSettingsState = (): SettingsSliceState => ({
+  excludeSidechain: loadPersistedBoolean(EXCLUDE_SIDECHAIN_STORAGE_KEY, true),
+  showSystemMessages: loadPersistedBoolean(SHOW_SYSTEM_MESSAGES_STORAGE_KEY, false),
   fontScale: DEFAULT_FONT_SCALE,
   highContrast: false,
   updateSettings: DEFAULT_UPDATE_SETTINGS,
   sessionSortOrder: "newest",
   sessionEntrypointFilter: "all",
-};
+});
 
 // ============================================================================
 // Slice Creator
@@ -82,9 +95,14 @@ export const createSettingsSlice: StateCreator<
   [],
   SettingsSlice
 > = (set, get) => ({
-  ...initialSettingsState,
+  ...getInitialSettingsState(),
 
   setExcludeSidechain: (exclude: boolean) => {
+    try {
+      localStorage.setItem(EXCLUDE_SIDECHAIN_STORAGE_KEY, String(exclude));
+    } catch {
+      // ignore
+    }
     set({ excludeSidechain: exclude });
     // Refresh current project and session when filter changes
     const { selectedProject, selectedSession } = get();
@@ -97,6 +115,11 @@ export const createSettingsSlice: StateCreator<
   },
 
   setShowSystemMessages: (show: boolean) => {
+    try {
+      localStorage.setItem(SHOW_SYSTEM_MESSAGES_STORAGE_KEY, String(show));
+    } catch {
+      // ignore
+    }
     set({ showSystemMessages: show });
     // Refresh current session when filter changes
     const { selectedSession } = get();

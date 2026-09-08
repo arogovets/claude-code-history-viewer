@@ -28,7 +28,7 @@ const SCHEME: &str = "crush://";
 const SESSION_SEP: char = '#';
 /// Max `.crush/crush.db` files to discover (guards the recursive scan).
 const MAX_DBS: usize = 200;
-const MAX_DEPTH: usize = 4;
+const MAX_DEPTH: usize = 2;
 
 /// Detect a Crush installation (shallow scan for any `.crush/crush.db`).
 pub fn detect() -> Option<ProviderInfo> {
@@ -275,21 +275,53 @@ fn search_one_db(
     }
 }
 
-// ============================================================================
-// Discovery
-// ============================================================================
+fn should_skip_dir(name: &str) -> bool {
+    name.starts_with('.')
+        || matches!(
+            name,
+            "node_modules"
+                | "target"
+                | "dist"
+                | "build"
+                | "Library"
+                | "Applications"
+                | "Music"
+                | "Movies"
+                | "Pictures"
+                | "Downloads"
+                | "Desktop"
+                | "Documents"
+                | "VirtualBox VMs"
+                | "vagrant"
+                | "Public"
+                | "AppData"
+                | "Local Settings"
+        )
+}
 
 /// Common code roots to scan (mirrors the Aider provider).
-fn search_dirs() -> Vec<PathBuf> {
+fn search_dirs() -> Vec<(PathBuf, usize)> {
     let mut dirs = Vec::new();
     if let Some(home) = crate::utils::home_dir() {
-        for subdir in ["client", "projects", "code", "src", "dev", "work", "repos"] {
+        for subdir in [
+            "client",
+            "projects",
+            "code",
+            "src",
+            "dev",
+            "Dev",
+            "work",
+            "repos",
+            "workspace",
+            "github",
+        ] {
             let d = home.join(subdir);
             if d.is_dir() {
-                dirs.push(d);
+                dirs.push((d, MAX_DEPTH));
             }
         }
-        dirs.push(home);
+        // Only check home root itself (depth 0)
+        dirs.push((home, 0));
     }
     dirs
 }
@@ -297,19 +329,25 @@ fn search_dirs() -> Vec<PathBuf> {
 /// Find up to `max` `.crush/crush.db` files under the common code roots.
 fn discover_dbs(max: usize) -> Vec<PathBuf> {
     let mut results = Vec::new();
-    for root in search_dirs() {
+    for (root, max_depth) in search_dirs() {
         if results.len() >= max {
             break;
         }
-        find_crush_db(&root, &mut results, max, 0);
+        find_crush_db(&root, &mut results, max, 0, max_depth);
     }
     results.sort();
     results.dedup();
     results
 }
 
-fn find_crush_db(dir: &Path, results: &mut Vec<PathBuf>, max: usize, depth: usize) {
-    if depth > MAX_DEPTH || results.len() >= max || is_symlink(dir) {
+fn find_crush_db(
+    dir: &Path,
+    results: &mut Vec<PathBuf>,
+    max: usize,
+    depth: usize,
+    max_depth: usize,
+) {
+    if depth > max_depth || results.len() >= max || is_symlink(dir) {
         return;
     }
     let db = dir.join(".crush").join("crush.db");
@@ -328,15 +366,10 @@ fn find_crush_db(dir: &Path, results: &mut Vec<PathBuf>, max: usize, depth: usiz
             continue;
         }
         let name = path.file_name().unwrap_or_default().to_string_lossy();
-        if name.starts_with('.')
-            || name == "node_modules"
-            || name == "target"
-            || name == "dist"
-            || name == "build"
-        {
+        if should_skip_dir(&name) {
             continue;
         }
-        find_crush_db(&path, results, max, depth + 1);
+        find_crush_db(&path, results, max, depth + 1, max_depth);
     }
 }
 
@@ -622,7 +655,7 @@ mod tests {
         fs::write(crush_dir.join("crush.db"), b"x").unwrap();
 
         let mut found = Vec::new();
-        find_crush_db(tmp.path(), &mut found, 10, 0);
+        find_crush_db(tmp.path(), &mut found, 10, 0, MAX_DEPTH);
         assert_eq!(found.len(), 1);
         assert!(found[0].ends_with(".crush/crush.db"));
         assert_eq!(project_dir_of(&found[0]).as_deref(), proj.to_str());

@@ -217,11 +217,44 @@ export const createMetadataSlice: StateCreator<
 
   isProjectHidden: (projectPath: string): boolean => {
     const { userMetadata } = get();
+    const projects = get().projects ?? [];
+
+    const matching = projects.find(
+      (p) => p.actual_path === projectPath || p.path === projectPath
+    );
+
+    // Check localStorage cache for cross-session browser persistence
+    try {
+      const localHidden: string[] = JSON.parse(
+        localStorage.getItem("cchv_hidden_projects") || "[]"
+      );
+      if (localHidden.includes(projectPath)) {
+        return true;
+      }
+      if (
+        matching &&
+        (localHidden.includes(matching.actual_path) ||
+          localHidden.includes(matching.path))
+      ) {
+        return true;
+      }
+    } catch {
+      // ignore
+    }
 
     // Check explicit hidden flag
     const projectMeta = userMetadata.projects[projectPath];
     if (projectMeta?.hidden) {
       return true;
+    }
+
+    if (matching) {
+      if (matching.actual_path && userMetadata.projects[matching.actual_path]?.hidden) {
+        return true;
+      }
+      if (matching.path && userMetadata.projects[matching.path]?.hidden) {
+        return true;
+      }
     }
 
     // Check hidden patterns
@@ -230,16 +263,42 @@ export const createMetadataSlice: StateCreator<
       if (matchGlobPattern(projectPath, pattern)) {
         return true;
       }
+      if (matching?.actual_path && matchGlobPattern(matching.actual_path, pattern)) {
+        return true;
+      }
+      if (matching?.path && matchGlobPattern(matching.path, pattern)) {
+        return true;
+      }
     }
 
     return false;
   },
 
   hideProject: async (projectPath: string) => {
+    try {
+      const localHidden: string[] = JSON.parse(
+        localStorage.getItem("cchv_hidden_projects") || "[]"
+      );
+      if (!localHidden.includes(projectPath)) {
+        localHidden.push(projectPath);
+        localStorage.setItem("cchv_hidden_projects", JSON.stringify(localHidden));
+      }
+    } catch {
+      // ignore
+    }
     await get().updateProjectMetadata(projectPath, { hidden: true });
   },
 
   unhideProject: async (projectPath: string) => {
+    try {
+      const localHidden: string[] = JSON.parse(
+        localStorage.getItem("cchv_hidden_projects") || "[]"
+      );
+      const next = localHidden.filter((p) => p !== projectPath);
+      localStorage.setItem("cchv_hidden_projects", JSON.stringify(next));
+    } catch {
+      // ignore
+    }
     await get().updateProjectMetadata(projectPath, { hidden: false });
   },
 

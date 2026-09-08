@@ -15,6 +15,7 @@ import {
     Lightbulb,
     Server,
     Laptop,
+    EyeOff,
 } from "lucide-react";
 import {
     Dialog,
@@ -41,6 +42,24 @@ import { toast } from "sonner";
 type GlobalSearchResult = ClaudeMessage;
 
 type MessageTypeFilter = "all" | "user" | "assistant";
+
+const PROJECT_FILTER_STORAGE_KEY = "cchv_global_search_project_filter";
+
+const loadPersistedProjectFilter = (): string => {
+    try {
+        return localStorage.getItem(PROJECT_FILTER_STORAGE_KEY) || "all";
+    } catch {
+        return "all";
+    }
+};
+
+const persistProjectFilter = (value: string): void => {
+    try {
+        localStorage.setItem(PROJECT_FILTER_STORAGE_KEY, value);
+    } catch {
+        // ignore quota/access errors
+    }
+};
 
 interface GlobalSearchModalProps {
     isOpen: boolean;
@@ -123,13 +142,36 @@ export const GlobalSearchModal = ({
     // session-resolution sweep so it stops issuing project requests.
     const resolveTokenRef = useRef(0);
 
-    const { claudePath, projects, selectProject, selectSession, sessions, getSessionDisplayName, activeProviders, navigateToMessage, clearTargetMessage, setAnalyticsCurrentView, userMetadata } =
-        useAppStore();
-    const [selectedProjectPath, setSelectedProjectPath] = useState<string>("all");
+    const {
+        claudePath,
+        projects,
+        selectProject,
+        selectSession,
+        sessions,
+        getSessionDisplayName,
+        activeProviders,
+        navigateToMessage,
+        clearTargetMessage,
+        setAnalyticsCurrentView,
+        userMetadata,
+        isProjectHidden,
+    } = useAppStore();
+
+    const [selectedProjectPath, setSelectedProjectPathState] = useState<string>(loadPersistedProjectFilter);
+
+    const setSelectedProjectPath = useCallback((value: string) => {
+        setSelectedProjectPathState(value);
+        persistProjectFilter(value);
+    }, []);
+
+    const isExcludedFilter = selectedProjectPath.startsWith("exclude:");
+    const effectiveProjectPath = isExcludedFilter
+        ? selectedProjectPath.slice("exclude:".length)
+        : selectedProjectPath;
 
     const selectedProject = useMemo(
-        () => projects.find((p) => p.path === selectedProjectPath),
-        [projects, selectedProjectPath]
+        () => projects.find((p) => p.path === effectiveProjectPath),
+        [projects, effectiveProjectPath]
     );
 
     // Group results by project name
@@ -148,6 +190,22 @@ export const GlobalSearchModal = ({
                   matchingSession.file_path.startsWith("remote://")
                 : false;
 
+            // If an exclude filter is active and this result belongs to the excluded project, skip it
+            if (isExcludedFilter && selectedProject) {
+                const isTargetRemote = isRemoteProject(selectedProject);
+                const nameMatches =
+                    projectName === selectedProject.name ||
+                    projectName === selectedProject.actual_path?.split(/[\\/]/).pop() ||
+                    projectName === selectedProject.path?.split(/[\\/]/).pop();
+                const providerMatches =
+                    !result.provider ||
+                    !selectedProject.provider ||
+                    result.provider === selectedProject.provider;
+                if (nameMatches && providerMatches && isRemote === isTargetRemote) {
+                    continue;
+                }
+            }
+
             const matchingProject =
                 projects.find((project) => {
                     const providerMatches = (project.provider ?? "claude") === resultProvider;
@@ -161,6 +219,13 @@ export const GlobalSearchModal = ({
                         (project.provider ?? "claude") === resultProvider &&
                         project.name === projectName
                 );
+
+            // If matching project is marked hidden in user metadata and not explicitly selected, skip it
+            if (matchingProject && isProjectHidden?.(matchingProject.actual_path || matchingProject.path)) {
+                if (effectiveProjectPath !== matchingProject.path) {
+                    continue;
+                }
+            }
 
             const providerLabel = getProviderLabel(
                 (key, fallback) => t(key, fallback),
@@ -189,7 +254,7 @@ export const GlobalSearchModal = ({
         }
 
         return groups;
-    }, [projects, results, sessions, t]);
+    }, [projects, results, sessions, isExcludedFilter, selectedProject, effectiveProjectPath, isProjectHidden, t]);
 
     // Flatten grouped results for keyboard navigation
     const flattenedResults = useMemo(() => {
@@ -233,8 +298,8 @@ export const GlobalSearchModal = ({
             setIsSearching(true);
             try {
                 const filters: Record<string, unknown> = {};
-                if (selectedProjectPath !== "all") {
-                    const selected = projects.find((p) => p.path === selectedProjectPath);
+                if (!isExcludedFilter && effectiveProjectPath !== "all") {
+                    const selected = projects.find((p) => p.path === effectiveProjectPath);
                     if (selected) {
                         const candidates = new Set<string>();
                         if (selected.name) candidates.add(selected.name);
@@ -246,7 +311,7 @@ export const GlobalSearchModal = ({
                         }
                         filters.projects = Array.from(candidates);
                     } else {
-                        const dirName = selectedProjectPath.split(/[\\/]/).pop() || selectedProjectPath;
+                        const dirName = effectiveProjectPath.split(/[\\/]/).pop() || effectiveProjectPath;
                         filters.projects = [dirName];
                     }
                 }
@@ -255,7 +320,7 @@ export const GlobalSearchModal = ({
                 }
                 const wslExcludedDistros = userMetadata?.settings?.wsl?.excludedDistros ?? [];
                 const useAllProvidersSearch = hasNonClaudeProviders || hasCustomPaths || wslEnabled;
-                const providersToSearch = selectedProject?.provider
+                const providersToSearch = !isExcludedFilter && selectedProject?.provider
                     ? [selectedProject.provider]
                     : activeProviders;
 
@@ -276,7 +341,33 @@ export const GlobalSearchModal = ({
                         : { claudePath: nativeClaudePath, query: trimmedQuery, filters, limit: MAX_RESULTS },
                 );
 
-                if (selectedProject) {
+                if (isExcludedFilter && selectedProject) {
+                    const isSelectedRemote = isRemoteProject(selectedProject);
+                    const filtered = searchResults.filter((res) => {
+                        const nameMatches =
+                            res.projectName &&
+                            (res.projectName === selectedProject.name ||
+                                res.projectName === selectedProject.actual_path?.split(/[\\/]/).pop() ||
+                                res.projectName === selectedProject.path?.split(/[\\/]/).pop());
+                        const providerMatches =
+                            !res.provider ||
+                            !selectedProject.provider ||
+                            res.provider === selectedProject.provider;
+
+                        const matchingSession = sessions.find((s) => sessionMatches(s, res.sessionId));
+                        const isSessionRemote = matchingSession
+                            ? matchingSession.session_id.startsWith("remote://") ||
+                              matchingSession.file_path.startsWith("remote://")
+                            : false;
+                        const remoteMatches = isSessionRemote === isSelectedRemote;
+
+                        if (nameMatches && providerMatches && remoteMatches) {
+                            return false;
+                        }
+                        return true;
+                    });
+                    setResults(filtered);
+                } else if (selectedProject) {
                     const isSelectedRemote = isRemoteProject(selectedProject);
                     const filtered = searchResults.filter((res) => {
                         if (
@@ -310,7 +401,7 @@ export const GlobalSearchModal = ({
                 setIsSearching(false);
             }
         },
-        [claudePath, activeProviders, selectedProjectPath, selectedProject, projects, sessions, messageTypeFilter, userMetadata, t],
+        [claudePath, activeProviders, effectiveProjectPath, isExcludedFilter, selectedProject, projects, sessions, messageTypeFilter, userMetadata, t],
     );
 
     // Handle input change with debounce
@@ -519,7 +610,6 @@ export const GlobalSearchModal = ({
             setQuery("");
             setResults([]);
             setSelectedIndex(0);
-            setSelectedProjectPath("all");
             setMessageTypeFilter("all");
         }
     }, [isOpen]);
@@ -708,7 +798,42 @@ export const GlobalSearchModal = ({
                                     aria-label={t("globalSearch.allProjects")}
                                 >
                                     <SelectValue placeholder={t("globalSearch.allProjects")}>
-                                        {selectedProject ? (
+                                        {isExcludedFilter && selectedProject ? (
+                                            <div className="flex items-center gap-1.5 min-w-0 max-w-full text-amber-600 dark:text-amber-400">
+                                                <EyeOff className="w-3.5 h-3.5 shrink-0 text-amber-500" />
+                                                <span className="font-semibold text-xs tracking-tight">
+                                                    {t("globalSearch.excludeBadge", "Exclude")}:
+                                                </span>
+                                                <span className="truncate font-medium">
+                                                    {selectedProject.name}
+                                                </span>
+                                                <span
+                                                    className={cn(
+                                                        "px-1 py-0 text-[10px] leading-tight font-medium rounded shrink-0 border border-current/20",
+                                                        getProviderBadgeStyle(selectedProject.provider)
+                                                    )}
+                                                >
+                                                    {getProviderLabel((k, fb) => t(k, fb), selectedProject.provider)}
+                                                </span>
+                                                <span
+                                                    className={cn(
+                                                        "px-1 py-0 text-[10px] leading-tight font-medium rounded flex items-center gap-0.5 shrink-0",
+                                                        isRemoteProject(selectedProject)
+                                                            ? "bg-sky-500/15 text-sky-700 dark:text-sky-300 border border-sky-500/30"
+                                                            : "bg-muted text-muted-foreground border border-border/50"
+                                                    )}
+                                                >
+                                                    {isRemoteProject(selectedProject) ? (
+                                                        <Server className="w-2.5 h-2.5 shrink-0" />
+                                                    ) : (
+                                                        <Laptop className="w-2.5 h-2.5 shrink-0" />
+                                                    )}
+                                                    <span className="truncate max-w-[80px]">
+                                                        {getProjectHostLabel(selectedProject, t, true)}
+                                                    </span>
+                                                </span>
+                                            </div>
+                                        ) : selectedProject ? (
                                             <div className="flex items-center gap-1.5 min-w-0 max-w-full">
                                                 <span className="truncate font-medium">
                                                     {selectedProject.name}
@@ -755,6 +880,73 @@ export const GlobalSearchModal = ({
                                             </span>
                                         </div>
                                     </SelectItem>
+
+                                    {/* Exclude Section */}
+                                    <div className="px-2 py-1 text-2xs font-semibold text-amber-600 dark:text-amber-400 uppercase tracking-wider flex items-center gap-1 mt-1 border-t border-border pt-1.5">
+                                        <EyeOff className="w-3 h-3" />
+                                        <span>{t("globalSearch.excludeSection", "Exclude project (spam filter)")}</span>
+                                    </div>
+                                    {projects.map((project) => {
+                                        const isRemote = isRemoteProject(project);
+                                        const hostLabel = getProjectHostLabel(project, t, false);
+                                        const providerLabel = getProviderLabel((k, fb) => t(k, fb), project.provider);
+                                        return (
+                                            <SelectItem
+                                                key={`exclude:${project.path}`}
+                                                value={`exclude:${project.path}`}
+                                                textValue={`${t("globalSearch.excludePrefix", "Exclude:")} ${project.name} ${providerLabel} ${hostLabel}`}
+                                            >
+                                                <div className="flex items-center justify-between gap-3 w-full min-w-0 py-0.5">
+                                                    <div className="flex items-center gap-1.5 min-w-0">
+                                                        <EyeOff className="w-3 h-3 text-amber-500 shrink-0" />
+                                                        <span className="text-amber-600 dark:text-amber-400 font-semibold text-2xs uppercase tracking-wider shrink-0">
+                                                            {t("globalSearch.excludePrefix", "Exclude:")}
+                                                        </span>
+                                                        <span
+                                                            className="truncate font-medium text-xs text-foreground"
+                                                            title={project.actual_path || project.path || project.name}
+                                                        >
+                                                            {project.name}
+                                                        </span>
+                                                    </div>
+                                                    <div className="flex items-center gap-1.5 shrink-0 ml-auto">
+                                                        <span
+                                                            className={cn(
+                                                                "px-1.5 py-0.5 text-2xs font-medium rounded flex items-center gap-1 shrink-0",
+                                                                isRemote
+                                                                    ? "bg-sky-500/15 text-sky-700 dark:text-sky-300 border border-sky-500/30"
+                                                                    : "bg-muted/70 text-muted-foreground border border-border/50"
+                                                            )}
+                                                            title={
+                                                                project.custom_directory_label ||
+                                                                (isRemote ? t("common.remote", "Remote") : t("common.local", "Local"))
+                                                            }
+                                                        >
+                                                            {isRemote ? (
+                                                                <Server className="w-2.5 h-2.5 shrink-0" />
+                                                            ) : (
+                                                                <Laptop className="w-2.5 h-2.5 shrink-0" />
+                                                            )}
+                                                            <span className="truncate max-w-[140px]">{hostLabel}</span>
+                                                        </span>
+                                                        <span
+                                                            className={cn(
+                                                                "px-1.5 py-0.5 text-2xs font-medium rounded shrink-0 border border-current/20 leading-tight",
+                                                                getProviderBadgeStyle(project.provider)
+                                                            )}
+                                                        >
+                                                            {providerLabel}
+                                                        </span>
+                                                    </div>
+                                                </div>
+                                            </SelectItem>
+                                        );
+                                    })}
+
+                                    {/* Include Section */}
+                                    <div className="px-2 py-1 text-2xs font-semibold text-muted-foreground uppercase tracking-wider mt-1 border-t border-border pt-1.5">
+                                        {t("globalSearch.includeSection", "Only in project")}
+                                    </div>
                                     {projects.map((project) => {
                                         const isRemote = isRemoteProject(project);
                                         const hostLabel = getProjectHostLabel(project, t, false);

@@ -5,11 +5,14 @@ import { MessageNavigator } from "@/components/MessageNavigator";
 const {
   navigateToMessageMock,
   toggleShowParallelTasksMock,
+  fetchFullSessionMessagesMock,
   useAppStoreMock,
   storeState,
 } = vi.hoisted(() => {
   const navigateToMessage = vi.fn();
   const toggleShowParallelTasks = vi.fn();
+
+  const fetchFullSessionMessages = vi.fn().mockResolvedValue([]);
 
   const state = {
     navigateToMessage,
@@ -18,13 +21,24 @@ const {
     toggleUserOnlyFilter: vi.fn(),
     showParallelTasksInNavigator: true,
     toggleShowParallelTasksInNavigator: toggleShowParallelTasks,
+    selectedSession: null as { file_path: string } | null,
+    fetchFullSessionMessages,
+    pagination: { hasMore: false, totalCount: 0 },
   };
+
+  const useAppStoreMockFn = Object.assign(
+    (selector?: (store: typeof state) => unknown) =>
+      typeof selector === "function" ? selector(state) : state,
+    {
+      getState: () => state,
+    },
+  );
 
   return {
     navigateToMessageMock: navigateToMessage,
     toggleShowParallelTasksMock: toggleShowParallelTasks,
-    useAppStoreMock: (selector?: (store: typeof state) => unknown) =>
-      typeof selector === "function" ? selector(state) : state,
+    fetchFullSessionMessagesMock: fetchFullSessionMessages,
+    useAppStoreMock: useAppStoreMockFn,
     storeState: state,
   };
 });
@@ -139,5 +153,34 @@ describe("MessageNavigator accessibility", () => {
     expect(toggle).toHaveAttribute("aria-pressed", "false");
     fireEvent.click(toggle);
     expect(toggleShowParallelTasksMock).toHaveBeenCalledOnce();
+  });
+
+  it("fetches and displays full session messages when pagination hasMore is true", async () => {
+    const fullSession = [
+      { uuid: "full-1", type: "user", content: "Initial full prompt", timestamp: "2026-02-27T09:00:00Z" },
+      { uuid: "full-2", type: "assistant", content: "Full response", timestamp: "2026-02-27T09:01:00Z" },
+      { uuid: "full-3", type: "user", content: "Later prompt", timestamp: "2026-02-27T09:02:00Z" },
+    ];
+    storeState.selectedSession = { file_path: "/path/to/session.jsonl" };
+    storeState.pagination = { hasMore: true, totalCount: 3 };
+    fetchFullSessionMessagesMock.mockResolvedValue(fullSession);
+
+    render(
+      <MessageNavigator
+        messages={[
+          { uuid: "full-3", type: "user", content: "Later prompt", timestamp: "2026-02-27T09:02:00Z" } as never,
+        ]}
+        width={260}
+        isResizing={false}
+        onResizeStart={vi.fn()}
+        isCollapsed={false}
+        onToggleCollapse={vi.fn()}
+      />
+    );
+
+    // After fullSession loads, all 3 entries should be rendered
+    await screen.findByText("Initial full prompt");
+    expect(screen.getByText("Full response")).toBeInTheDocument();
+    expect(screen.getByText("Later prompt")).toBeInTheDocument();
   });
 });

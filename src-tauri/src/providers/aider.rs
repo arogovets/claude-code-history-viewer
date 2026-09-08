@@ -1,6 +1,6 @@
 use crate::models::{ClaudeMessage, ClaudeProject, ClaudeSession};
 use crate::providers::ProviderInfo;
-use crate::utils::{build_provider_message, is_symlink, search_json_value_case_insensitive};
+use crate::utils::{build_provider_message, is_symlink};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -13,7 +13,7 @@ pub fn detect() -> Option<ProviderInfo> {
     let dirs = get_search_dirs();
     // Shallow check: look for .aider.chat.history.md directly in search dirs
     // and their immediate children (depth 1 only, no recursive scan)
-    let has_history = dirs.iter().any(|d| {
+    let has_history = dirs.iter().any(|(d, _)| {
         if d.join(HISTORY_FILE).is_file() {
             return true;
         }
@@ -22,6 +22,10 @@ pub fn detect() -> Option<ProviderInfo> {
             .into_iter()
             .flatten()
             .flatten()
+            .filter(|entry| {
+                let name = entry.file_name();
+                !should_skip_dir(&name.to_string_lossy())
+            })
             .any(|entry| entry.path().join(HISTORY_FILE).is_file())
     });
 
@@ -30,7 +34,7 @@ pub fn detect() -> Option<ProviderInfo> {
         display_name: "Aider".to_string(),
         base_path: dirs
             .first()
-            .map(|d| d.to_string_lossy().to_string())
+            .map(|(d, _)| d.to_string_lossy().to_string())
             .unwrap_or_default(),
         is_available: has_history,
     })
@@ -41,8 +45,8 @@ pub fn scan_projects() -> Result<Vec<ClaudeProject>, String> {
     let mut projects = Vec::new();
     let mut seen_paths = std::collections::HashSet::new();
 
-    for search_dir in get_search_dirs() {
-        if let Some(files) = find_history_files(&search_dir, 100) {
+    for (search_dir, max_depth) in get_search_dirs() {
+        if let Some(files) = find_history_files(&search_dir, 100, max_depth) {
             for history_path in files {
                 // Deduplicate across overlapping search directories
                 let canonical = history_path
@@ -192,8 +196,8 @@ pub fn search(query: &str, limit: usize) -> Result<Vec<ClaudeMessage>, String> {
     let query_lower = query.to_lowercase();
     let mut results = Vec::new();
 
-    for search_dir in get_search_dirs() {
-        if let Some(files) = find_history_files(&search_dir, 100) {
+    for (search_dir, max_depth) in get_search_dirs() {
+        if let Some(files) = find_history_files(&search_dir, 100, max_depth) {
             for history_path in files {
                 let content = match fs::read_to_string(&history_path) {
                     Ok(c) => c,
@@ -208,17 +212,32 @@ pub fn search(query: &str, limit: usize) -> Result<Vec<ClaudeMessage>, String> {
                     .to_string();
 
                 for (index, session) in split_sessions(&content).iter().enumerate() {
-                    let base_ts = session.timestamp.clone().unwrap_or_default();
-                    let session_id = format!("aider-session-{index}");
+                    let messages = parse_messages(
+                        &session.content,
+                        &format!("{}_{}", history_path.to_string_lossy(), index),
+                        session.timestamp.as_deref().unwrap_or(""),
+                    );
 
-                    for mut msg in parse_messages(&session.content, &session_id, &base_ts) {
-                        if let Some(ref c) = msg.content {
-                            if search_json_value_case_insensitive(c, &query_lower) {
-                                msg.project_name = Some(project_name.clone());
-                                results.push(msg);
-                                if results.len() >= limit {
-                                    return Ok(results);
-                                }
+                    for msg in messages {
+                        let text = msg
+                            .content
+                            .as_ref()
+                            .and_then(|c| c.as_array())
+                            .map(|arr| {
+                                arr.iter()
+                                    .filter_map(|b| b.get("text").and_then(|t| t.as_str()))
+                                    .collect::<Vec<_>>()
+                                    .join(" ")
+                            })
+                            .unwrap_or_default();
+
+                        if text.to_lowercase().contains(&query_lower) {
+                            let mut match_msg = msg;
+                            match_msg.project_name = Some(project_name.clone());
+                            results.push(match_msg);
+
+                            if results.len() >= limit {
+                                return Ok(results);
                             }
                         }
                     }
@@ -234,24 +253,60 @@ pub fn search(query: &str, limit: usize) -> Result<Vec<ClaudeMessage>, String> {
 // Private helpers
 // ============================================================================
 
-fn get_search_dirs() -> Vec<PathBuf> {
+fn should_skip_dir(name: &str) -> bool {
+    name.starts_with('.')
+        || matches!(
+            name,
+            "node_modules"
+                | "target"
+                | "dist"
+                | "build"
+                | ".git"
+                | "Library"
+                | "Applications"
+                | "Music"
+                | "Movies"
+                | "Pictures"
+                | "Downloads"
+                | "Desktop"
+                | "Documents"
+                | "VirtualBox VMs"
+                | "vagrant"
+                | "Public"
+                | "AppData"
+                | "Local Settings"
+        )
+}
+
+fn get_search_dirs() -> Vec<(PathBuf, usize)> {
     let mut dirs = Vec::new();
     if let Some(home) = crate::utils::home_dir() {
-        for subdir in ["client", "projects", "code", "src", "dev", "work", "repos"] {
+        for subdir in [
+            "client",
+            "projects",
+            "code",
+            "src",
+            "dev",
+            "Dev",
+            "work",
+            "repos",
+            "workspace",
+            "github",
+        ] {
             let d = home.join(subdir);
             if d.is_dir() {
-                dirs.push(d);
+                dirs.push((d, 2));
             }
         }
-        // Also check home dir itself
-        dirs.push(home);
+        // Only check home root itself (depth 0)
+        dirs.push((home, 0));
     }
     dirs
 }
 
-fn find_history_files(dir: &Path, max: usize) -> Option<Vec<PathBuf>> {
+fn find_history_files(dir: &Path, max: usize, max_depth: usize) -> Option<Vec<PathBuf>> {
     let mut files = Vec::new();
-    find_history_recursive(dir, &mut files, max, 0, 4);
+    find_history_recursive(dir, &mut files, max, 0, max_depth);
     if files.is_empty() {
         None
     } else {
@@ -286,16 +341,10 @@ fn find_history_recursive(
             let path = entry.path();
             if path.is_dir() && !is_symlink(&path) {
                 let name = path.file_name().unwrap_or_default().to_string_lossy();
-                // Skip hidden dirs, node_modules, target, etc.
-                if !name.starts_with('.')
-                    && name != "node_modules"
-                    && name != "target"
-                    && name != "dist"
-                    && name != "build"
-                    && name != ".git"
-                {
-                    find_history_recursive(&path, results, max, depth + 1, max_depth);
+                if should_skip_dir(&name) {
+                    continue;
                 }
+                find_history_recursive(&path, results, max, depth + 1, max_depth);
             }
         }
     }

@@ -367,17 +367,40 @@ export const ProjectTree: React.FC<ProjectTreeProps> = ({
     [selectedHostFilter]
   );
 
+  const matchesVisibility = useCallback(
+    (project: (typeof projects)[number]) => {
+      if (!isProjectHidden) return true;
+      return !isProjectHidden(project.actual_path || project.path);
+    },
+    [isProjectHidden]
+  );
+
   const filteredProjects = useMemo(
-    () => projects.filter((p) => matchesHostFilter(p) && matchesProviderFilter(p) && matchesSearch(p)),
-    [projects, matchesHostFilter, matchesProviderFilter, matchesSearch]
+    () =>
+      projects.filter(
+        (p) =>
+          matchesVisibility(p) &&
+          matchesHostFilter(p) &&
+          matchesProviderFilter(p) &&
+          matchesSearch(p)
+      ),
+    [projects, matchesVisibility, matchesHostFilter, matchesProviderFilter, matchesSearch]
   );
 
   const filteredDirectoryGroups = useMemo(() => {
     const filterFn = (p: (typeof projects)[number]) =>
-      matchesHostFilter(p) && matchesProviderFilter(p) && matchesSearch(p);
+      matchesVisibility(p) &&
+      matchesHostFilter(p) &&
+      matchesProviderFilter(p) &&
+      matchesSearch(p);
 
     if (isAllProvidersSelected && !normalizedSearchTerm && selectedHostFilter === "all") {
-      return directoryGroups;
+      return directoryGroups
+        .map((group) => ({
+          ...group,
+          projects: group.projects.filter(matchesVisibility),
+        }))
+        .filter((group) => group.projects.length > 0);
     }
 
     return directoryGroups
@@ -386,12 +409,15 @@ export const ProjectTree: React.FC<ProjectTreeProps> = ({
         projects: group.projects.filter(filterFn),
       }))
       .filter((group) => group.projects.length > 0);
-  }, [directoryGroups, isAllProvidersSelected, matchesHostFilter, matchesProviderFilter, matchesSearch, normalizedSearchTerm, selectedHostFilter]);
+  }, [directoryGroups, isAllProvidersSelected, matchesVisibility, matchesHostFilter, matchesProviderFilter, matchesSearch, normalizedSearchTerm, selectedHostFilter]);
 
   const { filteredWorktreeGroups, filteredUngroupedProjects } = useMemo(() => {
     const baseUngrouped = ungroupedProjects ?? projects;
     const filterFn = (p: (typeof projects)[number]) =>
-      matchesHostFilter(p) && matchesProviderFilter(p) && matchesSearch(p);
+      matchesVisibility(p) &&
+      matchesHostFilter(p) &&
+      matchesProviderFilter(p) &&
+      matchesSearch(p);
 
     if (isAllProvidersSelected && !normalizedSearchTerm && selectedHostFilter === "all") {
       return {
@@ -432,7 +458,7 @@ export const ProjectTree: React.FC<ProjectTreeProps> = ({
       filteredWorktreeGroups: nextGroups,
       filteredUngroupedProjects: nextUngrouped,
     };
-  }, [worktreeGroups, ungroupedProjects, projects, isAllProvidersSelected, matchesProviderFilter, matchesSearch, normalizedSearchTerm]);
+  }, [worktreeGroups, ungroupedProjects, projects, isAllProvidersSelected, matchesProviderFilter, matchesSearch, normalizedSearchTerm, matchesVisibility, matchesHostFilter, selectedHostFilter]);
 
   const providerTabs = useMemo(
     () => {

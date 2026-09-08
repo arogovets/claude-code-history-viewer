@@ -771,7 +771,7 @@ export const AppLayout: React.FC<AppLayoutProps> = (props) => {
                       onBack={() => analyticsActions.switchToBoard()}
                     />
                   </div>
-                  <div className="hidden md:block">
+                  <div className="hidden md:block h-full">
                     <MessageNavigator
                       messages={messages}
                       width={navigatorWidth}

@@ -9,7 +9,15 @@ const NOISE_TYPES = new Set(["progress", "queue-operation", "file-history-snapsh
 
 /** Strip XML tags from content for clean preview */
 function stripXmlTags(text: string): string {
-  return text
+  let cleaned = text;
+  // If wrapped in <USER_REQUEST>...</USER_REQUEST>, extract the request content
+  const reqMatch = cleaned.match(/<USER_REQUEST>([\s\S]*?)(?:<\/USER_REQUEST>|$)/);
+  if (reqMatch && reqMatch[1]?.trim()) {
+    cleaned = reqMatch[1].trim();
+  }
+  // Strip <ADDITIONAL_METADATA>...</ADDITIONAL_METADATA> blocks
+  cleaned = cleaned.replace(/<ADDITIONAL_METADATA>[\s\S]*?(?:<\/ADDITIONAL_METADATA>|$)/g, "");
+  return cleaned
     .replace(/<[^>]*>/g, "")
     .replace(/\s+/g, " ")
     .trim();

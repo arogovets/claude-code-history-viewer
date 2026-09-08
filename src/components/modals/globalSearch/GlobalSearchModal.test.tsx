@@ -187,15 +187,45 @@ describe("GlobalSearchModal WSL search routing", () => {
         render(<GlobalSearchModal isOpen onClose={vi.fn()} />);
 
         // Check project names
-        expect(screen.getByText("cchv")).toBeDefined();
-        expect(screen.getByText("master")).toBeDefined();
+        expect(screen.getAllByText("cchv").length).toBeGreaterThanOrEqual(1);
+        expect(screen.getAllByText("master").length).toBeGreaterThanOrEqual(1);
 
         // Check providers
-        expect(screen.getByText("Claude Code")).toBeDefined();
-        expect(screen.getByText("Codex CLI")).toBeDefined();
+        expect(screen.getAllByText("Claude Code").length).toBeGreaterThanOrEqual(1);
+        expect(screen.getAllByText("Codex CLI").length).toBeGreaterThanOrEqual(1);
 
         // Check local and remote badges
-        expect(screen.getByText("Local")).toBeDefined();
-        expect(screen.getByText("arogovets@100.93.94.80")).toBeDefined();
+        expect(screen.getAllByText("Local").length).toBeGreaterThanOrEqual(1);
+        expect(screen.getAllByText("arogovets@100.93.94.80").length).toBeGreaterThanOrEqual(1);
+
+        // Check exclude section is rendered
+        expect(screen.getByText("Exclude project (spam filter)")).toBeDefined();
+    });
+
+    it("persists project filter selection in localStorage and restores it", () => {
+        localStorage.setItem("cchv_global_search_project_filter", "exclude:/Users/emac/Dev/cchv");
+        storeState.projects = [
+            {
+                name: "cchv",
+                path: "/Users/emac/Dev/cchv",
+                actual_path: "/Users/emac/Dev/cchv",
+                provider: "claude",
+                session_count: 5,
+                message_count: 50,
+                last_modified: "2026-09-07T00:00:00Z",
+            },
+            {
+                name: "master",
+                path: "/Users/emac/Dev/master",
+                actual_path: "/Users/emac/Dev/master",
+                provider: "claude",
+                session_count: 3,
+                message_count: 30,
+                last_modified: "2026-09-07T00:00:00Z",
+            },
+        ];
+
+        render(<GlobalSearchModal isOpen onClose={vi.fn()} />);
+        expect(screen.getAllByText("Exclude:").length).toBeGreaterThanOrEqual(1);
     });
 });
