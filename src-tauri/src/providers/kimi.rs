@@ -335,6 +335,115 @@ pub fn load_messages_from_base_path(
     Ok(messages)
 }
 
+// ============================================================================
+// Archive glue (snapshot-backed reads; legacy and kimi-code roots route by
+// scheme, reusing the from-path seams above).
+// ============================================================================
+
+use crate::storage::registry::DiscoveredSource as ArchiveDiscoveredSource;
+use crate::storage::{SnapshotInfo as ArchiveSnapshotInfo, Source as ArchiveSource};
+
+/// Physical Kimi roots on this machine: the legacy CLI store and the
+/// kimi-code store, as independent sources under one provider id.
+pub(crate) fn archive_discover() -> Vec<ArchiveDiscoveredSource> {
+    let machine = crate::storage::registry::discovery_machine_id();
+    let mut out = Vec::new();
+    if let Some(base) = get_base_path() {
+        out.push(ArchiveDiscoveredSource::local(
+            "legacy",
+            std::path::PathBuf::from(base),
+            &machine,
+        ));
+    }
+    if let Some(root) = super::kimi_code::default_root() {
+        out.push(ArchiveDiscoveredSource::local("code", root, &machine));
+    }
+    out
+}
+
+/// Scan projects under an explicit root (snapshot data root at runtime),
+/// branching on the source role.
+pub(crate) fn archive_scan(
+    source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+) -> Result<Vec<ClaudeProject>, String> {
+    if source.role == "code" {
+        let sessions = snapshot.data_path.join(super::kimi_code::SESSIONS_DIR);
+        return Ok(super::kimi_code::scan_projects_from_root(&sessions));
+    }
+    scan_projects_from_path(&snapshot.data_path.to_string_lossy())
+}
+
+fn archive_mapped(
+    source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+    stable: &str,
+) -> Result<String, String> {
+    crate::storage::registry::map_absolute_to_snapshot(source, snapshot, stable)
+        .ok_or_else(|| format!("No preserved snapshot covers {stable}"))
+}
+
+fn snapshot_base(snapshot: &ArchiveSnapshotInfo) -> String {
+    snapshot.data_path.to_string_lossy().to_string()
+}
+
+/// Sessions for a stable project, routed by scheme and read from snapshots.
+pub(crate) fn archive_load_sessions(
+    source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+    stable_project: &str,
+) -> Result<Vec<ClaudeSession>, String> {
+    if source.role == "code" || stable_project.starts_with(super::kimi_code::SCHEME) {
+        // Workspace IDs are absolute dirs; map them into snapshot space first
+        // (substring form keeps working when already mapped).
+        let workspace = stable_project
+            .strip_prefix(super::kimi_code::SCHEME)
+            .unwrap_or(stable_project);
+        let mapped = archive_mapped(source, snapshot, workspace).unwrap_or_else(|_| {
+            // Already snapshot-space (e.g. re-entrant indexer calls).
+            workspace.to_string()
+        });
+        let workspace = mapped
+            .strip_prefix(super::kimi_code::SCHEME)
+            .unwrap_or(&mapped);
+        return super::kimi_code::load_sessions_in(&snapshot.data_path, workspace);
+    }
+    let mapped = archive_mapped(source, snapshot, stable_project)?;
+    load_sessions_from_base_path(&snapshot_base(snapshot), &mapped, false)
+}
+
+/// Messages for a stable session, routed by ownership and read from snapshots.
+pub(crate) fn archive_load_messages(
+    source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+    stable_session: &str,
+) -> Result<Vec<ClaudeMessage>, String> {
+    // kimi-code session dirs live under the code root.
+    if source.role == "code" || stable_session.contains(super::kimi_code::SCHEME) {
+        let mapped = archive_mapped(source, snapshot, stable_session)?;
+        return super::kimi_code::load_messages_from_root(&snapshot.data_path, &mapped);
+    }
+    let mapped = archive_mapped(source, snapshot, stable_session)?;
+    load_messages_from_base_path(&snapshot_base(snapshot), &mapped)
+}
+
+/// Search confined to one snapshot (each source searches its own snapshot).
+pub(crate) fn archive_search(
+    source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<ClaudeMessage>, String> {
+    if source.role == "code" {
+        return Ok(super::kimi_code::search_from_root(
+            &snapshot.data_path.join(super::kimi_code::SESSIONS_DIR),
+            query,
+            limit,
+        ));
+    }
+    search_from_base_path(&snapshot_base(snapshot), query, limit)
+}
+
 pub fn search(query: &str, limit: usize) -> Result<Vec<ClaudeMessage>, String> {
     // Both stores are one provider in the UI, so each gets the full `limit`
     // and they compete on recency. Handing kimi-code only the legacy store's

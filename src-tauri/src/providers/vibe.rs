@@ -224,6 +224,78 @@ pub fn load_messages_from_base_path(
     Ok(messages)
 }
 
+// ============================================================================
+// Archive glue (snapshot-backed reads; the from-path seams above are reused).
+// ============================================================================
+
+use crate::storage::registry::DiscoveredSource as ArchiveDiscoveredSource;
+use crate::storage::{SnapshotInfo as ArchiveSnapshotInfo, Source as ArchiveSource};
+
+/// Physical Vibe store root on this machine, if present.
+pub(crate) fn archive_discover() -> Vec<ArchiveDiscoveredSource> {
+    let machine = crate::storage::registry::discovery_machine_id();
+    match get_base_path() {
+        Some(base) => vec![ArchiveDiscoveredSource::local(
+            crate::storage::ROLE_PRIMARY,
+            PathBuf::from(base),
+            &machine,
+        )],
+        None => Vec::new(),
+    }
+}
+
+/// Scan projects under an explicit root (snapshot data root at runtime).
+pub(crate) fn archive_scan(
+    _source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+) -> Result<Vec<ClaudeProject>, String> {
+    scan_projects_from_path(&snapshot.data_path.to_string_lossy())
+}
+
+fn archive_mapped(
+    source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+    stable: &str,
+) -> Result<String, String> {
+    crate::storage::registry::map_absolute_to_snapshot(source, snapshot, stable)
+        .ok_or_else(|| format!("No preserved snapshot covers {stable}"))
+}
+
+fn snapshot_base(snapshot: &ArchiveSnapshotInfo) -> String {
+    snapshot.data_path.to_string_lossy().to_string()
+}
+
+/// Sessions for a stable project, read from the snapshot.
+pub(crate) fn archive_load_sessions(
+    _source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+    stable_project: &str,
+) -> Result<Vec<ClaudeSession>, String> {
+    // Project URIs name the user's cwd (content filter); the listing root is
+    // the snapshot base itself.
+    load_sessions_from_base_path(&snapshot_base(snapshot), stable_project, false)
+}
+
+/// Messages for a stable session, read from the snapshot.
+pub(crate) fn archive_load_messages(
+    source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+    stable_session: &str,
+) -> Result<Vec<ClaudeMessage>, String> {
+    let mapped = archive_mapped(source, snapshot, stable_session)?;
+    load_messages_from_base_path(&snapshot_base(snapshot), &mapped)
+}
+
+/// Search confined to one snapshot.
+pub(crate) fn archive_search(
+    _source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<ClaudeMessage>, String> {
+    search_from_base_path(&snapshot_base(snapshot), query, limit)
+}
+
 pub fn search(query: &str, limit: usize) -> Result<Vec<ClaudeMessage>, String> {
     let base = get_base_path().ok_or("Vibe base path not found")?;
     search_from_base_path(&base, query, limit)

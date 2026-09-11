@@ -61,7 +61,7 @@ const PROVIDER_ID: &str = "kimi";
 /// Scheme prefix distinguishing kimi-code workspace paths from the old
 /// CLI's `kimi://<dir>` paths inside the shared `kimi` provider.
 pub(crate) const SCHEME: &str = "kimi-code://";
-const SESSIONS_DIR: &str = "sessions";
+pub(crate) const SESSIONS_DIR: &str = "sessions";
 const AGENTS_DIR: &str = "agents";
 /// The primary agent of a session; subagent wires are sidechains and are
 /// not surfaced (same policy as the old CLI reader).
@@ -135,7 +135,15 @@ pub fn load_sessions(workspace_dir: &str) -> Result<Vec<ClaudeSession>, String> 
     let Some(root) = default_root() else {
         return Ok(Vec::new());
     };
-    let workspace = resolve_workspace_dir(&root, workspace_dir)?;
+    load_sessions_in(&root, workspace_dir)
+}
+
+/// [`load_sessions`] against an explicit store root (snapshot or live).
+pub(crate) fn load_sessions_in(
+    root: &Path,
+    workspace_dir: &str,
+) -> Result<Vec<ClaudeSession>, String> {
+    let workspace = resolve_workspace_dir(root, workspace_dir)?;
     Ok(load_sessions_from_dir(&workspace))
 }
 

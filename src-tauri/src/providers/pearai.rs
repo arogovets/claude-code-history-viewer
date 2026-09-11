@@ -16,6 +16,7 @@ use super::continue_dev::{
 };
 use super::ProviderInfo;
 use crate::models::{ClaudeMessage, ClaudeProject, ClaudeSession};
+use std::path::{Path, PathBuf};
 
 pub(crate) const PEARAI: Family = Family {
     provider_id: "pearai",
@@ -56,4 +57,98 @@ pub fn load_messages(session_path: &str) -> Result<Vec<ClaudeMessage>, String> {
 /// Search across all `PearAI` sessions.
 pub fn search(query: &str, limit: usize) -> Result<Vec<ClaudeMessage>, String> {
     search_for(&PEARAI, query, limit)
+}
+
+// ============================================================================
+// Archive glue (explicit-root seams; see continue_dev).
+// ============================================================================
+
+/// Scan `PearAI` projects under an explicit sessions root.
+pub(crate) fn scan_projects_in(base: &Path) -> Result<Vec<ClaudeProject>, String> {
+    super::continue_dev::scan_in_for(&PEARAI, base)
+}
+
+/// Sessions for one project, listed from an explicit root.
+pub(crate) fn load_sessions_in(
+    base: &Path,
+    project_path: &str,
+    exclude_sidechain: bool,
+) -> Result<Vec<ClaudeSession>, String> {
+    super::continue_dev::load_sessions_in(&PEARAI, base, project_path, exclude_sidechain)
+}
+
+/// Messages confined to an explicit root.
+pub(crate) fn load_messages_in(
+    base: &Path,
+    session_path: &str,
+) -> Result<Vec<ClaudeMessage>, String> {
+    super::continue_dev::load_messages_in(&PEARAI, base, session_path)
+}
+
+/// Search confined to an explicit root.
+pub(crate) fn search_in(
+    base: &Path,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<ClaudeMessage>, String> {
+    super::continue_dev::search_in(&PEARAI, base, query, limit)
+}
+
+// ============================================================================
+// Archive glue (snapshot-backed reads; the Continue family core is reused).
+// ============================================================================
+
+use crate::storage::registry::DiscoveredSource as ArchiveDiscoveredSource;
+use crate::storage::{SnapshotInfo as ArchiveSnapshotInfo, Source as ArchiveSource};
+
+/// Physical `PearAI` store root on this machine, if present.
+pub(crate) fn archive_discover() -> Vec<ArchiveDiscoveredSource> {
+    let machine = crate::storage::registry::discovery_machine_id();
+    match base_path_for(&PEARAI) {
+        Some(base) => vec![ArchiveDiscoveredSource::local(
+            crate::storage::ROLE_PRIMARY,
+            PathBuf::from(base),
+            &machine,
+        )],
+        None => Vec::new(),
+    }
+}
+
+/// Scan projects under an explicit root (snapshot data root at runtime).
+pub(crate) fn archive_scan(
+    _source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+) -> Result<Vec<ClaudeProject>, String> {
+    scan_projects_in(&snapshot.data_path)
+}
+
+/// Sessions for a stable project URI, filtered from snapshot content.
+pub(crate) fn archive_load_sessions(
+    _source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+    stable_project: &str,
+) -> Result<Vec<ClaudeSession>, String> {
+    load_sessions_in(&snapshot.data_path, stable_project, false)
+}
+
+/// Messages for a stable session file, read from the snapshot.
+pub(crate) fn archive_load_messages(
+    source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+    stable_session: &str,
+) -> Result<Vec<ClaudeMessage>, String> {
+    let mapped =
+        crate::storage::registry::map_absolute_to_snapshot(source, snapshot, stable_session)
+            .ok_or_else(|| format!("No preserved snapshot covers {stable_session}"))?;
+    load_messages_in(&snapshot.data_path, &mapped)
+}
+
+/// Search confined to one snapshot.
+pub(crate) fn archive_search(
+    _source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<ClaudeMessage>, String> {
+    search_in(&snapshot.data_path, query, limit)
 }

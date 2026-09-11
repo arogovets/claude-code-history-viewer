@@ -176,25 +176,31 @@ pub async fn scan_all_projects(
     // Running them concurrently on the blocking pool turns that worst case from a
     // sum into a single overlapped wait. The `("name", fn)` label here is the
     // provider id matched against `providers_to_scan`, not the display name.
+    // Archive-migrated providers: discover → sync → parse snapshots.
+    // (Migrated ids are removed from `sync_scanners` below as they land; the
+    // registry table is the single source of truth for membership.)
+    for name in crate::storage::registry::migrated_providers() {
+        if !providers_to_scan.iter().any(|p| p == name) {
+            continue;
+        }
+        match crate::storage::registry::scan_provider(name).await {
+            Ok(projects) => all_projects.extend(projects),
+            Err(e) => log::warn!("{name} archive scan failed: {e}"),
+        }
+    }
+
     type SyncScanner = fn() -> Result<Vec<ClaudeProject>, String>;
     let sync_scanners: &[(&str, SyncScanner)] = &[
         ("codex", providers::codex::scan_projects),
-        ("continue", providers::continue_dev::scan_projects),
-        ("pearai", providers::pearai::scan_projects),
         ("gemini", providers::gemini::scan_projects),
         ("goose", providers::goose::scan_projects),
-        ("grok", providers::grok::scan_projects),
-        ("kimi", providers::kimi::scan_projects),
         ("forgecode", providers::forgecode::scan_projects),
         ("opencode", providers::opencode::scan_projects),
         ("openinterpreter", providers::openinterpreter::scan_projects),
-        ("pi", providers::pi::scan_projects),
-        ("ompi", providers::ompi::scan_projects),
         ("qwen", providers::qwen::scan_projects),
         ("zed", providers::zed::scan_projects),
         ("openhands", providers::openhands::scan_projects),
         ("trae", providers::trae::scan_projects),
-        ("vibe", providers::vibe::scan_projects),
         ("cline", providers::cline::scan_projects),
         ("cursor", providers::cursor::scan_projects),
         ("crush", providers::crush::scan_projects),
@@ -404,6 +410,37 @@ pub async fn load_provider_sessions(
 
     let exclude = exclude_sidechain.unwrap_or(false);
 
+    // Archive-migrated providers serve reads from snapshots. When nothing has
+    // ever been preserved (zero snapshots), fall back to one legacy live read
+    // so first-run bootstrapping keeps working; once history exists the
+    // archive is authoritative and live sources are never consulted.
+    if crate::storage::registry::is_migrated(provider.as_str()) {
+        let sources = crate::storage::registry::read_sources(provider.as_str());
+        match crate::storage::registry::load_provider_sessions(
+            provider.as_str(),
+            &project_path,
+            &sources,
+        )
+        .await
+        {
+            Ok(sessions) => {
+                let mut combined_sessions =
+                    crate::cache::sync_and_save_sessions(&project_path, &provider, &sessions);
+                sort_sessions_by_recency(&mut combined_sessions);
+                return Ok(combined_sessions);
+            }
+            Err(e) if sources.is_empty() => {
+                log::info!("No snapshots for {provider} yet, live bootstrap read: {e}");
+                let sessions = legacy_load_sessions(provider.as_str(), &project_path, exclude)?;
+                let mut combined_sessions =
+                    crate::cache::sync_and_save_sessions(&project_path, &provider, &sessions);
+                sort_sessions_by_recency(&mut combined_sessions);
+                return Ok(combined_sessions);
+            }
+            Err(e) => return Err(e),
+        }
+    }
+
     let sessions = match provider.as_str() {
         "claude" => {
             let mut sessions = crate::commands::session::load_project_sessions(
@@ -418,19 +455,16 @@ pub async fn load_provider_sessions(
             }
             sessions
         }
+        // NOTE: archive-migrated providers (pi, ompi, continue, pearai, grok,
+        // kimi, vibe, …) are served by the registry branch above; their legacy
+        // arms were removed. Each new migration deletes its arm here.
         "codex" => providers::codex::load_sessions(&project_path, exclude)?,
-        "continue" => providers::continue_dev::load_sessions(&project_path, exclude)?,
-        "pearai" => providers::pearai::load_sessions(&project_path, exclude)?,
         "copilot" => providers::copilot::load_sessions(&project_path, exclude)?,
         "gemini" => providers::gemini::load_sessions(&project_path, exclude)?,
         "goose" => providers::goose::load_sessions(&project_path, exclude)?,
-        "grok" => providers::grok::load_sessions(&project_path, exclude)?,
-        "kimi" => providers::kimi::load_sessions(&project_path, exclude)?,
         "forgecode" => providers::forgecode::load_sessions(&project_path, exclude)?,
         "opencode" => providers::opencode::load_sessions(&project_path, exclude)?,
         "openinterpreter" => providers::openinterpreter::load_sessions(&project_path, exclude)?,
-        "pi" => providers::pi::load_sessions(&project_path, exclude)?,
-        "ompi" => providers::ompi::load_sessions(&project_path, exclude)?,
         "qwen" => providers::qwen::load_sessions(&project_path, exclude)?,
         "cline" => providers::cline::load_sessions(&project_path, exclude)?,
         "crush" => providers::crush::load_sessions(&project_path, exclude)?,
@@ -446,7 +480,6 @@ pub async fn load_provider_sessions(
         "zed" => providers::zed::load_sessions(&project_path, exclude)?,
         "openhands" => providers::openhands::load_sessions(&project_path, exclude)?,
         "trae" => providers::trae::load_sessions(&project_path, exclude)?,
-        "vibe" => providers::vibe::load_sessions(&project_path, exclude)?,
         _ => return Err(format!("Unknown provider: {provider}")),
     };
 
@@ -454,6 +487,40 @@ pub async fn load_provider_sessions(
         crate::cache::sync_and_save_sessions(&project_path, &provider, &sessions);
     sort_sessions_by_recency(&mut combined_sessions);
     Ok(combined_sessions)
+}
+
+/// Legacy live read for archive-migrated providers, used only to bootstrap
+/// first runs that have never preserved anything. Every migration moves its
+/// provider's arm here and deletes it from the live match below.
+fn legacy_load_sessions(
+    provider: &str,
+    project_path: &str,
+    exclude: bool,
+) -> Result<Vec<ClaudeSession>, String> {
+    match provider {
+        "continue" => providers::continue_dev::load_sessions(project_path, exclude),
+        "pearai" => providers::pearai::load_sessions(project_path, exclude),
+        "grok" => providers::grok::load_sessions(project_path, exclude),
+        "kimi" => providers::kimi::load_sessions(project_path, exclude),
+        "pi" => providers::pi::load_sessions(project_path, exclude),
+        "ompi" => providers::ompi::load_sessions(project_path, exclude),
+        "vibe" => providers::vibe::load_sessions(project_path, exclude),
+        _ => Err(format!("Unknown provider: {provider}")),
+    }
+}
+
+/// Legacy live search for archive-migrated providers (bootstrap only).
+fn legacy_search(provider: &str, query: &str, limit: usize) -> Result<Vec<ClaudeMessage>, String> {
+    match provider {
+        "continue" => providers::continue_dev::search(query, limit),
+        "pearai" => providers::pearai::search(query, limit),
+        "grok" => providers::grok::search(query, limit),
+        "kimi" => providers::kimi::search(query, limit),
+        "pi" => providers::pi::search(query, limit),
+        "ompi" => providers::ompi::search(query, limit),
+        "vibe" => providers::vibe::search(query, limit),
+        _ => Err(format!("Unknown provider: {provider}")),
+    }
 }
 
 fn sort_sessions_by_recency(sessions: &mut [ClaudeSession]) {
@@ -598,6 +665,25 @@ pub async fn load_provider_messages(
         }
     }
 
+    // Archive-migrated providers serve reads from snapshots (bootstrap
+    // fallback to one legacy live read only when nothing was ever preserved).
+    if provider != "claude" && crate::storage::registry::is_migrated(provider.as_str()) {
+        let sources = crate::storage::registry::read_sources(provider.as_str());
+        match crate::storage::registry::load_provider_messages(
+            provider.as_str(),
+            &session_path,
+            &sources,
+        )
+        .await
+        {
+            Ok(messages) => return Ok(merge_tool_execution_messages(messages)),
+            Err(e) if sources.is_empty() => {
+                log::info!("No snapshots for {provider} yet, live bootstrap read: {e}");
+            }
+            Err(e) => return Err(e),
+        }
+    }
+
     let messages = if provider == "claude" {
         let mut messages = crate::commands::session::load_session_messages(session_path).await?;
         for m in &mut messages {
@@ -732,6 +818,25 @@ pub async fn get_provider_message_offset(
             message_uuid,
             exclude_sidechain,
         );
+    }
+
+    // Migrated providers compute offsets over the same archived messages the
+    // paginated reader serves, so deep links stay consistent offline.
+    if crate::storage::registry::is_migrated(provider.as_str()) {
+        let sources = crate::storage::registry::read_sources(provider.as_str());
+        if !sources.is_empty() {
+            let messages = crate::storage::registry::load_provider_messages(
+                provider.as_str(),
+                &session_path,
+                &sources,
+            )
+            .await?;
+            let mut merged = merge_tool_execution_messages(messages);
+            if exclude_sidechain.unwrap_or(false) {
+                merged.retain(|m| !m.is_sidechain.unwrap_or(false));
+            }
+            return Ok(merged.iter().rev().position(|m| m.uuid == message_uuid));
+        }
     }
 
     let messages = load_non_claude_messages(&provider, &session_path)?;
@@ -872,23 +977,23 @@ pub async fn search_all_providers(
         }
     }
 
-    // Continue.dev
-    if providers_to_search.iter().any(|p| p == "continue") {
-        match providers::continue_dev::search(&query, max_results) {
-            Ok(results) => all_results.extend(results),
-            Err(e) => {
-                log::warn!("Continue search failed: {e}");
-            }
+    // Archive-migrated providers search preserved snapshots (bootstrap
+    // fallback to legacy live search only when nothing was ever preserved).
+    for name in crate::storage::registry::migrated_providers() {
+        if !providers_to_search.iter().any(|p| p == name) {
+            continue;
         }
-    }
-
-    // PearAI
-    if providers_to_search.iter().any(|p| p == "pearai") {
-        match providers::pearai::search(&query, max_results) {
+        let sources = crate::storage::registry::read_sources(name);
+        match crate::storage::registry::search_provider(name, &query, max_results, &sources).await {
             Ok(results) => all_results.extend(results),
-            Err(e) => {
-                log::warn!("PearAI search failed: {e}");
+            Err(archive_err) if sources.is_empty() => {
+                log::info!("No snapshots for {name} yet, live bootstrap search: {archive_err}");
+                match legacy_search(name, &query, max_results) {
+                    Ok(results) => all_results.extend(results),
+                    Err(e) => log::warn!("{name} bootstrap search failed: {e}"),
+                }
             }
+            Err(e) => log::warn!("{name} archive search failed: {e}"),
         }
     }
 
@@ -908,36 +1013,6 @@ pub async fn search_all_providers(
             Ok(results) => all_results.extend(results),
             Err(e) => {
                 log::warn!("Goose search failed: {e}");
-            }
-        }
-    }
-
-    // Grok
-    if providers_to_search.iter().any(|p| p == "grok") {
-        match providers::grok::search(&query, max_results) {
-            Ok(results) => all_results.extend(results),
-            Err(e) => {
-                log::warn!("Grok search failed: {e}");
-            }
-        }
-    }
-
-    // Kimi
-    if providers_to_search.iter().any(|p| p == "kimi") {
-        match providers::kimi::search(&query, max_results) {
-            Ok(results) => all_results.extend(results),
-            Err(e) => {
-                log::warn!("Kimi search failed: {e}");
-            }
-        }
-    }
-
-    // Mistral Vibe
-    if providers_to_search.iter().any(|p| p == "vibe") {
-        match providers::vibe::search(&query, max_results) {
-            Ok(results) => all_results.extend(results),
-            Err(e) => {
-                log::warn!("Vibe search failed: {e}");
             }
         }
     }
@@ -968,26 +1043,6 @@ pub async fn search_all_providers(
             Ok(results) => all_results.extend(results),
             Err(e) => {
                 log::warn!("Open Interpreter search failed: {e}");
-            }
-        }
-    }
-
-    // Pi
-    if providers_to_search.iter().any(|p| p == "pi") {
-        match providers::pi::search(&query, max_results) {
-            Ok(results) => all_results.extend(results),
-            Err(e) => {
-                log::warn!("Pi search failed: {e}");
-            }
-        }
-    }
-
-    // oh-my-pi
-    if providers_to_search.iter().any(|p| p == "ompi") {
-        match providers::ompi::search(&query, max_results) {
-            Ok(results) => all_results.extend(results),
-            Err(e) => {
-                log::warn!("oh-my-pi search failed: {e}");
             }
         }
     }
