@@ -98,7 +98,9 @@ pub async fn sync_all_once() -> CoordinatorReport {
         if !root.is_absolute() {
             continue;
         }
-        let source = crate::commands::project::claude_source_for_base(&root, label.as_deref());
+        let machine_id = crate::storage::machine::local_machine_id().unwrap_or_default();
+        let source =
+            crate::commands::project::claude_source_for_base(&machine_id, &root, label.as_deref());
         let result = tauri::async_runtime::spawn_blocking(move || {
             if !root.is_dir() {
                 return Err(format!("Source root {} is not available", root.display()));
@@ -218,6 +220,8 @@ mod tests {
         std::fs::write(claude.join("projects/p/s.jsonl"), b"{\"a\":1}\n").unwrap();
         let report = sync_all_once().await;
         assert_eq!(report.local_synced, 1);
-        assert!(crate::storage::resolve_snapshot_data_root("local-claude").is_some());
+        let machine_id = crate::storage::machine::local_machine_id().unwrap();
+        let expected = crate::commands::project::claude_source_for_base(&machine_id, &claude, None);
+        assert!(crate::storage::resolve_snapshot_data_root(&expected.id).is_some());
     }
 }

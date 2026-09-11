@@ -182,17 +182,22 @@ pub fn scan_projects_from_root(root: &Path) -> Vec<ClaudeProject> {
 }
 
 /// Source identity for a Claude base directory: the canonical `~/.claude` is
-/// a `local` source, anything else is a `custom` source. The id is stable so
-/// restarts agree without a registry write.
+/// a `local` source, anything else is a `custom` source. The id is a stable
+/// SHA-256 over machine + kind + provider + role + origin, so restarts,
+/// rebuilds, and toolchain changes agree without a registry write.
 #[must_use]
-pub fn claude_source_for_base(base: &Path, label: Option<&str>) -> crate::storage::Source {
+pub fn claude_source_for_base(
+    machine_id: &str,
+    base: &Path,
+    label: Option<&str>,
+) -> crate::storage::Source {
     let is_default = crate::utils::home_dir()
         .map(|home| home.join(".claude") == base)
         .unwrap_or(false);
     if is_default {
-        crate::storage::Source::local("claude", base)
+        crate::storage::Source::local("claude", machine_id, base)
     } else {
-        crate::storage::Source::custom("claude", base, label)
+        crate::storage::Source::custom("claude", machine_id, base, label)
     }
 }
 
@@ -222,7 +227,10 @@ pub async fn scan_claude_base_with_snapshot(
     label: Option<String>,
 ) -> Vec<ClaudeProject> {
     let base_path = PathBuf::from(&base);
-    let source = claude_source_for_base(&base_path, label.as_deref());
+    // Machine identity is best-effort here: scans must never fail just
+    // because the id file is momentarily unavailable.
+    let machine_id = crate::storage::machine::local_machine_id().unwrap_or_default();
+    let source = claude_source_for_base(&machine_id, &base_path, label.as_deref());
 
     // 1. Filesystem first (best effort, per-source locked inside).
     let sync_result = tauri::async_runtime::spawn_blocking({
@@ -251,10 +259,10 @@ pub async fn scan_claude_base_with_snapshot(
         for project in &mut projects {
             rewrite_snapshot_project_path(project, &snapshot_root, &base_path);
         }
-        // A valid snapshot directory is authoritative even when empty: an
-        // empty result means the source currently has no sessions, while
-        // deleted history remains preserved in older snapshots + the index.
-        // Fall back to the original dir only when the snapshot is missing.
+        // A valid snapshot is authoritative even when it shows no current
+        // sessions: snapshots are cumulative, so the latest one holds the
+        // entire preserved history (deleted files stay with present=false).
+        // Fall back to the original dir only when no snapshot exists yet.
         return projects;
     }
 

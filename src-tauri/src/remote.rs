@@ -338,15 +338,20 @@ fn remote_file_sync_throttled(endpoint: &str) -> bool {
 }
 
 /// Best-effort file sync for one host: download raw Claude files into new
-/// immutable snapshots (one per remote root). Never throws away history:
-/// failures keep the previous completed snapshot.
+/// cumulative immutable snapshots (one per remote root). All-or-nothing per
+/// root: any required file that cannot be transferred aborts that root's
+/// sync and the previous completed snapshot stays current.
 pub async fn sync_remote_host_files(host: &RemoteHostConfig) -> Result<usize, String> {
     let sources = fetch_remote_sync_sources(host, Some(&["claude".to_string()])).await?;
     let mut synced = 0usize;
     for source in sources.iter().filter(|s| s.provider == "claude") {
         let manifest = fetch_remote_sync_manifest(host, "claude", &source.root).await?;
+        let expected: Vec<(String, String)> = manifest
+            .files
+            .iter()
+            .map(|entry| (entry.path.clone(), String::new()))
+            .collect();
         let mut files = Vec::with_capacity(manifest.files.len());
-        let mut skipped = 0usize;
         for entry in &manifest.files {
             match fetch_remote_sync_file(host, "claude", &source.root, &entry.path).await {
                 Ok((bytes, mtime)) => files.push(crate::storage::RemoteSyncedFile {
@@ -354,28 +359,15 @@ pub async fn sync_remote_host_files(host: &RemoteHostConfig) -> Result<usize, St
                     bytes,
                     mtime_secs: mtime,
                 }),
-                // One unreadable file (rotated mid-sync, exotic symlink, size
-                // cap) skips just that file rather than failing the host: the
-                // snapshot stays consistent by construction (its manifest only
-                // lists staged files) and older snapshots keep the history.
+                // A single failed transfer aborts this root (all-or-nothing):
+                // a partial candidate must never become current.
                 Err(e) => {
-                    skipped += 1;
-                    log::warn!("Remote file sync skipped {}: {e}", entry.path);
+                    return Err(format!(
+                        "Remote file sync for {} aborted on {}: {e}",
+                        source.root, entry.path
+                    ));
                 }
             }
-        }
-        if files.is_empty() {
-            // Never publish an empty snapshot over preserved history: an empty
-            // file set means the fetch failed wholesale (or the root is
-            // genuinely empty, in which case there is nothing to preserve yet
-            // and skipping is equally correct).
-            if skipped > 0 {
-                return Err(format!(
-                    "Remote file sync for {} fetched no files ({skipped} skipped)",
-                    source.root
-                ));
-            }
-            continue;
         }
         let storage_source = crate::storage::Source::remote_with_root(
             "claude",
@@ -385,7 +377,7 @@ pub async fn sync_remote_host_files(host: &RemoteHostConfig) -> Result<usize, St
         );
         // Sync in a blocking task: staging does filesystem I/O.
         let outcome = tauri::async_runtime::spawn_blocking(move || {
-            crate::storage::sync_remote_files_to_snapshot(&storage_source, &manifest.root, files)
+            crate::storage::sync_remote_snapshot(&storage_source, &manifest.root, &expected, files)
         })
         .await
         .map_err(|e| format!("Task join error: {e}"))??;

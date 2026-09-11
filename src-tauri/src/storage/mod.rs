@@ -45,21 +45,32 @@
 //! - Source removal means "stop syncing", never "delete history".
 //! - `current.json` is only a mutable pointer to the latest completed snapshot.
 
+pub mod cas;
 pub mod coordinator;
+pub mod hash;
 pub mod index;
+pub mod machine;
 pub mod manifest;
+pub mod registry;
 pub mod snapshot;
 pub mod source;
+pub mod sqlite_capture;
 pub mod sync;
 
+pub use cas::{cas_contains, cas_insert_bytes, cas_link_into};
+pub use hash::{is_plausible_hash, sha256_hex, sha256_hex_str};
 pub use index::{rebuild_index_from_snapshots, reconcile_unindexed_snapshots, IndexReport};
-pub use manifest::{ManifestFileEntry, SnapshotManifest};
+pub use machine::{local_machine_id, wsl_machine_id};
+pub use manifest::{content_hash_for, entry_fingerprint, ManifestFileEntry, SnapshotManifest};
 pub use snapshot::{latest_completed_snapshot, list_snapshots, SnapshotInfo};
-pub use source::{Source, SourceKind};
+pub use source::{
+    canonical_source_id, claim_canonical_source, resolve_source_id, Source, SourceKind,
+    ROLE_PRIMARY,
+};
 pub use sync::{
     ensure_source_registered, find_remote_sources, find_source_for_original_path,
     is_snapshot_data_path, map_original_path_to_snapshot, map_original_to_snapshot_path,
     map_remote_path_to_snapshot, resolve_snapshot_data_root, snapshot_status_for_cli,
-    sync_local_directory, sync_remote_files_to_snapshot, sync_status, with_source_lock,
-    RemoteSyncedFile, SyncOutcome, SyncStatus,
+    sync_local_directory, sync_remote_files_to_snapshot, sync_remote_snapshot, sync_source,
+    sync_status, with_source_lock, RemoteSyncedFile, SyncOptions, SyncOutcome, SyncStatus,
 };

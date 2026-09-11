@@ -41,6 +41,20 @@ fn list_registered_sources() -> Vec<crate::storage::Source> {
     out
 }
 
+/// Indexer version. Bump whenever any `index_*_snapshot` derivation changes so
+/// previously indexed snapshots become eligible for re-indexing instead of
+/// trusting stale derivations.
+pub const INDEXER_VERSION: u32 = 1;
+
+/// Whether a provider's snapshots can currently be indexed. Providers return
+/// to `Unsupported` until their migration lands; their snapshots stay
+/// unindexed (retried on later passes) rather than being falsely marked done.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IndexSupport {
+    Indexed,
+    Unsupported,
+}
+
 /// Index one snapshot's projects + sessions into the derived SQLite index.
 ///
 /// Paths stored in the index use the *original* locations (not the snapshot
@@ -50,13 +64,16 @@ fn index_one_snapshot(
     conn: &rusqlite::Connection,
     source: &crate::storage::Source,
     snapshot: &crate::storage::SnapshotInfo,
-) -> Result<(), String> {
-    match source.provider.as_str() {
-        "claude" => index_claude_snapshot(conn, source, snapshot),
-        // Other providers follow the same shape as they migrate; unknown ones
-        // only record index bookkeeping so reconciliation converges.
-        _ => Ok(()),
+) -> Result<IndexSupport, String> {
+    // Provider indexers plug in here as they migrate (see storage::registry).
+    if source.provider.as_str() == "claude" {
+        index_claude_snapshot(conn, source, snapshot)?;
+        return Ok(IndexSupport::Indexed);
     }
+    if let Some(indexer) = crate::storage::registry::indexer_for(&source.provider) {
+        return indexer(conn, source, snapshot);
+    }
+    Ok(IndexSupport::Unsupported)
 }
 
 /// How indexed paths are keyed: local filesystem paths for local/custom
@@ -209,10 +226,53 @@ fn rewrite_session_prefix(
     }
 }
 
-/// Index every completed snapshot not yet recorded in `snapshot_index`,
-/// oldest first so additive merges converge to the union of all history.
+/// Whether this snapshot's content is already covered by a newer cumulative
+/// snapshot of the same source. v2+ snapshots are cumulative by construction;
+/// v1 (f94c008 era) snapshots are point-in-time and each needs its own parse.
+fn content_covered_by_newer(snapshot: &crate::storage::SnapshotInfo) -> bool {
+    snapshot.manifest.version >= crate::storage::manifest::MANIFEST_VERSION
+}
+
+fn mark_covered(
+    conn: &rusqlite::Connection,
+    source: &crate::storage::Source,
+    snapshot: &crate::storage::SnapshotInfo,
+    report: &mut IndexReport,
+) -> Result<(), String> {
+    crate::cache::db::mark_snapshot_indexed(
+        conn,
+        &source.id,
+        &snapshot.snapshot_id,
+        &source.provider,
+        INDEXER_VERSION,
+    )?;
+    report.snapshots_indexed += 1;
+    Ok(())
+}
+
+fn is_currently_indexed(
+    conn: &rusqlite::Connection,
+    source: &crate::storage::Source,
+    snapshot: &crate::storage::SnapshotInfo,
+) -> Result<bool, String> {
+    crate::cache::db::is_snapshot_indexed(
+        conn,
+        &source.id,
+        &snapshot.snapshot_id,
+        &source.provider,
+        INDEXER_VERSION,
+    )
+}
+
+/// Index every completed snapshot not yet covered by the current indexer.
 /// This is the crash-recovery path: a snapshot finalized before a crash but
 /// never indexed is discovered here on the next run.
+///
+/// Cumulative (v2+) snapshots make the newest one sufficient per source:
+/// older ones are marked covered without re-parsing. Legacy v1 snapshots are
+/// point-in-time, so each unindexed one is parsed oldest-first and their
+/// additive merges converge to the union of all history. Unsupported
+/// providers are left unindexed (retried on later passes once migrated).
 pub fn reconcile_unindexed_snapshots() -> Result<IndexReport, String> {
     let conn = crate::cache::open_connection()?;
     let mut report = IndexReport::default();
@@ -221,17 +281,36 @@ pub fn reconcile_unindexed_snapshots() -> Result<IndexReport, String> {
         let mut snapshots = crate::storage::list_snapshots(&source.id);
         // Oldest first for deterministic additive merging.
         snapshots.sort_by(|a, b| a.snapshot_id.cmp(&b.snapshot_id));
-        for snapshot in snapshots {
+        let newest_is_cumulative = snapshots.last().is_some_and(content_covered_by_newer);
+        for snapshot in &snapshots {
             report.snapshots_seen += 1;
-            if crate::cache::db::is_snapshot_indexed(&conn, &source.id, &snapshot.snapshot_id)? {
+            let is_newest = snapshots
+                .last()
+                .is_some_and(|last| last.snapshot_id == snapshot.snapshot_id);
+            // Older snapshots under a cumulative newest hold no unique
+            // content: record them covered without parsing.
+            if !is_newest && newest_is_cumulative {
+                if is_currently_indexed(&conn, &source, snapshot)? {
+                    report.snapshots_skipped += 1;
+                } else {
+                    mark_covered(&conn, &source, snapshot, &mut report)?;
+                }
+                continue;
+            }
+            if is_currently_indexed(&conn, &source, snapshot)? {
                 report.snapshots_skipped += 1;
                 continue;
             }
             // A torn snapshot must never poison the index: failures skip the
             // snapshot without marking it indexed, so a later run retries.
-            index_one_snapshot(&conn, &source, &snapshot)?;
-            crate::cache::db::mark_snapshot_indexed(&conn, &source.id, &snapshot.snapshot_id)?;
-            report.snapshots_indexed += 1;
+            match index_one_snapshot(&conn, &source, snapshot)? {
+                IndexSupport::Indexed => {
+                    mark_covered(&conn, &source, snapshot, &mut report)?;
+                }
+                IndexSupport::Unsupported => {
+                    // Leave unindexed; a migrated indexer picks it up later.
+                }
+            }
         }
     }
     Ok(report)
@@ -341,14 +420,21 @@ mod tests {
 
         // Simulate: snapshot finalized, process crashed before DB indexing.
         // `sync_local_directory` never touches SQLite, so this is exact.
-        let source = crate::commands::project::claude_source_for_base(&base, None);
+        let source = crate::commands::project::claude_source_for_base("test-machine", &base, None);
         let snapshot_id = match crate::storage::sync_local_directory(&source, &base).unwrap() {
             SyncOutcome::Created(s) => s.snapshot_id,
             SyncOutcome::Unchanged(_) => panic!("must create"),
         };
 
         let conn = crate::cache::open_connection().unwrap();
-        assert!(!crate::cache::db::is_snapshot_indexed(&conn, &source.id, &snapshot_id).unwrap());
+        assert!(!crate::cache::db::is_snapshot_indexed(
+            &conn,
+            &source.id,
+            &snapshot_id,
+            "claude",
+            INDEXER_VERSION
+        )
+        .unwrap());
 
         let report = reconcile_unindexed_snapshots().unwrap();
         assert_eq!(report.snapshots_indexed, 1);
@@ -428,17 +514,17 @@ mod tests {
                 .as_bytes(),
         );
 
-        let source = crate::commands::project::claude_source_for_base(&base, None);
+        let source = crate::commands::project::claude_source_for_base("test-machine", &base, None);
         match crate::storage::sync_local_directory(&source, &base).unwrap() {
             SyncOutcome::Created(_) => {}
             SyncOutcome::Unchanged(_) => panic!("must create"),
         }
         reconcile_unindexed_snapshots().unwrap();
 
-        // Source deletes one session; a new snapshot only has the survivor.
+        // Source deletes one session. Cumulative snapshots carry it forward,
+        // so no mtime games are needed to force a new snapshot: the presence
+        // flip alone changes the fingerprint set.
         std::fs::remove_file(project_dir.join("deleted.jsonl")).unwrap();
-        // Sleep to outlast mtime-second granularity so change detection fires.
-        std::thread::sleep(std::time::Duration::from_millis(1100));
         match crate::storage::sync_local_directory(&source, &base).unwrap() {
             SyncOutcome::Created(_) => {}
             SyncOutcome::Unchanged(_) => panic!("deletion must create a new snapshot"),
@@ -473,7 +559,9 @@ mod tests {
             bytes: session_jsonl().into_bytes(),
             mtime_secs: 1_700_000_000,
         }];
-        match crate::storage::sync_remote_files_to_snapshot(&source, remote_root, files).unwrap() {
+        let expected = vec![("projects/proj/session.jsonl".to_string(), String::new())];
+        match crate::storage::sync_remote_snapshot(&source, remote_root, &expected, files).unwrap()
+        {
             SyncOutcome::Created(_) => {}
             SyncOutcome::Unchanged(_) => panic!("must create"),
         }

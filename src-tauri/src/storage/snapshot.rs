@@ -61,8 +61,12 @@ pub(crate) fn data_path(snapshot_root: &Path) -> PathBuf {
 fn read_manifest(snapshot_root: &Path) -> Option<crate::storage::SnapshotManifest> {
     let bytes = std::fs::read(manifest_path(snapshot_root)).ok()?;
     let manifest: crate::storage::SnapshotManifest = serde_json::from_slice(&bytes).ok()?;
-    if manifest.status != "completed"
-        || manifest.version != crate::storage::manifest::MANIFEST_VERSION
+    if manifest.status != "completed" {
+        return None;
+    }
+    // v1 (f94c008 era) stays readable; anything newer than current is foreign.
+    if manifest.version < crate::storage::manifest::MANIFEST_VERSION_MIN
+        || manifest.version > crate::storage::manifest::MANIFEST_VERSION
     {
         return None;
     }
@@ -70,6 +74,63 @@ fn read_manifest(snapshot_root: &Path) -> Option<crate::storage::SnapshotManifes
         return None;
     }
     Some(manifest)
+}
+
+/// Make a completed snapshot's files read-only (defense in depth: code paths
+/// must still treat snapshots as read-only; permissions only catch accidents).
+/// Directories stay writable so cleanup tooling keeps working.
+pub(crate) fn make_snapshot_files_read_only(snapshot_root: &Path) {
+    let data = data_path(snapshot_root);
+    let mut stack = vec![data];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt as _;
+                if let Ok(meta) = std::fs::metadata(&path) {
+                    let mut perms = meta.permissions();
+                    perms.set_mode(perms.mode() & !0o222);
+                    let _ = std::fs::set_permissions(&path, perms);
+                }
+            }
+            #[cfg(windows)]
+            {
+                if let Ok(meta) = std::fs::metadata(&path) {
+                    let mut perms = meta.permissions();
+                    perms.set_readonly(true);
+                    let _ = std::fs::set_permissions(&path, perms);
+                }
+            }
+        }
+    }
+    // The manifest itself is part of the immutable record too.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let manifest = manifest_path(snapshot_root);
+        if let Ok(meta) = std::fs::metadata(&manifest) {
+            let mut perms = meta.permissions();
+            perms.set_mode(perms.mode() & !0o222);
+            let _ = std::fs::set_permissions(&manifest, perms);
+        }
+    }
+    #[cfg(windows)]
+    {
+        let manifest = manifest_path(snapshot_root);
+        if let Ok(meta) = std::fs::metadata(&manifest) {
+            let mut perms = meta.permissions();
+            perms.set_readonly(true);
+            let _ = std::fs::set_permissions(&manifest, perms);
+        }
+    }
 }
 
 /// Allocate a unique, time-sortable snapshot id.

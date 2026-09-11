@@ -114,15 +114,42 @@ pub fn init_tables(conn: &Connection) -> Result<(), String> {
         -- One row per indexed snapshot; the archive itself is authoritative.
         -- Deleting this table (or all of cache.db) only loses derived state:
         -- `rebuild_index_from_snapshots` restores it from preserved files.
+        -- `provider` + `indexer_version` let indexing logic evolve: a version
+        -- bump re-indexes snapshots instead of trusting stale derivations.
         CREATE TABLE IF NOT EXISTS snapshot_index (
             source_id TEXT NOT NULL,
             snapshot_id TEXT NOT NULL,
             indexed_at INTEGER NOT NULL,
+            provider TEXT,
+            indexer_version INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (source_id, snapshot_id)
         );",
     )
     .map_err(|e| format!("Failed to initialize database tables: {e}"))?;
 
+    migrate_snapshot_index_columns(conn)?;
+
+    Ok(())
+}
+
+/// Additive migration for pre-existing `snapshot_index` tables (f94c008 era):
+/// adds `provider` / `indexer_version` without touching existing rows.
+fn migrate_snapshot_index_columns(conn: &Connection) -> Result<(), String> {
+    for ddl in [
+        "ALTER TABLE snapshot_index ADD COLUMN provider TEXT",
+        "ALTER TABLE snapshot_index ADD COLUMN indexer_version INTEGER NOT NULL DEFAULT 0",
+    ] {
+        match conn.execute(ddl, []) {
+            Ok(_) => {}
+            // Duplicate-column means an earlier run already migrated.
+            Err(e) => {
+                let message = e.to_string();
+                if !message.contains("duplicate column name") {
+                    return Err(format!("Failed to migrate snapshot_index: {message}"));
+                }
+            }
+        }
+    }
     Ok(())
 }
 
@@ -132,31 +159,46 @@ pub fn mark_snapshot_indexed(
     conn: &Connection,
     source_id: &str,
     snapshot_id: &str,
+    provider: &str,
+    indexer_version: u32,
 ) -> Result<(), String> {
+    let version = i64::from(indexer_version);
     conn.execute(
-        "INSERT INTO snapshot_index (source_id, snapshot_id, indexed_at)
-         VALUES (?1, ?2, ?3)
-         ON CONFLICT(source_id, snapshot_id) DO UPDATE SET indexed_at = excluded.indexed_at",
-        params![source_id, snapshot_id, now_secs()],
+        "INSERT INTO snapshot_index (source_id, snapshot_id, indexed_at, provider, indexer_version)
+         VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT(source_id, snapshot_id) DO UPDATE SET
+            indexed_at = excluded.indexed_at,
+            provider = excluded.provider,
+            indexer_version = excluded.indexer_version",
+        params![source_id, snapshot_id, now_secs(), provider, version],
     )
     .map_err(|e| format!("Failed to mark snapshot indexed: {e}"))?;
     Ok(())
 }
 
-/// Whether a snapshot has already been indexed (crash-recovery check).
+/// Whether a snapshot has already been indexed *by the current indexer*.
+/// Rows written by older indexer versions (or unknown providers) report
+/// `false` so reconciliation re-derives them instead of trusting stale state.
 pub fn is_snapshot_indexed(
     conn: &Connection,
     source_id: &str,
     snapshot_id: &str,
+    provider: &str,
+    indexer_version: u32,
 ) -> Result<bool, String> {
-    let exists: bool = conn
+    let version = i64::from(indexer_version);
+    // Legacy rows (provider NULL, version 0) never match: they are re-derived
+    // under the current indexer instead of being trusted.
+    let current: bool = conn
         .query_row(
-            "SELECT EXISTS(SELECT 1 FROM snapshot_index WHERE source_id = ?1 AND snapshot_id = ?2)",
-            params![source_id, snapshot_id],
+            "SELECT EXISTS(SELECT 1 FROM snapshot_index
+              WHERE source_id = ?1 AND snapshot_id = ?2
+                AND provider = ?4 AND indexer_version = ?3)",
+            params![source_id, snapshot_id, version, provider],
             |row| row.get(0),
         )
         .map_err(|e| format!("Failed to check snapshot index: {e}"))?;
-    Ok(exists)
+    Ok(current)
 }
 
 /// Upsert projects into the local SQLite cache
