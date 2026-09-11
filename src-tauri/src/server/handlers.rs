@@ -360,6 +360,13 @@ pub struct LocateSessionParams {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SearchSessionsByIdParams {
+    pub query: String,
+    pub limit: Option<usize>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ProviderMessagesParams {
     pub provider: String,
     pub session_path: String,
@@ -943,6 +950,14 @@ handler_json!(
 );
 
 handler_json!(
+    search_sessions_by_id,
+    SearchSessionsByIdParams,
+    |p: SearchSessionsByIdParams| async move {
+        commands::session::search_sessions_by_id(p.query, p.limit).await
+    }
+);
+
+handler_json!(
     load_provider_messages,
     ProviderMessagesParams,
     |p: ProviderMessagesParams| async move {
@@ -998,6 +1013,52 @@ handler_json!(
         .await
     }
 );
+
+// ─── Handlers: FILE SYNC (raw provider files → caller-owned snapshots) ───────
+// Read-only: they expose the same conversation bytes the parsed endpoints
+// already serve, in file form so the aggregator can preserve history.
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncSourcesParams {
+    #[serde(default)]
+    pub providers: Option<Vec<String>>,
+}
+
+handler_json!(
+    sync_sources,
+    SyncSourcesParams,
+    |p: SyncSourcesParams| async move { commands::sync_transport::list_sync_sources(p.providers).await }
+);
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncManifestParams {
+    pub provider: String,
+    #[serde(default)]
+    pub root: Option<String>,
+}
+
+handler_json!(
+    sync_manifest,
+    SyncManifestParams,
+    |p: SyncManifestParams| async move {
+        commands::sync_transport::sync_manifest(p.provider, p.root).await
+    }
+);
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncFileParams {
+    pub provider: String,
+    #[serde(default)]
+    pub root: Option<String>,
+    pub path: String,
+}
+
+handler_json!(sync_file, SyncFileParams, |p: SyncFileParams| async move {
+    commands::sync_transport::read_sync_file(p.provider, p.root, p.path).await
+});
 
 // ─── Handlers: STATE PARAMS (MetadataState) ───────────────────────────────────
 
@@ -1341,4 +1402,16 @@ handler_json!(
     |p: ExportSessionParams| async move {
         commands::archive::export_session(p.session_file_path, p.format).await
     }
+);
+
+// Project Kanban uses the same persistence and validation in desktop and WebUI.
+handler_no_params!(load_kanban, commands::kanban::load_kanban);
+#[derive(Deserialize)]
+pub struct SaveKanbanParams {
+    pub data: commands::kanban::KanbanData,
+}
+handler_json!(
+    save_kanban,
+    SaveKanbanParams,
+    |p: SaveKanbanParams| async move { commands::kanban::save_kanban(p.data).await }
 );

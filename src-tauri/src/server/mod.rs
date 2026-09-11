@@ -92,6 +92,7 @@ const READ_ONLY_ALLOWED_API_PATHS: &[&str] = &[
     "/load_session_messages",
     "/load_session_messages_paginated",
     "/load_unified_presets",
+    "/load_kanban",
     "/load_user_metadata",
     "/locate_session",
     "/open_github_issues",
@@ -100,6 +101,10 @@ const READ_ONLY_ALLOWED_API_PATHS: &[&str] = &[
     "/scan_projects",
     "/search_all_providers",
     "/search_messages",
+    "/search_sessions_by_id",
+    "/sync_sources",
+    "/sync_manifest",
+    "/sync_file",
     "/validate_claude_folder",
     "/validate_custom_claude_dir",
 ];
@@ -128,6 +133,7 @@ const READ_ONLY_MUTATING_API_PATHS: &[&str] = &[
     "/save_screenshot",
     "/save_settings",
     "/save_unified_preset",
+    "/save_kanban",
     "/save_user_metadata",
     "/send_feedback",
     "/start_file_watcher",
@@ -255,6 +261,8 @@ pub fn build_router(
             "/get_metadata_folder_path",
             post(h::get_metadata_folder_path),
         )
+        .route("/load_kanban", post(h::load_kanban))
+        .route("/save_kanban", post(h::save_kanban))
         .route("/load_user_metadata", post(h::load_user_metadata))
         .route("/save_user_metadata", post(h::save_user_metadata))
         .route("/update_session_metadata", post(h::update_session_metadata))
@@ -315,7 +323,11 @@ pub fn build_router(
             post(h::get_provider_message_offset),
         )
         .route("/search_all_providers", post(h::search_all_providers))
+        .route("/sync_sources", post(h::sync_sources))
+        .route("/sync_manifest", post(h::sync_manifest))
+        .route("/sync_file", post(h::sync_file))
         .route("/locate_session", post(h::locate_session))
+        .route("/search_sessions_by_id", post(h::search_sessions_by_id))
         // Archive commands
         .route("/get_archive_base_path", post(h::get_archive_base_path))
         .route("/list_archives", post(h::list_archives))
@@ -341,6 +353,7 @@ pub fn build_router(
         ));
 
     let api = Router::new()
+        .route("/health", get(health_handler))
         .route("/auth/login", post(auth_login_handler))
         .route("/auth/logout", post(auth_logout_handler))
         .merge(protected_api);
@@ -1273,6 +1286,40 @@ mod tests {
                 Request::builder()
                     .method(Method::GET)
                     .uri("/viewer/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_api_health_check() {
+        let app = build_router(test_state(None), "127.0.0.1", 3727, None, "/");
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/api/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_prefixed_router_serves_api_health() {
+        let app = build_router(test_state(None), "127.0.0.1", 3727, None, "/viewer");
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/viewer/api/health")
                     .body(Body::empty())
                     .unwrap(),
             )

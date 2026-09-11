@@ -69,6 +69,8 @@ const MAX_SESSION_PAGE_LIMIT: usize = 500;
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionPage {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offline: Option<bool>,
     pub sessions: Vec<ClaudeSession>,
     pub total: usize,
     pub offset: usize,
@@ -84,6 +86,12 @@ fn get_cache_path(project_path: &str) -> PathBuf {
 
 /// Load cache from disk
 fn load_cache(project_path: &str) -> SessionMetadataCache {
+    // Completed snapshots are immutable: never read a cache file from inside
+    // the archive (stale copies could shadow fresh parses) and never write
+    // one there (see `save_cache`).
+    if crate::storage::is_snapshot_data_path(Path::new(project_path)) {
+        return SessionMetadataCache::default();
+    }
     let cache_path = get_cache_path(project_path);
     if let Ok(content) = fs::read_to_string(&cache_path) {
         if let Ok(cache) = serde_json::from_str::<SessionMetadataCache>(&content) {
@@ -95,8 +103,48 @@ fn load_cache(project_path: &str) -> SessionMetadataCache {
     SessionMetadataCache::default()
 }
 
+/// Map an original path to its snapshot copy when a completed snapshot
+/// covers it. Returns `(effective_path, rewrite)` where `rewrite` holds
+/// `(snapshot_prefix, original_prefix)` for translating parser outputs back
+/// to the stable external contract.
+fn snapshot_effective_path(original: &str) -> (String, Option<(String, String)>) {
+    let original_path = Path::new(original);
+    if crate::storage::is_snapshot_data_path(original_path) {
+        return (original.to_string(), None);
+    }
+    if let Some(mapped) = crate::storage::map_original_path_to_snapshot(original_path) {
+        let mapped_str = mapped.to_string_lossy().to_string();
+        return (mapped_str.clone(), Some((mapped_str, original.to_string())));
+    }
+    (original.to_string(), None)
+}
+
+fn rewrite_snapshot_prefix(value: &str, snapshot_prefix: &str, original_prefix: &str) -> String {
+    if let Some(rest) = value.strip_prefix(snapshot_prefix) {
+        format!("{original_prefix}{rest}")
+    } else {
+        value.to_string()
+    }
+}
+
+fn rewrite_session_to_original(
+    session: &mut ClaudeSession,
+    snapshot_prefix: &str,
+    original_prefix: &str,
+) {
+    session.session_id =
+        rewrite_snapshot_prefix(&session.session_id, snapshot_prefix, original_prefix);
+    session.file_path =
+        rewrite_snapshot_prefix(&session.file_path, snapshot_prefix, original_prefix);
+}
+
 /// Save cache to disk atomically (best effort, errors are ignored)
 fn save_cache(project_path: &str, cache: &SessionMetadataCache) {
+    // Completed snapshots are immutable. Parser caches are derived state that
+    // belongs next to live sources, not inside the archive.
+    if crate::storage::is_snapshot_data_path(Path::new(project_path)) {
+        return;
+    }
     let cache_path = get_cache_path(project_path);
     if let Ok(content) = serde_json::to_string(cache) {
         let nonce = std::time::SystemTime::now()
@@ -1085,11 +1133,20 @@ pub async fn load_project_sessions_page(
         }
     }
 
-    tauri::async_runtime::spawn_blocking(move || {
-        load_project_sessions_page_blocking(project_path, exclude_sidechain, offset, limit)
+    // Filesystem first: parse the CCHV-owned copy when one covers this
+    // project, then translate paths back to the stable original contract.
+    let (effective_path, rewrite) = snapshot_effective_path(&project_path);
+    let mut page = tauri::async_runtime::spawn_blocking(move || {
+        load_project_sessions_page_blocking(effective_path, exclude_sidechain, offset, limit)
     })
     .await
-    .map_err(|e| format!("Task join error: {e}"))?
+    .map_err(|e| format!("Task join error: {e}"))??;
+    if let Some((snapshot_prefix, original_prefix)) = rewrite {
+        for session in &mut page.sessions {
+            rewrite_session_to_original(session, &snapshot_prefix, &original_prefix);
+        }
+    }
+    Ok(page)
 }
 
 /// The load itself. Separate from the command so the body stays at one indent
@@ -1358,6 +1415,7 @@ fn load_project_sessions_page_blocking(
     }
 
     Ok(SessionPage {
+        offline: None,
         sessions,
         total,
         offset,
@@ -1389,8 +1447,15 @@ pub async fn load_project_sessions(
         }
     }
 
+    let (effective_path, rewrite) = snapshot_effective_path(&project_path);
     tauri::async_runtime::spawn_blocking(move || {
-        load_project_sessions_blocking(project_path, exclude_sidechain)
+        let mut live_sessions = load_project_sessions_blocking(effective_path, exclude_sidechain);
+        if let Some((snapshot_prefix, original_prefix)) = rewrite {
+            for session in &mut live_sessions {
+                rewrite_session_to_original(session, &snapshot_prefix, &original_prefix);
+            }
+        }
+        crate::cache::sync_and_save_sessions(&project_path, "claude", &live_sessions)
     })
     .await
     .map(Ok)
@@ -1403,7 +1468,7 @@ pub async fn load_project_sessions(
 /// Infallible: a session file that cannot be read is skipped rather than
 /// failing the load. The command's `Result` is the IPC contract and stays; the
 /// `#[tauri::command]` attribute was hiding this from clippy.
-fn load_project_sessions_blocking(
+pub(crate) fn load_project_sessions_blocking(
     project_path: String,
     exclude_sidechain: Option<bool>,
 ) -> Vec<ClaudeSession> {
@@ -1915,17 +1980,33 @@ pub async fn load_session_messages(session_path: String) -> Result<Vec<ClaudeMes
     #[cfg(debug_assertions)]
     let start_time = std::time::Instant::now();
 
+    // Filesystem first: read the CCHV-owned copy when one covers this file.
+    // The chain, subagents, and message bytes all resolve inside the snapshot;
+    // the SQLite cache key stays the original path so the external contract
+    // (and the legacy offline fallback) is unchanged.
+    let (effective_session_path, _) = snapshot_effective_path(&session_path);
     // Resolve any cross-file continuation chain (see `chain.rs`) and load
     // every file in it, oldest first, so a session that Claude Code split
     // across files after running out of context still reads as one
     // conversation. For the common case (no chain) this is just `[session_path]`.
-    let chain = super::chain::resolve_session_chain(Path::new(&session_path));
+    let chain = super::chain::resolve_session_chain(Path::new(&effective_session_path));
     let mut messages: Vec<ClaudeMessage> = Vec::new();
     for (index, path) in chain.iter().enumerate() {
         let is_leaf = index + 1 == chain.len();
         match load_all_messages_from_file(path) {
             Ok(file_messages) => messages.extend(file_messages),
-            Err(error) if is_leaf => return Err(error),
+            Err(error) if is_leaf => {
+                if let Ok(conn) = crate::cache::open_connection() {
+                    if let Ok(Some(cached_messages)) =
+                        crate::cache::get_cached_session_messages(&conn, &session_path, "claude")
+                    {
+                        if !cached_messages.is_empty() {
+                            return Ok(cached_messages);
+                        }
+                    }
+                }
+                return Err(error);
+            }
             Err(error) => {
                 // A predecessor can disappear while Claude Code is rotating
                 // files. Preserve the readable part of the conversation and
@@ -1938,6 +2019,9 @@ pub async fn load_session_messages(session_path: String) -> Result<Vec<ClaudeMes
             }
         }
     }
+
+    // Persist to local SQLite cache so session is permanently preserved
+    crate::cache::cache_messages(&session_path, "claude", &messages);
 
     #[cfg(debug_assertions)]
     {
@@ -2095,7 +2179,8 @@ pub async fn get_session_subagents(session_path: String) -> Result<Vec<SubagentS
         return Ok(opencode_subagents(&session_path));
     }
 
-    let path = PathBuf::from(&session_path);
+    let (effective_session_path, rewrite) = snapshot_effective_path(&session_path);
+    let path = PathBuf::from(&effective_session_path);
     if !path.is_absolute() {
         return Ok(Vec::new());
     }
@@ -2131,9 +2216,16 @@ pub async fn get_session_subagents(session_path: String) -> Result<Vec<SubagentS
         let tool_use_id = read_subagent_tool_use_id(&meta_path);
         let workflow_run_id = workflow_run_id_for(&sa_path);
 
+        let file_path = sa_path.to_string_lossy().to_string();
+        let file_path = match &rewrite {
+            Some((snapshot_prefix, original_prefix)) => {
+                rewrite_snapshot_prefix(&file_path, snapshot_prefix, original_prefix)
+            }
+            None => file_path,
+        };
         sessions.push(SubagentSession {
             agent_id,
-            file_path: sa_path.to_string_lossy().to_string(),
+            file_path,
             message_count,
             file_size,
             first_message_time: first_time,
@@ -2470,13 +2562,38 @@ pub async fn load_session_messages_paginated(
     let start_time = std::time::Instant::now();
 
     let exclude = exclude_sidechain.unwrap_or(false);
-    let chain = super::chain::resolve_session_chain(Path::new(&session_path));
+    let (effective_session_path, _) = snapshot_effective_path(&session_path);
+    let chain = super::chain::resolve_session_chain(Path::new(&effective_session_path));
 
     let page = if chain.len() <= 1 {
         // Common case: no cross-file continuation. Same algorithm and
         // performance characteristics as before this feature existed.
-        let (messages, total_count, _) =
-            load_message_window_from_file(Path::new(&session_path), offset, limit, exclude)?;
+        let window_res = load_message_window_from_file(
+            Path::new(&effective_session_path),
+            offset,
+            limit,
+            exclude,
+        );
+        let (messages, total_count, _) = match window_res {
+            Ok(w) => w,
+            Err(e) => {
+                if let Ok(conn) = crate::cache::open_connection() {
+                    if let Ok(Some(cached_page)) =
+                        crate::cache::get_cached_session_messages_paginated(
+                            &conn,
+                            &session_path,
+                            "claude",
+                            offset,
+                            limit,
+                            exclude_sidechain,
+                        )
+                    {
+                        return Ok(cached_page);
+                    }
+                }
+                return Err(e);
+            }
+        };
         let next_offset = offset + messages.len();
         MessagePage {
             messages,

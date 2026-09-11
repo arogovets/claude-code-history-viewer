@@ -6,6 +6,7 @@ pub mod export;
 pub mod models;
 pub mod providers;
 pub mod remote;
+pub mod storage;
 pub mod utils;
 pub mod wsl;
 
@@ -48,6 +49,7 @@ use crate::commands::{
         write_text_file,
     },
     feedback::{get_system_info, open_github_issues, send_feedback},
+    kanban::{load_kanban, save_kanban},
     mcp_presets::{delete_mcp_preset, get_mcp_preset, load_mcp_presets, save_mcp_preset},
     metadata::{
         get_metadata_folder_path, get_session_display_name, is_project_hidden, load_user_metadata,
@@ -68,7 +70,7 @@ use crate::commands::{
         load_project_sessions, load_project_sessions_page, load_session_messages,
         load_session_messages_paginated, locate_session, open_resume_in_terminal,
         rename_opencode_session_title, rename_session_native, reset_session_native_name,
-        restore_file, search_messages,
+        restore_file, search_messages, search_sessions_by_id,
     },
     settings::{delete_preset, get_preset, load_presets, save_preset},
     stats::{
@@ -82,6 +84,8 @@ use crate::commands::{
     watcher::{start_file_watcher, stop_file_watcher},
     wsl::{detect_wsl_distros, is_wsl_available},
 };
+use crate::storage::coordinator::run_sync_pass;
+use crate::storage::index::{rebuild_snapshot_index, snapshot_sync_status};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -185,6 +189,17 @@ fn run_tauri() {
             as Arc<
                 Mutex<Option<notify_debouncer_mini::Debouncer<notify::RecommendedWatcher>>>,
             >)
+        .setup(|_app| {
+            // Filesystem first, from the first second: reconcile any snapshots
+            // finalized before a crash, snapshot available local sources, and
+            // keep syncing periodically while the app runs. All best effort —
+            // browsing serves the latest completed snapshot regardless.
+            tauri::async_runtime::spawn(async {
+                crate::storage::coordinator::sync_all_once().await;
+            });
+            crate::storage::coordinator::spawn_background_sync();
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             crate::cli::get_startup_session_hint,
             get_claude_folder_path,
@@ -198,6 +213,7 @@ fn run_tauri() {
             load_session_messages,
             load_session_messages_paginated,
             locate_session,
+            search_sessions_by_id,
             get_session_message_count,
             search_messages,
             get_session_subagents,
@@ -213,6 +229,8 @@ fn run_tauri() {
             open_github_issues,
             // Metadata commands
             get_metadata_folder_path,
+            load_kanban,
+            save_kanban,
             load_user_metadata,
             save_user_metadata,
             update_session_metadata,
@@ -265,6 +283,9 @@ fn run_tauri() {
             load_provider_messages_paginated,
             get_provider_message_offset,
             search_all_providers,
+            snapshot_sync_status,
+            rebuild_snapshot_index,
+            run_sync_pass,
             // Archive commands
             get_archive_base_path,
             list_archives,
@@ -553,6 +574,16 @@ fn run_server(args: &[String]) {
 
     let rt = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");
     rt.block_on(async {
+        // Filesystem-first sync on serve startup plus a periodic pass, mirroring
+        // the desktop coordinator. Best effort; the file watcher below keeps
+        // serving the latest completed snapshot regardless.
+        tokio::spawn(async {
+            crate::storage::coordinator::sync_all_once().await;
+            loop {
+                tokio::time::sleep(crate::storage::coordinator::SYNC_INTERVAL).await;
+                crate::storage::coordinator::sync_all_once().await;
+            }
+        });
         // Start background file watcher (sends events to broadcast channel)
         let _watcher_handle = start_server_file_watcher(&state);
 

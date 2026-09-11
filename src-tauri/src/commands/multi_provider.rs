@@ -115,47 +115,54 @@ pub async fn scan_all_projects(
 
     let mut all_projects = Vec::new();
 
-    // Claude (default path)
+    // Crash recovery first: index any snapshots finalized before a crash but
+    // never folded into SQLite. Best effort and usually a no-op.
+    crate::storage::index::best_effort_reconcile();
+
+    // Claude (default path) — filesystem first: snapshot, then parse the copy.
+    // The default base is derived from the home directory even when the live
+    // dir is gone, so preserved snapshots remain browsable after deletion.
     if providers_to_scan.iter().any(|p| p == "claude") {
-        let claude_base = claude_path.or_else(providers::claude::get_base_path);
+        let claude_base = claude_path
+            .or_else(providers::claude::get_base_path)
+            .or_else(|| {
+                crate::utils::home_dir().map(|h| h.join(".claude").to_string_lossy().to_string())
+            });
         if let Some(base) = claude_base {
-            match crate::commands::project::scan_projects(base).await {
-                Ok(mut projects) => {
-                    for p in &mut projects {
-                        if p.provider.is_none() {
-                            p.provider = Some("claude".to_string());
-                        }
-                    }
-                    all_projects.extend(projects);
-                }
-                Err(e) => {
-                    log::warn!("Claude scan failed: {e}");
+            let mut projects =
+                crate::commands::project::scan_claude_base_with_snapshot(base, None).await;
+            for p in &mut projects {
+                if p.provider.is_none() {
+                    p.provider = Some("claude".to_string());
                 }
             }
+            all_projects.extend(projects);
         }
 
-        // Claude (custom paths)
+        // Claude (custom paths) — same snapshot model per custom root. An
+        // invalid/gone custom dir must not drop its preserved snapshots, so a
+        // validation failure only skips the *live* read, never the snapshot.
         if let Some(ref custom_paths) = custom_claude_paths {
             for custom in custom_paths {
                 let custom_base = std::path::PathBuf::from(&custom.path);
                 if let Err(e) = crate::utils::validate_custom_claude_path(&custom_base) {
-                    log::warn!("Skipping invalid custom Claude path: {e}");
-                    continue;
+                    log::warn!(
+                        "Custom Claude path unavailable, reading preserved snapshot ({}): {e}",
+                        custom.path
+                    );
                 }
-                match crate::commands::project::scan_projects(custom.path.clone()).await {
-                    Ok(mut projects) => {
-                        for p in &mut projects {
-                            if p.provider.is_none() {
-                                p.provider = Some("claude".to_string());
-                            }
-                            p.custom_directory_label.clone_from(&custom.label);
-                        }
-                        all_projects.extend(projects);
+                let mut projects = crate::commands::project::scan_claude_base_with_snapshot(
+                    custom.path.clone(),
+                    custom.label.clone(),
+                )
+                .await;
+                for p in &mut projects {
+                    if p.provider.is_none() {
+                        p.provider = Some("claude".to_string());
                     }
-                    Err(e) => {
-                        log::warn!("Custom Claude path scan failed ({}): {e}", custom.path);
-                    }
+                    p.custom_directory_label.clone_from(&custom.label);
                 }
+                all_projects.extend(projects);
             }
         }
     }
@@ -354,6 +361,14 @@ pub async fn scan_all_projects(
     // Hide empty containers that have no session files regardless of provider.
     all_projects.retain(|project| project.session_count > 0);
 
+    let provider_scope = if providers_to_scan.len() == 1 {
+        Some(providers_to_scan[0].as_str())
+    } else {
+        None
+    };
+    let mut all_projects =
+        crate::cache::sync_and_save_projects(&all_projects, None, provider_scope);
+
     all_projects.sort_by(|a, b| {
         match (
             parse_rfc3339_utc(&a.last_modified),
@@ -365,7 +380,6 @@ pub async fn scan_all_projects(
             (None, None) => b.last_modified.cmp(&a.last_modified),
         }
     });
-    crate::cache::cache_projects(&all_projects, None);
     Ok(all_projects)
 }
 
@@ -436,8 +450,10 @@ pub async fn load_provider_sessions(
         _ => return Err(format!("Unknown provider: {provider}")),
     };
 
-    crate::cache::cache_sessions(&project_path, &provider, &sessions);
-    Ok(sessions)
+    let mut combined_sessions =
+        crate::cache::sync_and_save_sessions(&project_path, &provider, &sessions);
+    sort_sessions_by_recency(&mut combined_sessions);
+    Ok(combined_sessions)
 }
 
 fn sort_sessions_by_recency(sessions: &mut [ClaudeSession]) {
@@ -515,6 +531,7 @@ pub async fn load_provider_sessions_page(
     crate::cache::cache_sessions(&project_path, &provider, &page_sessions);
 
     Ok(crate::commands::session::SessionPage {
+        offline: None,
         sessions: page_sessions,
         total,
         offset,
