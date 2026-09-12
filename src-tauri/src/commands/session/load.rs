@@ -2736,7 +2736,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_load_session_messages_basic() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         let content = format!(
@@ -2757,7 +2759,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_load_session_messages_excludes_summary() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         let content = format!(
@@ -2782,7 +2786,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_load_session_messages_empty_file() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
         let file_path = create_test_jsonl_file(&temp_dir, "empty.jsonl", "");
 
@@ -2793,7 +2799,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_load_session_messages_with_empty_lines() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         let content = format!(
@@ -2811,7 +2819,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_load_session_messages_file_not_found() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let result = load_session_messages("/nonexistent/path/file.jsonl".to_string()).await;
 
         assert!(result.is_err());
@@ -2819,7 +2829,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_load_session_messages_with_malformed_json() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         // First line is valid, second is malformed
@@ -2840,7 +2852,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_load_session_messages_paginated_basic() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         // Create 5 messages
@@ -2870,7 +2884,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_load_session_messages_paginated_merges_continuation_chain() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
         let older_content = format!(
             "{}\n{}\n",
@@ -2914,7 +2930,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_load_session_messages_paginated_offset() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         let mut content = String::new();
@@ -2944,7 +2962,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_load_session_messages_paginated_exclude_sidechain() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         let content = r#"{"uuid":"uuid-1","sessionId":"session-1","timestamp":"2025-06-26T10:00:00Z","type":"user","message":{"role":"user","content":"Hello"},"isSidechain":false}
@@ -2969,7 +2989,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_get_session_message_count() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         let mut content = String::new();
@@ -2995,7 +3017,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_get_session_message_count_exclude_sidechain() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         let content = r#"{"uuid":"uuid-1","sessionId":"session-1","timestamp":"2025-06-26T10:00:00Z","type":"user","message":{"role":"user","content":"Hello"},"isSidechain":false}
@@ -3020,7 +3044,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_get_session_message_offset_basic() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         let mut content = String::new();
@@ -3058,7 +3084,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_get_session_message_offset_skips_invisible_lines() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         // sidechain + summary lines must not shift the offset when excluded
@@ -3086,7 +3114,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_load_project_sessions_basic() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         let content = format!(
@@ -3109,7 +3139,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_load_project_sessions_prefers_jsonl_cwd_for_project_name() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
         let project_dir = temp_dir.path().join("-home-cym-claude-prompt-design");
         std::fs::create_dir_all(&project_dir).unwrap();
@@ -3143,7 +3175,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_load_project_sessions_prefers_verified_folder_over_stale_cwd() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
         // The folder name must decode to a directory that really exists. This
         // borrowed `/usr/lib`, which Windows does not have (#541); it is built
@@ -3185,7 +3219,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_load_project_sessions_with_summary() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         let content = format!(
@@ -3212,7 +3248,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_load_project_sessions_multiple_files() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         // Create first session file
@@ -3243,7 +3281,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_load_project_sessions_page_uses_cache_and_offsets() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         let sessions = [
@@ -3311,7 +3351,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_load_project_sessions_page_rejects_invalid_project_path() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let empty = load_project_sessions_page("  ".to_string(), None, None, None).await;
         assert_eq!(empty.err().unwrap(), "project_path is required");
 
@@ -3324,7 +3366,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_load_project_sessions_page_skips_invalid_candidates() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         let valid_1 = create_test_jsonl_file(
@@ -3382,7 +3426,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_load_project_sessions_page_total_stays_cumulative_without_disk_cache() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         let valid_1 = create_test_jsonl_file(
@@ -3434,7 +3480,9 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_load_project_sessions_page_ignores_symlinked_jsonl_outside_project() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
         let outside_dir = TempDir::new().unwrap();
         let outside_file = create_test_jsonl_file(
@@ -3463,7 +3511,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_load_project_sessions_exclude_sidechain() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         let content = r#"{"uuid":"uuid-1","sessionId":"session-1","timestamp":"2025-06-26T10:00:00Z","type":"user","message":{"role":"user","content":"Hello"},"isSidechain":false}
@@ -3489,7 +3539,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_load_project_sessions_with_tool_use() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         let content = r#"{"uuid":"uuid-1","sessionId":"session-1","timestamp":"2025-06-26T10:00:00Z","type":"user","message":{"role":"user","content":"Read file"}}
@@ -3509,7 +3561,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_load_project_sessions_empty_directory() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         let result =
@@ -3520,7 +3574,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_incremental_parsing_on_file_append() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         use std::io::Write;
 
         let temp_dir = TempDir::new().unwrap();
@@ -3559,7 +3615,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_message_with_missing_uuid_generates_new_one() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         // Message without uuid
@@ -3581,7 +3639,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_message_with_missing_session_id() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         // Message without sessionId
@@ -3601,7 +3661,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_assistant_message_with_usage_stats() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         let content = r#"{"uuid":"uuid-1","sessionId":"session-1","timestamp":"2025-06-26T10:00:00Z","type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Hello!"}],"id":"msg_123","model":"claude-opus-4-20250514","stop_reason":"end_turn","usage":{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":20,"cache_read_input_tokens":10}}}
@@ -3631,7 +3693,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_session_summary_fallback_first_user_message() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         // Session with no summary but has user messages
@@ -3653,7 +3717,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_session_summary_fallback_first_assistant_text() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         // Session with no summary, no user messages, but has assistant text
@@ -3674,7 +3740,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_session_summary_fallback_last_user_message() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         // Session with command message (not genuine text), followed by real user message
@@ -3697,7 +3765,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_session_summary_fallback_incremental_preserves_values() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         // Initial content with user message
@@ -3744,7 +3814,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_extract_assistant_text_with_string_content() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         // Assistant message with string content (not array)
@@ -3768,7 +3840,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_extract_assistant_text_min_length() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         // Assistant message with very short text (< 10 chars, should be ignored)
@@ -3794,7 +3868,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_should_extract_rename_from_system_message() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         let content = format!(
@@ -3815,7 +3891,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_should_use_last_rename_when_multiple() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         let content = format!(
@@ -3837,7 +3915,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_should_prioritize_rename_over_other_summaries() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         let content = format!(
@@ -3860,7 +3940,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_should_fallback_to_existing_summary() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         // No rename message — should use first user content as summary
@@ -3881,7 +3963,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_should_not_count_system_as_message() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         let content = format!(
@@ -3903,7 +3987,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_should_ignore_empty_rename() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         let content = format!(
@@ -3960,7 +4046,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_phase2_rename_beyond_metadata_lines() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         // Build a fixture with > METADATA_PHASE_LINES (100) to force Phase 2 parsing
@@ -4000,7 +4088,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_incremental_append_then_rename() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
         let file_path = temp_dir.path().join("test.jsonl");
 
@@ -4052,7 +4142,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_should_extract_rename_from_branch_custom_title() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         let content = format!(
@@ -4077,7 +4169,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_should_use_last_naming_event_regardless_of_kind() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         // /branch (custom-title) happens, then a later /rename overrides it
@@ -4101,7 +4195,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_should_ignore_empty_custom_title() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         let content = format!(
@@ -4139,7 +4235,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_phase2_custom_title_beyond_metadata_lines() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         // Build a fixture with > METADATA_PHASE_LINES (100) to force Phase 2 parsing
@@ -4180,7 +4278,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_incremental_append_then_custom_title() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
         let file_path = temp_dir.path().join("test.jsonl");
 
