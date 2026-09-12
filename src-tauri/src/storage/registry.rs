@@ -425,6 +425,21 @@ fn spec_table() -> Vec<ProviderArchiveSpec> {
             rewrite_outputs: true,
             blob_merge: None,
         },
+        ProviderArchiveSpec {
+            provider: "copilot",
+            discover: providers::copilot::archive_discover,
+            scan: providers::copilot::archive_scan,
+            load_sessions: providers::copilot::archive_load_sessions,
+            load_messages: providers::copilot::archive_load_messages,
+            search: Some(providers::copilot::archive_search),
+            locate: providers::copilot::archive_locate,
+            // Fan-out across CLI + vscode snapshots: each batch is rewritten
+            // against its own snapshot inside the glue, so the generic
+            // single-source rewrite must stay off (it would also miss the
+            // base64-encoded sub-paths inside merged `copilot://` refs).
+            rewrite_outputs: false,
+            blob_merge: None,
+        },
     ]
 }
 
@@ -3790,7 +3805,10 @@ mod conformance_tests {
             .ok()
             .and_then(|d| serde_json::from_str(&d).ok())
             .unwrap_or_default();
-        if !history.iter().any(|t| t.get("id").and_then(|v| v.as_str()) == Some(id)) {
+        if !history
+            .iter()
+            .any(|t| t.get("id").and_then(|v| v.as_str()) == Some(id))
+        {
             history.push(serde_json::json!({
                 "id": id,
                 "ts": 1_757_000_000_000u64,
@@ -3823,7 +3841,13 @@ mod conformance_tests {
         let ext = sandbox
             .path()
             .join("Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev");
-        cline_task(&ext, "task-1", "/w/clineproj", "build it", &format!("hello {marker}"));
+        cline_task(
+            &ext,
+            "task-1",
+            "/w/clineproj",
+            "build it",
+            &format!("hello {marker}"),
+        );
         cline_task(&ext, "task-2", "/w/clineproj", "second", "second");
 
         let projects = scan_provider("cline").await.unwrap();
@@ -3843,10 +3867,12 @@ mod conformance_tests {
             .expect("task-1")
             .file_path
             .clone();
-        assert!(
-            message_text(&load_provider_messages("cline", &s1, &sources).await.unwrap())
-                .contains(marker)
-        );
+        assert!(message_text(
+            &load_provider_messages("cline", &s1, &sources)
+                .await
+                .unwrap()
+        )
+        .contains(marker));
         assert!(!search_provider("cline", marker, 10, &sources)
             .await
             .unwrap()
@@ -3865,7 +3891,13 @@ mod conformance_tests {
             serde_json::to_string_pretty(&kept).unwrap().as_bytes(),
         );
         std::fs::remove_dir_all(ext.join("tasks/task-1")).unwrap();
-        cline_task(&ext, "task-2", "/w/clineproj", "second", &format!("more {marker}"));
+        cline_task(
+            &ext,
+            "task-2",
+            "/w/clineproj",
+            "second",
+            &format!("more {marker}"),
+        );
         cline_task(&ext, "task-3", "/w/clineproj", "third", "third");
         let projects_after = scan_provider("cline").await.unwrap();
         assert_eq!(projects_after.len(), 1);
@@ -3873,12 +3905,13 @@ mod conformance_tests {
             load_provider_sessions("cline", &projects_after[0].path, &read_sources("cline"))
                 .await
                 .unwrap();
-        assert_eq!(sessions_after.len(), 3, "task-1 preserved + task-2' + task-3");
+        assert_eq!(
+            sessions_after.len(),
+            3,
+            "task-1 preserved + task-2' + task-3"
+        );
 
-        std::fs::remove_dir_all(
-            sandbox.path().join("Library/Application Support/Code"),
-        )
-        .unwrap();
+        std::fs::remove_dir_all(sandbox.path().join("Library/Application Support/Code")).unwrap();
         assert_eq!(scan_provider("cline").await.unwrap().len(), 1);
         let sources = read_sources("cline");
         assert_eq!(
@@ -3888,9 +3921,156 @@ mod conformance_tests {
                 .len(),
             3
         );
-        assert!(
-            message_text(&load_provider_messages("cline", &s1, &sources).await.unwrap())
-                .contains(marker)
+        assert!(message_text(
+            &load_provider_messages("cline", &s1, &sources)
+                .await
+                .unwrap()
+        )
+        .contains(marker));
+    }
+
+    // -- copilot (cli + vscode aggregate) ------------------------------------
+
+    fn copilot_cli_session(base: &Path, session_id: &str, cwd: &str, texts: &[&str]) {
+        let dir = base.join("session-state").join(session_id);
+        let mut lines = vec![serde_json::json!({
+            "type": "session.start",
+            "data": {"sessionId": session_id, "context": {"cwd": cwd}},
+            "timestamp": "2026-01-01T00:00:00.000Z",
+        })
+        .to_string()];
+        for text in texts {
+            lines.push(
+                serde_json::json!({
+                    "type": "user.message",
+                    "data": {"content": text},
+                    "timestamp": "2026-01-01T00:00:01.000Z",
+                })
+                .to_string(),
+            );
+        }
+        write_file(&dir.join("events.jsonl"), lines.join("\n").as_bytes());
+    }
+
+    fn copilot_vscode_session(user: &Path, ws: &str, session_id: &str, text: &str) {
+        let ws_dir = user.join("workspaceStorage").join(ws);
+        write_file(
+            &ws_dir.join("workspace.json"),
+            br#"{"folder":"file:///w/copilotproj"}"#,
         );
+        write_file(
+            &ws_dir
+                .join("chatSessions")
+                .join(format!("{session_id}.jsonl")),
+            serde_json::json!({"kind": 0, "v": {
+                "sessionId": session_id,
+                "creationDate": 1779490058917u64,
+                "requests": [{"message": {"text": text}, "response": []}],
+            }})
+            .to_string()
+            .as_bytes(),
+        );
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn copilot_archive_conformance() {
+        let sandbox = crate::test_utils::SandboxHome::new();
+        let _env = ClearEnvGuard::clear(PROVIDER_ENVS);
+        let marker = "conformance-marker-copilot";
+        let cli_base = sandbox.path().join(".copilot");
+        let user = sandbox.path().join("Library/Application Support/Code/User");
+        copilot_cli_session(
+            &cli_base,
+            "11111111-1111-1111-1111-111111111111",
+            "/w/copilotproj",
+            &[&format!("hello {marker}")],
+        );
+        copilot_vscode_session(
+            &user,
+            "wshash1",
+            "vscode-sess-1",
+            &format!("vscode hi {marker}"),
+        );
+
+        let projects = scan_provider("copilot").await.unwrap();
+        assert_eq!(projects.len(), 1, "merged by folder: {projects:?}");
+        assert!(projects[0].path.starts_with("copilot://"));
+        assert!(!projects[0].path.contains(".claude-history-viewer/data"));
+        let project = projects[0].path.clone();
+
+        let sources = read_sources("copilot");
+        assert_eq!(sources.len(), 2, "cli + vscode sources");
+        let sessions = load_provider_sessions("copilot", &project, &sources)
+            .await
+            .unwrap();
+        assert_eq!(sessions.len(), 2, "cli + vscode sessions: {sessions:?}");
+        let cli_sess = sessions
+            .iter()
+            .find(|s| s.entrypoint.as_deref() == Some("copilot-cli"))
+            .expect("cli session")
+            .file_path
+            .clone();
+        let vsc_sess = sessions
+            .iter()
+            .find(|s| s.entrypoint.as_deref() == Some("copilot-vscode"))
+            .expect("vscode session")
+            .file_path
+            .clone();
+        assert!(message_text(
+            &load_provider_messages("copilot", &cli_sess, &sources)
+                .await
+                .unwrap()
+        )
+        .contains(marker));
+        assert!(message_text(
+            &load_provider_messages("copilot", &vsc_sess, &sources)
+                .await
+                .unwrap()
+        )
+        .contains(marker));
+        assert!(!search_provider("copilot", marker, 10, &sources)
+            .await
+            .unwrap()
+            .is_empty());
+
+        // Disappearance: delete the CLI session upstream, add another vscode one.
+        std::fs::remove_dir_all(
+            cli_base.join("session-state/11111111-1111-1111-1111-111111111111"),
+        )
+        .unwrap();
+        copilot_cli_session(
+            &cli_base,
+            "22222222-2222-2222-2222-222222222222",
+            "/w/copilotproj",
+            &["second"],
+        );
+        copilot_vscode_session(&user, "wshash1", "vscode-sess-2", "third");
+        let projects_after = scan_provider("copilot").await.unwrap();
+        assert_eq!(projects_after.len(), 1);
+        let sessions_after =
+            load_provider_sessions("copilot", &projects_after[0].path, &read_sources("copilot"))
+                .await
+                .unwrap();
+        assert_eq!(sessions_after.len(), 4, "deleted CLI preserved + 3 live");
+
+        // Both live roots vanish; everything keeps working.
+        std::fs::remove_dir_all(&cli_base).unwrap();
+        std::fs::remove_dir_all(sandbox.path().join("Library/Application Support/Code")).unwrap();
+        assert_eq!(scan_provider("copilot").await.unwrap().len(), 1);
+        let sources = read_sources("copilot");
+        assert_eq!(
+            load_provider_sessions("copilot", &project, &sources)
+                .await
+                .unwrap()
+                .len(),
+            4
+        );
+        assert!(message_text(
+            &load_provider_messages("copilot", &cli_sess, &sources)
+                .await
+                .unwrap()
+        )
+        .contains(marker));
     }
 }
