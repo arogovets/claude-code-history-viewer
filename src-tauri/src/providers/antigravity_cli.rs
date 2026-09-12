@@ -482,6 +482,7 @@ fn collect_sessions(root: &Path) -> Vec<CliSession> {
                 .and_then(|e| e.display.clone())
                 .or_else(|| resolve_label_from_session_dir(&dir))
                 .or_else(|| first_user_text(&messages))
+                .map(|text| summarize_session_prompt(&text))
                 .map(|text| truncate_chars(&text, SUMMARY_MAX_CHARS));
             let workspace = entry
                 .and_then(|e| e.workspace.clone())
@@ -850,6 +851,34 @@ fn clean_user_prompt_text(text: &str) -> String {
     trimmed.to_string()
 }
 
+/// Replace the repetitive boilerplate in audio-transcription prompts with the
+/// input filename. Antigravity creates one CLI session per audio chunk, and
+/// those prompts all begin with the same instruction; using the full prompt as
+/// the session title makes every row look identical even though the paths (and
+/// therefore the chunks) differ.
+fn summarize_session_prompt(text: &str) -> String {
+    let cleaned = clean_user_prompt_text(text);
+    const AUDIO_PROMPT_PREFIX: &str = "You are an expert audio transcription system.";
+
+    let Some(rest) = cleaned.strip_prefix(AUDIO_PROMPT_PREFIX) else {
+        return cleaned;
+    };
+    let Some(rest) = rest.strip_prefix(" Use view_file on ") else {
+        return cleaned;
+    };
+    let Some((audio_path, _)) = rest.split_once(" and transcribe") else {
+        return cleaned;
+    };
+    let audio_path = audio_path.trim();
+    let filename = Path::new(audio_path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or(audio_path);
+
+    format!("Audio transcription: {filename}")
+}
+
 fn truncate_chars(text: &str, max_chars: usize) -> String {
     match text.char_indices().nth(max_chars) {
         Some((idx, _)) => format!("{}...", &text[..idx]),
@@ -1053,6 +1082,41 @@ mod tests {
         assert_eq!(sessions[0].session_id, "conv-orphan");
         assert_eq!(sessions[0].summary.as_deref(), Some("orphan prompt"));
         assert_eq!(sessions[0].project_name, FALLBACK_PROJECT_NAME);
+    }
+
+    #[test]
+    fn load_sessions_distinguishes_audio_transcription_chunks_in_titles() {
+        let temp = TempDir::new().expect("temp dir");
+        let root = cli_root(&temp);
+        let prompt = |path: &str| {
+            serde_json::json!({
+                "step_index": 0,
+                "source": "USER_EXPLICIT",
+                "type": "USER_INPUT",
+                "content": format!(
+                    "<USER_REQUEST>\nYou are an expert audio transcription system. Use view_file on {path} and transcribe the speech verbatim.\n</USER_REQUEST>"
+                ),
+                "created_at": "2026-06-24T08:00:00Z"
+            })
+            .to_string()
+        };
+        let prompt_a = prompt("/tmp/chunk_000_0_180.mp3");
+        let prompt_b = prompt("/tmp/chunk_005_900_1080.mp3");
+        write_transcript(&root, "chunk-a", &[prompt_a.as_str()]);
+        write_transcript(&root, "chunk-b", &[prompt_b.as_str()]);
+
+        let mut sessions = load_sessions_from_root(&root, UNKNOWN_WORKSPACE);
+        sessions.sort_by(|a, b| a.session_id.cmp(&b.session_id));
+
+        assert_eq!(sessions.len(), 2);
+        assert_eq!(
+            sessions[0].summary.as_deref(),
+            Some("Audio transcription: chunk_000_0_180.mp3")
+        );
+        assert_eq!(
+            sessions[1].summary.as_deref(),
+            Some("Audio transcription: chunk_005_900_1080.mp3")
+        );
     }
 
     #[test]

@@ -440,6 +440,17 @@ fn spec_table() -> Vec<ProviderArchiveSpec> {
             rewrite_outputs: false,
             blob_merge: None,
         },
+        ProviderArchiveSpec {
+            provider: "antigravity",
+            discover: providers::antigravity::archive_discover,
+            scan: providers::antigravity::archive_scan,
+            load_sessions: providers::antigravity::archive_load_sessions,
+            load_messages: providers::antigravity::archive_load_messages,
+            search: Some(providers::antigravity::archive_search),
+            locate: providers::antigravity::archive_locate,
+            rewrite_outputs: true,
+            blob_merge: None,
+        },
     ]
 }
 
@@ -3576,6 +3587,151 @@ mod conformance_tests {
             message_text(&load_provider_messages("grok", &s1, &sources).await.unwrap())
                 .contains(marker)
         );
+    }
+
+    // -- antigravity (desktop + cli) -----------------------------------------
+
+    fn antigravity_desktop_session(root: &Path, session_id: &str, model: &str) {
+        let dir = root
+            .join(".token-monitor")
+            .join("rpc-cache")
+            .join("v1")
+            .join(session_id);
+        let record = serde_json::json!({
+            "recordType": "usage",
+            "sequence": 1,
+            "model": model,
+            "inputTokens": 100,
+            "outputTokens": 200,
+            "cacheReadTokens": 50,
+            "cacheWriteTokens": 25,
+            "raw": {"chatModel": {"chatStartMetadata": {"createdAt": "2026-04-12T10:00:00Z"}}},
+        });
+        write_file(
+            &dir.join("usage.jsonl"),
+            serde_json::to_string(&record).unwrap().as_bytes(),
+        );
+    }
+
+    fn antigravity_cli_session(home: &Path, workspace: &str, conversation: &str, text: &str) {
+        let cli_root = home.join(".gemini").join("antigravity-cli");
+        let history_path = cli_root.join("history.jsonl");
+        let mut existing = std::fs::read_to_string(&history_path).unwrap_or_default();
+        existing.push_str(
+            &serde_json::json!({
+                "display": text,
+                "timestamp": 1750500000000u64,
+                "workspace": workspace,
+                "conversationId": conversation,
+            })
+            .to_string(),
+        );
+        existing.push('\n');
+        write_file(history_path.as_path(), existing.as_bytes());
+        let logs = cli_root
+            .join("brain")
+            .join(conversation)
+            .join(".system_generated")
+            .join("logs");
+        write_file(
+            &logs.join("transcript_full.jsonl"),
+            format!(
+                "{{\"step_index\": 0, \"source\": \"USER_EXPLICIT\", \"type\": \"USER_INPUT\", \"status\": \"DONE\", \"content\": \"{text}\", \"created_at\": \"2026-06-21T10:00:00Z\"}}\n"
+            )
+            .as_bytes(),
+        );
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn antigravity_archive_conformance() {
+        let sandbox = crate::test_utils::SandboxHome::new();
+        let _env = ClearEnvGuard::clear(PROVIDER_ENVS);
+        let marker = "conformance-marker-antigravity";
+        let desktop_root = sandbox.path().join(".gemini").join("antigravity");
+        antigravity_desktop_session(&desktop_root, "sess-desktop-1", &format!("model-{marker}"));
+        antigravity_cli_session(
+            sandbox.path(),
+            "/tmp/ag-cli-proj",
+            "conv-1",
+            &format!("hello {marker}"),
+        );
+
+        let projects = scan_provider("antigravity").await.unwrap();
+        assert_eq!(projects.len(), 2, "desktop + cli: {projects:?}");
+        for project in &projects {
+            assert!(!project.path.contains(".claude-history-viewer/data"));
+        }
+        let desktop_project = projects
+            .iter()
+            .find(|p| p.name == "Antigravity")
+            .expect("desktop project")
+            .path
+            .clone();
+        let cli_project = projects
+            .iter()
+            .find(|p| p.path.starts_with("antigravity-cli://"))
+            .expect("cli project")
+            .path
+            .clone();
+
+        let sources = read_sources("antigravity");
+        assert_eq!(sources.len(), 2, "desktop + cli sources");
+        let desktop_sessions = load_provider_sessions("antigravity", &desktop_project, &sources)
+            .await
+            .unwrap();
+        assert_eq!(desktop_sessions.len(), 1);
+        let d1 = desktop_sessions[0].file_path.clone();
+        assert!(message_text(
+            &load_provider_messages("antigravity", &d1, &sources)
+                .await
+                .unwrap()
+        )
+        .contains(marker));
+        let cli_sessions = load_provider_sessions("antigravity", &cli_project, &sources)
+            .await
+            .unwrap();
+        assert_eq!(cli_sessions.len(), 1);
+        // CLI search hits transcript content.
+        assert!(!search_provider("antigravity", marker, 10, &sources)
+            .await
+            .unwrap()
+            .is_empty());
+
+        // Disappearance: delete desktop session upstream, add another CLI one.
+        std::fs::remove_dir_all(desktop_root.join(".token-monitor/rpc-cache/v1/sess-desktop-1"))
+            .unwrap();
+        antigravity_desktop_session(&desktop_root, "sess-desktop-2", "other-model");
+        antigravity_cli_session(sandbox.path(), "/tmp/ag-cli-proj", "conv-2", "second");
+        let projects_after = scan_provider("antigravity").await.unwrap();
+        assert_eq!(projects_after.len(), 2);
+        let desktop_after = load_provider_sessions(
+            "antigravity",
+            &desktop_project,
+            &read_sources("antigravity"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(desktop_after.len(), 2, "sess-desktop-1 preserved + sess-2");
+
+        // Both live roots vanish; everything keeps working.
+        std::fs::remove_dir_all(desktop_root).unwrap();
+        std::fs::remove_dir_all(sandbox.path().join(".gemini/antigravity-cli")).unwrap();
+        assert_eq!(scan_provider("antigravity").await.unwrap().len(), 2);
+        let sources = read_sources("antigravity");
+        assert_eq!(
+            load_provider_sessions("antigravity", &desktop_project, &sources)
+                .await
+                .unwrap()
+                .len(),
+            2
+        );
+        assert!(message_text(
+            &load_provider_messages("antigravity", &d1, &sources)
+                .await
+                .unwrap()
+        )
+        .contains(marker));
     }
 
     // -- kimi (legacy + code) -------------------------------------------------

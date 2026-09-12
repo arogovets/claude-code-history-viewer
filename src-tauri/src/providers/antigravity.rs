@@ -83,6 +83,57 @@ fn read_manifest(dir: &std::path::Path) -> Option<ManifestInfo> {
     })
 }
 
+/// Returns whether a brain session contains a plaintext transcript that the
+/// transcript provider can load. Token-monitor state may point at a sibling
+/// rpc-cache directory for the same session; the brain copy is the source of
+/// the actual conversation text.
+fn has_brain_transcript(session_dir: &Path) -> bool {
+    let logs = session_dir.join(".system_generated").join("logs");
+    ["transcript_full.jsonl", "transcript.jsonl"]
+        .iter()
+        .map(|name| logs.join(name))
+        .any(|path| std::fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_file()))
+}
+
+/// Antigravity session IDs are used as path components below. Keep this
+/// allowlist in sync with the state scanner rather than trusting JSON keys.
+fn is_safe_session_id(session_id: &str) -> bool {
+    !session_id.is_empty()
+        && session_id
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-'))
+}
+
+/// Prefer the plaintext brain directory when it exists, even if persisted
+/// token-monitor state recorded the adjacent rpc-cache directory as the
+/// session's file path. Without this, `load_messages` falls back to synthetic
+/// token-usage turns and every mixed-layout session appears truncated.
+fn preferred_brain_session_dir(root: &Path, session_id: &str) -> Option<PathBuf> {
+    if !is_safe_session_id(session_id) {
+        return None;
+    }
+    let brain_dir = root.join("brain").join(session_id);
+    if std::fs::symlink_metadata(&brain_dir).is_ok_and(|meta| meta.file_type().is_dir())
+        && has_brain_transcript(&brain_dir)
+    {
+        Some(brain_dir)
+    } else {
+        None
+    }
+}
+
+/// Resolve the brain transcript corresponding to a session path recorded by
+/// the token monitor. This handles both freshly synthesized state and older
+/// persisted state whose `latest.file_path` still points at rpc-cache.
+fn brain_session_for_path(session_path: &str) -> Option<PathBuf> {
+    let root = marker_rooted_path(session_path)?;
+    let session_id = Path::new(session_path)
+        .file_name()?
+        .to_str()
+        .filter(|id| is_safe_session_id(id))?;
+    preferred_brain_session_dir(&root, session_id)
+}
+
 pub struct UsageSummary {
     pub call_count: usize,
     pub first_ts_ms: u64,
@@ -185,7 +236,12 @@ fn scan_desktop_projects() -> Result<Vec<ClaudeProject>, String> {
     let Some(root) = resolve_antigravity_root() else {
         return Ok(vec![]);
     };
-    let state = load_antigravity_state_impl(&root)?;
+    scan_desktop_projects_from_root(&root)
+}
+
+/// Snapshot/live-explicit variant of [`scan_desktop_projects`].
+pub(crate) fn scan_desktop_projects_from_root(root: &Path) -> Result<Vec<ClaudeProject>, String> {
+    let state = load_antigravity_state_impl(root)?;
     if state.sessions.is_empty() {
         return Ok(vec![]);
     }
@@ -408,43 +464,113 @@ pub fn load_sessions(path: &str, _exclude_sidechain: bool) -> Result<Vec<ClaudeS
         Some(root) => root,
         None => return Ok(vec![]),
     };
-    let state = load_antigravity_state_impl(&root)?;
+    load_desktop_sessions_from_roots(&root, &root)
+}
+
+/// Remap a live absolute path into snapshot space (no-op when both roots are
+/// identical, i.e. live reads).
+fn remap_live_to_snapshot(path: PathBuf, live_root: &Path, snapshot_root: &Path) -> PathBuf {
+    if live_root == snapshot_root {
+        return path;
+    }
+    let live = live_root.to_string_lossy().to_string();
+    let snap = snapshot_root.to_string_lossy().to_string();
+    if live.is_empty() || snap.is_empty() {
+        return path;
+    }
+    let s = path.to_string_lossy().to_string();
+    if let Some(rest) = s.strip_prefix(&live) {
+        return PathBuf::from(format!("{snap}{rest}"));
+    }
+    path
+}
+
+/// Explicit-root variant of the desktop branch of [`load_sessions`]: lists
+/// every session in the state at `snapshot_root`, remapping recorded live
+/// paths through `live_root`.
+pub(crate) fn load_desktop_sessions_from_roots(
+    snapshot_root: &Path,
+    live_root: &Path,
+) -> Result<Vec<ClaudeSession>, String> {
+    let root = snapshot_root;
+    let state = load_antigravity_state_impl(root)?;
     let mut sessions = Vec::new();
 
     for (session_id, session_state) in state.sessions {
-        let session_dir = std::path::PathBuf::from(&session_state.latest.file_path);
-        let usage_path = session_dir.join("usage.jsonl");
+        let recorded_session_dir = remap_live_to_snapshot(
+            std::path::PathBuf::from(&session_state.latest.file_path),
+            live_root,
+            snapshot_root,
+        );
+        let session_dir = preferred_brain_session_dir(root, &session_id)
+            .unwrap_or_else(|| recorded_session_dir.clone());
+        // Usage data normally lives beside the transcript in rpc-cache. Keep
+        // using it for session statistics after switching the user-facing path
+        // to the brain directory.
+        let rpc_usage_path = get_antigravity_rpc_cache_root(root)
+            .join(&session_id)
+            .join("usage.jsonl");
+        let usage_path = if std::fs::symlink_metadata(&rpc_usage_path)
+            .is_ok_and(|meta| meta.file_type().is_file())
+        {
+            rpc_usage_path
+        } else if session_dir != recorded_session_dir {
+            // Keep the recorded location as a fallback for older state files
+            // whose session id is no longer present in rpc-cache.
+            recorded_session_dir.join("usage.jsonl")
+        } else {
+            session_dir.join("usage.jsonl")
+        };
         let summary = summarize_usage_file(&usage_path);
         let manifest = read_manifest(&session_dir);
         let step_count = manifest.as_ref().map(|m| m.step_count).unwrap_or(0);
+
+        let transcript_messages = if has_brain_transcript(&session_dir) {
+            super::antigravity_cli::load_messages_from_root(root, &session_dir.to_string_lossy())
+                .ok()
+        } else {
+            None
+        };
+
         let first_ts = if summary.first_ts_ms > 0 {
             ms_to_rfc3339(summary.first_ts_ms)
+        } else if let Some(message) = transcript_messages.as_ref().and_then(|m| m.first()) {
+            message.timestamp.clone()
         } else {
             ms_to_rfc3339(session_state.lifecycle.last_seen_at)
         };
         let last_ts = if summary.last_ts_ms > 0 {
             ms_to_rfc3339(summary.last_ts_ms)
+        } else if let Some(message) = transcript_messages.as_ref().and_then(|m| m.last()) {
+            message.timestamp.clone()
         } else {
             ms_to_rfc3339(session_state.latest.last_modified_ms)
         };
 
-        let transcript_logs = session_dir.join(".system_generated").join("logs");
-        let has_transcript = transcript_logs.is_dir();
+        let message_count = transcript_messages
+            .as_ref()
+            .filter(|messages| !messages.is_empty())
+            .map_or(
+                session_state
+                    .latest
+                    .message_count
+                    .unwrap_or(summary.call_count as u32) as usize,
+                Vec::len,
+            );
 
-        let message_count = if has_transcript {
-            session_state
-                .latest
-                .message_count
-                .filter(|&c| c > 0)
-                .unwrap_or(summary.call_count as u32) as usize
-        } else {
-            session_state
-                .latest
-                .message_count
-                .unwrap_or(summary.call_count as u32) as usize
-        };
-
-        let has_tool_use = has_transcript;
+        let has_tool_use = transcript_messages.as_ref().is_some_and(|messages| {
+            messages.iter().any(|message| {
+                message
+                    .content
+                    .as_ref()
+                    .and_then(Value::as_array)
+                    .is_some_and(|blocks| {
+                        blocks
+                            .iter()
+                            .any(|block| block["type"].as_str() == Some("tool_use"))
+                    })
+            })
+        });
 
         let display_label = if summary.call_count > 0 || step_count > 0 {
             format!(
@@ -516,6 +642,357 @@ fn admit_usage_jsonl(path: &Path) -> Option<PathBuf> {
 ///   is rejected without leaking probe results.
 /// - **File-level**: both candidates are admitted via
 ///   [`admit_usage_jsonl`], which rejects symlinks and non-regular files.
+//
+// Snapshot-confined usage.jsonl resolution under a snapshot root.
+fn resolve_usage_jsonl_path_in(session_path: &str, snapshot_root: &Path) -> Option<PathBuf> {
+    let dir = PathBuf::from(session_path);
+    let canonical_dir = std::fs::canonicalize(&dir).unwrap_or(dir.clone());
+    let root_canon = snapshot_root
+        .canonicalize()
+        .unwrap_or_else(|_| snapshot_root.to_path_buf());
+    if canonical_dir.starts_with(&root_canon) {
+        if let Some(path) = admit_usage_jsonl(&canonical_dir.join("usage.jsonl")) {
+            return Some(path);
+        }
+    }
+    if !is_safe_session_id(&dir.file_name()?.to_string_lossy()) {
+        return None;
+    }
+    let session_id = dir.file_name()?.to_string_lossy().to_string();
+    admit_usage_jsonl(
+        &get_antigravity_rpc_cache_root(snapshot_root)
+            .join(&session_id)
+            .join("usage.jsonl"),
+    )
+}
+
+/// Tool names from the snapshot protobuf store only (no live log dirs, so
+/// archived reads never touch the live filesystem).
+fn load_antigravity_tool_names_in(snapshot_root: &Path, session_id: &str) -> Vec<String> {
+    if !is_safe_session_id(session_id) {
+        return Vec::new();
+    }
+    let pb_path = snapshot_root
+        .join("conversations")
+        .join(format!("{session_id}.pb"));
+    extract_pb_tool_names(&pb_path)
+}
+
+/// Snapshot-confined desktop messages: `mapped_session` is already
+/// snapshot-space (absolute dir or bare session id). Brain transcripts are
+/// preferred exactly like live; otherwise the preserved `usage.jsonl` is
+/// replayed. `live_root` remaps recorded state paths if needed.
+pub(crate) fn load_desktop_messages_from_roots(
+    snapshot_root: &Path,
+    mapped_session: &str,
+) -> Result<Vec<ClaudeMessage>, String> {
+    let session_id = PathBuf::from(mapped_session)
+        .file_name()
+        .map(|f| f.to_string_lossy().to_string())
+        .unwrap_or_default();
+    // Brain transcript under the snapshot root wins (mirrors live order).
+    if is_safe_session_id(&session_id) {
+        if let Some(brain_dir) = preferred_brain_session_dir(snapshot_root, &session_id) {
+            if has_brain_transcript(&brain_dir) {
+                if let Ok(msgs) = super::antigravity_cli::load_messages_from_root(
+                    snapshot_root,
+                    &brain_dir.to_string_lossy(),
+                ) {
+                    return Ok(msgs);
+                }
+            }
+        }
+    }
+    let session_dir = Path::new(mapped_session);
+    if session_dir.join(".system_generated").join("logs").exists() {
+        if let Ok(msgs) =
+            super::antigravity_cli::load_messages_from_root(snapshot_root, mapped_session)
+        {
+            return Ok(msgs);
+        }
+    }
+    let Some(usage_path) = resolve_usage_jsonl_path_in(mapped_session, snapshot_root) else {
+        return Ok(vec![]);
+    };
+    let content = std::fs::read_to_string(&usage_path)
+        .map_err(|e| format!("Failed to read usage.jsonl: {e}"))?;
+    let messages = messages_from_usage_content(&content, &session_id);
+    let tool_names = load_antigravity_tool_names_in(snapshot_root, &session_id);
+    Ok(merge_tool_names_into_messages(
+        messages,
+        &session_id,
+        &tool_names,
+    ))
+}
+
+/// Snapshot-confined desktop metadata search over the preserved state.
+pub(crate) fn search_desktop_from_root(
+    snapshot_root: &Path,
+    query: &str,
+    max_results: usize,
+) -> Result<Vec<ClaudeMessage>, String> {
+    let state = load_antigravity_state_impl(snapshot_root)?;
+    let query_lower = query.to_lowercase();
+    let mut results = Vec::new();
+
+    for session in state.sessions.values() {
+        let session_matches = session
+            .latest
+            .session_id
+            .to_lowercase()
+            .contains(&query_lower)
+            || session.latest.label.to_lowercase().contains(&query_lower);
+        let model_match = session
+            .latest
+            .model_totals
+            .as_ref()
+            .map(|models| {
+                models
+                    .keys()
+                    .any(|model| model.to_lowercase().contains(&query_lower))
+            })
+            .unwrap_or(false);
+
+        if !session_matches && !model_match {
+            continue;
+        }
+
+        let session_id = session.latest.session_id.clone();
+        let timestamp = ms_to_rfc3339(session.latest.last_modified_ms);
+        let short_id: String = session_id.chars().take(8).collect();
+        let content_text = if session_matches {
+            format!("Session: {session_id}")
+        } else {
+            format!("Session: {short_id} (matched model)")
+        };
+
+        results.push(ClaudeMessage {
+            uuid: format!("ag-search-{session_id}-0"),
+            parent_uuid: None,
+            session_id: session_id.clone(),
+            timestamp,
+            message_type: "assistant".to_string(),
+            content: Some(json!([{ "type": "text", "text": content_text }])),
+            usage: None,
+            provider: Some("antigravity".to_string()),
+            message_id: None,
+            project_name: None,
+            tool_use: None,
+            tool_use_result: None,
+            is_sidechain: None,
+            role: Some("assistant".to_string()),
+            model: None,
+            stop_reason: None,
+            cost_usd: None,
+            duration_ms: None,
+            snapshot: None,
+            is_snapshot_update: None,
+            data: None,
+            tool_use_id: None,
+            parent_tool_use_id: None,
+            operation: None,
+            subtype: None,
+            level: None,
+            hook_count: None,
+            hook_infos: None,
+            stop_reason_system: None,
+            prevented_continuation: None,
+            compact_metadata: None,
+            microcompact_metadata: None,
+        });
+    }
+
+    results.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+    results.truncate(max_results);
+    Ok(results)
+}
+
+// ============================================================================
+// Archive glue (snapshot-backed reads; desktop + CLI roots route by scheme).
+// ============================================================================
+
+use crate::storage::registry::DiscoveredSource as ArchiveDiscoveredSource;
+use crate::storage::{SnapshotInfo as ArchiveSnapshotInfo, Source as ArchiveSource};
+
+/// Physical Antigravity roots: the desktop state dir and the CLI store, as
+/// independent sources under one provider id (kimi pattern).
+pub(crate) fn archive_discover() -> Vec<ArchiveDiscoveredSource> {
+    let machine = crate::storage::registry::discovery_machine_id();
+    let mut out = Vec::new();
+    if let Some(root) = resolve_antigravity_root() {
+        out.push(ArchiveDiscoveredSource::local("desktop", root, &machine));
+    }
+    if let Some(root) = super::antigravity_cli::default_root() {
+        if root.is_dir() {
+            out.push(ArchiveDiscoveredSource::local("cli", root, &machine));
+        }
+    }
+    out
+}
+
+/// Scan one snapshot, branching on the source role.
+pub(crate) fn archive_scan(
+    source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+) -> Result<Vec<ClaudeProject>, String> {
+    if source.role == "cli" {
+        return Ok(super::antigravity_cli::scan_projects_from_root(
+            &snapshot.data_path,
+        ));
+    }
+    scan_desktop_projects_from_root(&snapshot.data_path)
+}
+
+fn archive_mapped(
+    source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+    stable: &str,
+) -> Option<String> {
+    crate::storage::registry::map_absolute_to_snapshot(source, snapshot, stable)
+}
+
+/// Locate the covering source: CLI-scheme IDs belong to the `cli` source,
+/// everything else resolves by path prefix (bare desktop session ids fall
+/// back to the desktop source).
+pub(crate) fn archive_locate(
+    sources: &[crate::storage::registry::ResolvedSource],
+    stable: &str,
+) -> Option<usize> {
+    if stable.starts_with(super::antigravity_cli::SCHEME) {
+        return sources.iter().position(|r| r.source.role == "cli");
+    }
+    if let Some(idx) = crate::storage::registry::locate_by_subpath_or_single(sources, stable) {
+        return Some(idx);
+    }
+    // Bare desktop session ids carry no path; the desktop source owns them.
+    sources.iter().position(|r| r.source.role == "desktop")
+}
+
+/// Sessions for a stable project, read from the snapshot.
+pub(crate) fn archive_load_sessions(
+    source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+    stable_project: &str,
+) -> Result<Vec<ClaudeSession>, String> {
+    if source.role == "cli" || stable_project.starts_with(super::antigravity_cli::SCHEME) {
+        let workspace = stable_project
+            .strip_prefix(super::antigravity_cli::SCHEME)
+            .unwrap_or(stable_project);
+        // Workspaces are user dirs (not storage paths); no mapping applies.
+        // The CLI loader filters by workspace within the snapshot root.
+        let mut sessions =
+            super::antigravity_cli::load_sessions_from_root(&snapshot.data_path, workspace);
+        // Rewrite snapshot-space session dirs to stable (live CLI root) IDs.
+        if let Some(live) = source.original_root.as_deref() {
+            let prefix = snapshot.data_path.to_string_lossy().to_string();
+            for session in &mut sessions {
+                if session.session_id.contains(&prefix) {
+                    session.session_id = session.session_id.replace(&prefix, live);
+                }
+                if session.file_path.contains(&prefix) {
+                    session.file_path = session.file_path.replace(&prefix, live);
+                }
+            }
+        }
+        return Ok(sessions);
+    }
+    // Desktop: the project path is the root itself; list every preserved
+    // session, remapping recorded live paths into the snapshot.
+    let live = source.original_root.as_deref().unwrap_or("");
+    let mut sessions = load_desktop_sessions_from_roots(&snapshot.data_path, Path::new(live))?;
+    // Rewrite snapshot-space session dirs back to stable IDs.
+    if !live.is_empty() {
+        let prefix = snapshot.data_path.to_string_lossy().to_string();
+        for session in &mut sessions {
+            if session.file_path.contains(&prefix) {
+                session.file_path = session.file_path.replace(&prefix, live);
+            }
+        }
+    }
+    Ok(sessions)
+}
+
+/// Messages for a stable session, read from the snapshot.
+pub(crate) fn archive_load_messages(
+    source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+    stable_session: &str,
+) -> Result<Vec<ClaudeMessage>, String> {
+    // CLI-owned paths route to the transcript loader.
+    let cli_mapped = archive_mapped(source, snapshot, stable_session);
+    if source.role == "cli" {
+        // Session dirs live under the CLI root; workspaces need no mapping.
+        if let Some(mapped) = cli_mapped {
+            if let Ok(msgs) =
+                super::antigravity_cli::load_messages_from_root(&snapshot.data_path, &mapped)
+            {
+                return Ok(msgs);
+            }
+        }
+        // Bare workspace-style IDs fall through to a workspace scan.
+        return Ok(Vec::new());
+    }
+    // Desktop role: CLI-scheme sessions belong to the sibling CLI snapshot.
+    if stable_session.starts_with(super::antigravity_cli::SCHEME) {
+        return Err(format!("No preserved snapshot covers {stable_session}"));
+    }
+    if let Some(mapped) = cli_mapped {
+        // Prefer brain transcripts / usage under this snapshot first.
+        if let Ok(msgs) = load_desktop_messages_from_roots(&snapshot.data_path, &mapped) {
+            if !msgs.is_empty() {
+                return Ok(msgs);
+            }
+        }
+    }
+    // Bare session id: resolve the session dir from the preserved state.
+    if !stable_session.contains('/') && is_safe_session_id(stable_session) {
+        let state = load_antigravity_state_impl(&snapshot.data_path)?;
+        if let Some(session_state) = state.sessions.get(stable_session) {
+            let live_dir = PathBuf::from(&session_state.latest.file_path);
+            let live_root = source.original_root.as_deref().unwrap_or("");
+            let mapped_dir =
+                remap_live_to_snapshot(live_dir, Path::new(live_root), &snapshot.data_path);
+            if let Ok(msgs) =
+                load_desktop_messages_from_roots(&snapshot.data_path, &mapped_dir.to_string_lossy())
+            {
+                return Ok(msgs);
+            }
+        }
+        // Brain fallback by convention.
+        if let Some(brain_dir) =
+            preferred_brain_session_dir(snapshot_root_of(snapshot), stable_session)
+        {
+            if let Ok(msgs) =
+                load_desktop_messages_from_roots(&snapshot.data_path, &brain_dir.to_string_lossy())
+            {
+                return Ok(msgs);
+            }
+        }
+    }
+    Ok(Vec::new())
+}
+
+fn snapshot_root_of(snapshot: &ArchiveSnapshotInfo) -> &Path {
+    &snapshot.data_path
+}
+
+/// Search confined to one snapshot.
+pub(crate) fn archive_search(
+    source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<ClaudeMessage>, String> {
+    if source.role == "cli" {
+        return Ok(super::antigravity_cli::search_from_root(
+            &snapshot.data_path,
+            query,
+            limit,
+        ));
+    }
+    search_desktop_from_root(&snapshot.data_path, query, limit)
+}
+
 pub(crate) fn resolve_usage_jsonl_path(session_path: &str) -> Option<PathBuf> {
     let dir = PathBuf::from(session_path);
 
@@ -548,6 +1025,9 @@ pub(crate) fn resolve_usage_jsonl_path(session_path: &str) -> Option<PathBuf> {
 /// Session paths under the antigravity-cli store (`<cli-root>/brain/<uuid>`)
 /// route to the transcript parser instead.
 pub fn load_messages(session_path: &str) -> Result<Vec<ClaudeMessage>, String> {
+    if let Some(brain_dir) = brain_session_for_path(session_path) {
+        return super::antigravity_cli::load_messages(&brain_dir.to_string_lossy());
+    }
     if super::antigravity_cli::owns_session_path(session_path) {
         return super::antigravity_cli::load_messages(session_path);
     }
@@ -567,6 +1047,20 @@ pub fn load_messages(session_path: &str) -> Result<Vec<ClaudeMessage>, String> {
     let content = std::fs::read_to_string(&usage_path)
         .map_err(|e| format!("Failed to read usage.jsonl: {e}"))?;
 
+    let messages = messages_from_usage_content(&content, &session_id);
+
+    let tool_names = load_antigravity_tool_names(session_path, &session_id);
+    Ok(merge_tool_names_into_messages(
+        messages,
+        &session_id,
+        &tool_names,
+    ))
+}
+
+/// Build user/assistant message pairs from `usage.jsonl` content. Shared by
+/// live reads and snapshot reads (which supply their own tool names).
+fn messages_from_usage_content(content: &str, session_id: &str) -> Vec<ClaudeMessage> {
+    let session_id = session_id.to_string();
     let mut messages = Vec::new();
 
     for line in content.lines() {
@@ -674,12 +1168,7 @@ pub fn load_messages(session_path: &str) -> Result<Vec<ClaudeMessage>, String> {
         });
     }
 
-    let tool_names = load_antigravity_tool_names(session_path, &session_id);
-    Ok(merge_tool_names_into_messages(
-        messages,
-        &session_id,
-        &tool_names,
-    ))
+    messages
 }
 
 /// Formats a token count as a human-readable string (e.g. `1.2k`, `3.5M`).
@@ -899,6 +1388,51 @@ mod tests {
         assert_eq!(messages[0].message_type, "user");
         assert_eq!(messages[1].uuid, "conv-cli-step-1");
         assert_eq!(messages[1].message_type, "assistant");
+    }
+
+    #[test]
+    #[serial]
+    /// A desktop session can have both a plaintext brain transcript and an
+    /// rpc-cache usage file. The transcript must win for the viewer; the
+    /// usage file is metadata only.
+    fn mixed_desktop_sessions_use_the_brain_transcript() {
+        let home = crate::test_utils::SandboxHome::new();
+        let root = home.path().join(".gemini").join("antigravity");
+        let session_id = "session-mixed";
+        let brain_dir = root.join("brain").join(session_id);
+        let logs = brain_dir.join(".system_generated").join("logs");
+        std::fs::create_dir_all(&logs).expect("create brain transcript dir");
+        std::fs::write(
+            logs.join("transcript_full.jsonl"),
+            concat!(
+                "{\"step_index\":0,\"source\":\"USER_EXPLICIT\",\"type\":\"USER_INPUT\",\"content\":\"First unique prompt\",\"created_at\":\"2026-09-10T00:00:00Z\"}\n",
+                "{\"step_index\":1,\"source\":\"MODEL\",\"type\":\"PLANNER_RESPONSE\",\"content\":\"First unique answer\",\"created_at\":\"2026-09-10T00:00:01Z\"}\n",
+                "{\"step_index\":2,\"source\":\"USER_EXPLICIT\",\"type\":\"USER_INPUT\",\"content\":\"Second unique prompt\",\"created_at\":\"2026-09-10T00:00:02Z\"}\n",
+                "{\"step_index\":3,\"source\":\"MODEL\",\"type\":\"PLANNER_RESPONSE\",\"content\":\"Second unique answer\",\"created_at\":\"2026-09-10T00:00:03Z\"}\n",
+            ),
+        )
+        .expect("write brain transcript");
+
+        let rpc_dir = get_antigravity_rpc_cache_root(&root).join(session_id);
+        std::fs::create_dir_all(&rpc_dir).expect("create rpc session");
+        make_usage_file(&rpc_dir, session_id, "gemini-3-pro-high");
+
+        let sessions = load_sessions(&root.to_string_lossy(), false).expect("load sessions");
+        let session = sessions
+            .iter()
+            .find(|session| session.session_id == session_id)
+            .expect("mixed session missing");
+        assert_eq!(session.file_path, brain_dir.to_string_lossy());
+        assert_eq!(session.message_count, 4);
+
+        // Also pass the stale/rpc-cache path directly, as persisted state from
+        // an older scan may still contain it.
+        let messages = load_messages(&rpc_dir.to_string_lossy()).expect("load messages");
+        assert_eq!(messages.len(), 4);
+        let text = serde_json::to_string(&messages).expect("serialize messages");
+        assert!(text.contains("First unique prompt"));
+        assert!(text.contains("Second unique answer"));
+        assert!(!text.contains("#1 gemini-3-pro-high"));
     }
 
     #[test]
