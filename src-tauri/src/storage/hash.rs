@@ -35,6 +35,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[serial_test::serial]
     fn sha256_matches_nist_vector() {
         // NIST FIPS 180-4: SHA-256("abc").
         assert_eq!(
@@ -45,6 +46,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn plausible_hash_validation() {
         assert!(is_plausible_hash(&sha256_hex(b"x")));
         assert!(!is_plausible_hash(""));

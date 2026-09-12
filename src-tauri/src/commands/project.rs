@@ -588,14 +588,18 @@ mod tests {
 
     // Test validate_claude_folder
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_validate_claude_folder_nonexistent() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let result = validate_claude_folder("/nonexistent/path".to_string()).await;
         assert!(result.is_ok());
         assert!(!result.unwrap());
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_validate_claude_folder_without_projects() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
         let claude_dir = temp_dir.path().join(".claude");
         fs::create_dir(&claude_dir).unwrap();
@@ -607,7 +611,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_validate_claude_folder_with_projects() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
         let claude_dir = temp_dir.path().join(".claude");
         let projects_dir = claude_dir.join("projects");
@@ -620,7 +626,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_validate_claude_folder_from_parent() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
         let claude_dir = temp_dir.path().join(".claude");
         let projects_dir = claude_dir.join("projects");
@@ -634,7 +642,9 @@ mod tests {
 
     // Test scan_projects
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_scan_projects_empty() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
         let claude_dir = temp_dir.path().join(".claude");
         let projects_dir = claude_dir.join("projects");
@@ -646,7 +656,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_scan_projects_no_projects_dir() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         let result = scan_projects(temp_dir.path().to_string_lossy().to_string()).await;
@@ -655,7 +667,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_scan_projects_single_project() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
         let claude_dir = temp_dir.path().join(".claude");
         let projects_dir = claude_dir.join("projects");
@@ -680,7 +694,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_scan_projects_keeps_missing_worktree_history_visible() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
         let claude_dir = temp_dir.path().join(".claude");
         let project_dir = claude_dir.join("projects").join("-tmp-deleted-worktree");
@@ -718,7 +734,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_scan_projects_multiple_projects() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
         let claude_dir = temp_dir.path().join(".claude");
         let projects_dir = claude_dir.join("projects");
@@ -746,7 +764,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_scan_projects_extracts_project_name() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
         let claude_dir = temp_dir.path().join(".claude");
         let projects_dir = claude_dir.join("projects");
@@ -769,7 +789,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_scan_projects_prefers_jsonl_cwd_over_lossy_storage_name() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
         let claude_dir = temp_dir.path().join(".claude");
         let projects_dir = claude_dir.join("projects");
@@ -812,7 +834,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_scan_projects_prefers_verified_folder_over_stale_cwd() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
         let claude_dir = temp_dir.path().join(".claude");
         let projects_dir = claude_dir.join("projects");
@@ -860,7 +884,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_extract_cwd_from_session_file_ignores_empty_lines_before_limit() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
         let mut lines = vec![String::new(); 150];
         lines.push(
@@ -884,7 +910,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_scan_projects_prefers_top_level_cwd_over_subagent_cwd() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
         let claude_dir = temp_dir.path().join(".claude");
         let projects_dir = claude_dir.join("projects");
@@ -948,7 +976,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_scan_projects_sorted_by_last_modified() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
         let claude_dir = temp_dir.path().join(".claude");
         let projects_dir = claude_dir.join("projects");
@@ -977,7 +1007,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_scan_projects_ignores_non_jsonl_files() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
         let claude_dir = temp_dir.path().join(".claude");
         let projects_dir = claude_dir.join("projects");
@@ -999,7 +1031,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_scan_projects_nested_sessions() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
         let claude_dir = temp_dir.path().join(".claude");
         let projects_dir = claude_dir.join("projects");
@@ -1021,7 +1055,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_scan_projects_skips_empty_project_directories() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
         let claude_dir = temp_dir.path().join(".claude");
         let projects_dir = claude_dir.join("projects");
@@ -1041,7 +1077,9 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_scan_projects_follows_symlinked_project_dir() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         use std::os::unix::fs::symlink;
 
         let temp_dir = TempDir::new().unwrap();
@@ -1069,7 +1107,9 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_scan_projects_skips_dangling_symlink() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         use std::os::unix::fs::symlink;
 
         let temp_dir = TempDir::new().unwrap();
@@ -1097,7 +1137,9 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_scan_projects_deduplicates_symlink_and_real_dir() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         use std::os::unix::fs::symlink;
 
         let temp_dir = TempDir::new().unwrap();
@@ -1126,7 +1168,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_get_git_log_invalid_path() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let result = get_git_log(crate::test_utils::abs("nonexistent/path"), 10).await;
         // Should fail because path doesn't exist
         assert!(result.is_err());
@@ -1137,14 +1181,18 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_get_git_log_not_absolute() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let result = get_git_log("relative/path".to_string(), 10).await;
         assert!(result.is_err());
         assert_eq!(result.unwrap_err(), "Path must be absolute");
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_get_git_log_success() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
         let path_str = temp_dir.path().to_string_lossy().to_string();
 
@@ -1198,7 +1246,9 @@ mod tests {
     // Tests for detect_claude_config_dir
     // All tests use ENV_MUTEX to prevent race conditions on the global env var.
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_detect_config_dir_unset() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let _guard = lock_env();
         std::env::remove_var("CLAUDE_CONFIG_DIR");
         let result = detect_claude_config_dir().await.unwrap();
@@ -1206,7 +1256,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_detect_config_dir_empty() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let _guard = lock_env();
         std::env::set_var("CLAUDE_CONFIG_DIR", "");
         let result = detect_claude_config_dir().await.unwrap();
@@ -1215,7 +1267,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_detect_config_dir_valid() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let _guard = lock_env();
         let temp_dir = TempDir::new().unwrap();
         let projects_dir = temp_dir.path().join("projects");
@@ -1231,7 +1285,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_detect_config_dir_invalid_no_projects() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let _guard = lock_env();
         let temp_dir = TempDir::new().unwrap();
         // No projects/ subdirectory
@@ -1246,7 +1302,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_detect_config_dir_relative_path() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let _guard = lock_env();
         std::env::set_var("CLAUDE_CONFIG_DIR", "relative/path");
         let result = detect_claude_config_dir().await.unwrap();

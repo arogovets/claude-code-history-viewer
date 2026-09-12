@@ -622,6 +622,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn scan_groups_by_working_dir() {
         let conn = fixture_db();
         let projects = scan_in_conn(&conn).unwrap();
@@ -636,6 +637,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn load_sessions_filters_and_summarizes() {
         let conn = fixture_db();
         let sessions = load_sessions_conn(&conn, "/Users/jack/proj").unwrap();
@@ -656,6 +658,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn load_messages_maps_text_and_tools() {
         let conn = fixture_db();
         let msgs = load_messages_conn(&conn, "s1").unwrap();
@@ -681,6 +684,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn search_matches_content_and_tags_project() {
         let conn = fixture_db();
         let results = search_conn(&conn, "LOGIN", 10).unwrap();
@@ -691,6 +695,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn map_tool_response_error() {
         let item = json!({
             "type": "toolResponse",
@@ -704,6 +709,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn map_thinking_and_skips_unknown() {
         let think = json!({"type":"thinking","thinking":"hmm","signature":"sig"});
         let b = map_content_item(&think).unwrap();
@@ -714,6 +720,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn normalize_ts_and_epoch() {
         assert_eq!(normalize_ts("2026-06-21 10:00:00"), "2026-06-21T10:00:00Z");
         assert_eq!(normalize_ts("2026-06-21T10:00:00Z"), "2026-06-21T10:00:00Z");
@@ -726,6 +733,7 @@ mod tests {
     /// An empty `working_dir` must round-trip: it's grouped under "unknown" in
     /// scan and resolvable by `load_sessions("unknown")`.
     #[test]
+    #[serial_test::serial]
     fn empty_working_dir_rounds_trips_as_unknown() {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
@@ -761,6 +769,7 @@ mod tests {
     /// A NULL `message_id` must get the same UUID from load and search (stable
     /// DB row id), not divergent enumeration indices.
     #[test]
+    #[serial_test::serial]
     fn null_message_id_uuid_is_stable_across_load_and_search() {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(

@@ -417,7 +417,9 @@ mod tests {
     use super::*;
 
     #[test]
+    #[serial_test::serial]
     fn test_compute_summary() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let settings = r#"{"model":"opus","hooks":{"UserPromptSubmit":[]}}"#;
         let mcp = r#"{"server1":{"command":"test"},"server2":{"command":"test2"}}"#;
 
@@ -429,7 +431,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_validate_preset_input_valid() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let input = UnifiedPresetInput {
             id: None,
             name: "Test".to_string(),
@@ -441,7 +445,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_validate_preset_input_invalid_settings() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let input = UnifiedPresetInput {
             id: None,
             name: "Test".to_string(),
@@ -455,7 +461,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_validate_preset_input_settings_not_object() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let input = UnifiedPresetInput {
             id: None,
             name: "Test".to_string(),
@@ -469,7 +477,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_validate_preset_input_invalid_mcp() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let input = UnifiedPresetInput {
             id: None,
             name: "Test".to_string(),
@@ -483,7 +493,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_validate_path_safety_nonexistent() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let path = PathBuf::from("/nonexistent/path/to/file.json");
         let result = validate_path_safety(&path);
         assert!(result.is_ok());

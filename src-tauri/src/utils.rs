@@ -770,14 +770,18 @@ mod tests {
     // ===== par_map_bounded Tests =====
 
     #[test]
+    #[serial_test::serial]
     fn test_par_map_bounded_preserves_input_order() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let items: Vec<usize> = (0..100).collect();
         let out = par_map_bounded(items, |i| i * 2);
         assert_eq!(out, (0..100).map(|i| i * 2).collect::<Vec<_>>());
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_par_map_bounded_handles_empty_and_single() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         assert!(par_map_bounded(Vec::<u8>::new(), |i| i).is_empty());
         assert_eq!(par_map_bounded(vec![7u8], |i| i + 1), vec![8]);
     }
@@ -785,35 +789,45 @@ mod tests {
     // ===== Line Utils Tests =====
 
     #[test]
+    #[serial_test::serial]
     fn test_find_line_ranges_empty() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let data = b"";
         let ranges = find_line_ranges(data);
         assert!(ranges.is_empty());
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_find_line_ranges_single_line_no_newline() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let data = b"hello world";
         let ranges = find_line_ranges(data);
         assert_eq!(ranges, vec![(0, 11)]);
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_find_line_ranges_single_line_with_newline() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let data = b"hello world\n";
         let ranges = find_line_ranges(data);
         assert_eq!(ranges, vec![(0, 11)]);
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_find_line_ranges_multiple_lines() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let data = b"line1\nline2\nline3";
         let ranges = find_line_ranges(data);
         assert_eq!(ranges, vec![(0, 5), (6, 11), (12, 17)]);
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_find_line_ranges_with_empty_lines() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let data = b"line1\n\nline3\n";
         let ranges = find_line_ranges(data);
         // Empty lines are skipped (start == end after newline)
@@ -821,28 +835,36 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_find_line_ranges_only_newlines() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let data = b"\n\n\n";
         let ranges = find_line_ranges(data);
         assert!(ranges.is_empty());
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_find_line_starts_empty() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let data = b"";
         let starts = find_line_starts(data);
         assert_eq!(starts, vec![0]);
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_find_line_starts_single_line() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let data = b"hello";
         let starts = find_line_starts(data);
         assert_eq!(starts, vec![0]);
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_find_line_starts_multiple_lines() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let data = b"line1\nline2\nline3";
         let starts = find_line_starts(data);
         assert_eq!(starts, vec![0, 6, 12]);
@@ -851,47 +873,61 @@ mod tests {
     // ===== Project Name Tests =====
 
     #[test]
+    #[serial_test::serial]
     fn test_extract_project_name_with_prefix() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         // Test raw project name with dash prefix (e.g., "-user-home-project")
         let result = extract_project_name("-user-home-project");
         assert_eq!(result, "project");
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_extract_project_name_with_complex_prefix() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         // Test raw project name with multiple parts
         let result = extract_project_name("-usr-local-myproject");
         assert_eq!(result, "myproject");
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_extract_project_name_without_prefix() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         // Test raw project name without dash prefix
         let result = extract_project_name("simple-project");
         assert_eq!(result, "simple-project");
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_extract_project_name_empty() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let result = extract_project_name("");
         assert_eq!(result, "");
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_extract_project_name_only_dashes() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         // When there are fewer than 4 parts, return original
         let result = extract_project_name("-a-b");
         assert_eq!(result, "-a-b");
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_extract_project_name_exact_four_parts() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let result = extract_project_name("-a-b-c");
         assert_eq!(result, "c");
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_extract_project_name_fallback_when_path_missing() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         // Guarantees we hit the splitn(4) fallback when filesystem decoding
         // fails (deleted project, or path that never existed). Uses a sentinel
         // prefix unlikely to ever exist on any developer machine.
@@ -900,7 +936,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_extract_project_name_deep_path() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         // Paths deeper than 3 segments (e.g. ~/Projects/{Host}/{Org}/{Repo})
         // must return just the leaf, not the encoded suffix.
         let (encoded, root) = make_encoded_path(
@@ -915,6 +953,7 @@ mod tests {
     /// #548. Pure string matching, so this fails on any host if the marker
     /// regresses to a single hardcoded separator.
     #[test]
+    #[serial_test::serial]
     fn encoded_folder_name_is_found_under_either_separator() {
         assert_eq!(
             encoded_folder_name("/Users/jack/.claude/projects/-Users-jack-app"),
@@ -932,6 +971,7 @@ mod tests {
     /// `--` for `C:\`. Getting this wrong made every candidate path unresolvable
     /// on Windows.
     #[test]
+    #[serial_test::serial]
     fn split_encoded_root_recovers_the_platform_root() {
         #[cfg(windows)]
         {
@@ -963,6 +1003,7 @@ mod tests {
     /// marker, the leading-dash strip and the `/`-rooted decoder each blocked
     /// it independently.
     #[test]
+    #[serial_test::serial]
     fn decode_project_path_resolves_a_real_folder_on_this_platform() {
         let (encoded, root) = make_encoded_path("cchv_548_roundtrip", &["nested", "leaf-dir"]);
         let storage = Path::new(".claude")
@@ -998,7 +1039,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_extract_project_name_with_hyphens_in_segments() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         // Real-world example: a deep path where directory names themselves
         // contain hyphens. The encoded slug is ambiguous (every hyphen could
         // be a separator OR part of a name), so this can only resolve
@@ -1018,49 +1061,63 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_estimate_message_count_zero_size() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         // Minimum should be 1
         let result = estimate_message_count_from_size(0);
         assert_eq!(result, 1);
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_estimate_message_count_small_file() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         // 500 bytes -> ceil(0.5) = 1
         let result = estimate_message_count_from_size(500);
         assert_eq!(result, 1);
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_estimate_message_count_medium_file() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         // 2500 bytes -> ceil(2.5) = 3
         let result = estimate_message_count_from_size(2500);
         assert_eq!(result, 3);
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_estimate_message_count_large_file() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         // 10000 bytes -> ceil(10.0) = 10
         let result = estimate_message_count_from_size(10000);
         assert_eq!(result, 10);
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_estimate_message_count_exact_boundary() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         // 1000 bytes -> ceil(1.0) = 1
         let result = estimate_message_count_from_size(1000);
         assert_eq!(result, 1);
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_parse_rfc3339_utc_supports_z_and_offset() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let z = parse_rfc3339_utc("2026-02-20T05:00:00Z");
         let offset = parse_rfc3339_utc("2026-02-20T05:00:00+00:00");
         assert_eq!(z, offset);
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_search_json_value_case_insensitive_ignores_keys() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let value = serde_json::json!({
             "type": "text",
             "nested": {
@@ -1074,7 +1131,9 @@ mod tests {
     // ===== Git Worktree Detection Tests =====
 
     #[test]
+    #[serial_test::serial]
     fn test_decode_project_path_session_storage() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         assert_eq!(
             decode_project_path("/Users/jack/.claude/projects/-Users-jack-my-project"),
             "/Users/jack/my-project"
@@ -1082,7 +1141,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_decode_project_path_tmp() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         assert_eq!(
             decode_project_path("/Users/jack/.claude/projects/-tmp-feature-my-project"),
             "/tmp/feature/my-project"
@@ -1090,12 +1151,16 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_decode_project_path_regular() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         assert_eq!(decode_project_path("/some/other/path"), "/some/other/path");
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_decode_project_path_verified_resolves_existing_folder() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         // Built rather than borrowed: this used to point at `/usr/lib`, which
         // exists on macOS and Linux and nowhere on Windows (#541).
         let (encoded, root) = make_encoded_path("cchv_541_verified", &["leaf"]);
@@ -1114,7 +1179,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_decode_project_path_verified_none_for_nonexistent() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         // This encoded folder name does not resolve to any real directory, so
         // there is no verified result (callers fall back to the JSONL `cwd`).
         assert_eq!(
@@ -1126,13 +1193,17 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_decode_project_path_verified_none_without_marker() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         // Paths outside the `.claude/projects/` layout cannot be decoded.
         assert_eq!(decode_project_path_verified("/some/other/path"), None);
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_extract_main_git_dir_valid() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         assert_eq!(
             extract_main_git_dir("/Users/jack/main/.git/worktrees/feature"),
             Some("/Users/jack/main/.git".to_string())
@@ -1140,12 +1211,16 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_extract_main_git_dir_invalid() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         assert_eq!(extract_main_git_dir("/some/path/without/worktrees"), None);
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_detect_git_worktree_info_not_git() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         use tempfile::TempDir;
         let temp_dir = TempDir::new().unwrap();
         // No .git file or directory
@@ -1157,7 +1232,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_detect_git_worktree_info_main_repo() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         use tempfile::TempDir;
         let temp_dir = TempDir::new().unwrap();
         let git_dir = temp_dir.path().join(".git");
@@ -1171,7 +1248,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_detect_git_worktree_info_linked() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         use std::io::Write;
         use tempfile::TempDir;
 
@@ -1199,7 +1278,9 @@ mod tests {
     /// (issue #449). Only `agent-*.jsonl` counts — each run also has a
     /// `journal.jsonl` that is orchestration metadata, not a conversation.
     #[test]
+    #[serial_test::serial]
     fn test_find_subagent_files_includes_workflow_agents() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         use tempfile::TempDir;
         let temp_dir = TempDir::new().unwrap();
         let session_path = temp_dir.path().join("abc123.jsonl");

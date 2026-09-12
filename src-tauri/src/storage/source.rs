@@ -670,6 +670,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[serial_test::serial]
     fn canonical_ids_are_stable_and_specific() {
         let a = canonical_source_id(
             "m1",
@@ -740,6 +741,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn canonical_path_origin_normalizes() {
         assert_eq!(canonical_path_origin(Path::new("/a/b/")), "/a/b");
         assert_eq!(canonical_path_origin(Path::new("/a/./b")), "/a/b");

@@ -962,7 +962,9 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    #[serial_test::serial]
     fn test_convert_say_text() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let msg = json!({
             "ts": 1700000000000u64,
             "type": "say",
@@ -976,7 +978,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_convert_say_tool() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let msg = json!({
             "ts": 1700000000000u64,
             "type": "say",
@@ -993,7 +997,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_convert_say_command() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let msg = json!({
             "ts": 1700000000000u64,
             "type": "say",
@@ -1008,7 +1014,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_convert_say_reasoning() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let msg = json!({
             "ts": 1700000000000u64,
             "type": "say",
@@ -1023,7 +1031,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_convert_say_error() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let msg = json!({
             "ts": 1700000000000u64,
             "type": "say",
@@ -1037,7 +1047,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_convert_ask_followup() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let msg = json!({
             "ts": 1700000000000u64,
             "type": "ask",
@@ -1050,7 +1062,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_skip_api_metadata() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let msg = json!({
             "ts": 1700000000000u64,
             "type": "say",
@@ -1062,7 +1076,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_map_cline_tool_names() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         assert_eq!(map_cline_tool_name("readFile"), "Read");
         assert_eq!(map_cline_tool_name("editedExistingFile"), "Write");
         assert_eq!(map_cline_tool_name("searchFiles"), "Grep");
@@ -1071,14 +1087,18 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_ms_to_iso() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let result = ms_to_iso(1700000000000);
         assert!(result.starts_with("2023-11-14T"));
         assert!(result.ends_with('Z'));
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_parse_project_path() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let (base, cwd) =
             parse_project_path("cline:///path/to/globalStorage:/Users/jack/project").unwrap();
         assert_eq!(base, PathBuf::from("/path/to/globalStorage"));
@@ -1086,7 +1106,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_task_cwd_field_fallback() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         // Cline uses cwdOnTaskInitialization
         assert_eq!(
             task_cwd(&json!({"cwdOnTaskInitialization": "/c"})),
@@ -1104,7 +1126,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_load_task_history_from_kilo_global_state() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         use rusqlite::params;
 
         let tmp = tempfile::TempDir::new().unwrap();
@@ -1151,7 +1175,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_load_task_history_no_index_is_empty() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let tmp = tempfile::TempDir::new().unwrap();
         let ext_dir = tmp.path().join("globalStorage").join("kilocode.kilo-code");
         fs::create_dir_all(&ext_dir).unwrap();
@@ -1160,7 +1186,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_truncate_chars_is_utf8_safe() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         // Regression: `&task[..100]` byte-slicing panicked on multibyte text
         // (byte 100 falls mid-character for 3-byte CJK). Char-based never does.
         let cjk = "한".repeat(150);
@@ -1180,7 +1208,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_task_label_field_fallback() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         assert_eq!(
             task_label(&json!({ "modelId": "claude" })).as_deref(),
             Some("claude")
@@ -1198,7 +1228,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_session_summary() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         // Non-empty task -> truncated task (char-safe), label ignored.
         assert_eq!(
             session_summary("hello", Some("claude".into())).as_deref(),

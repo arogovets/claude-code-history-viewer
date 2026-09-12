@@ -655,6 +655,7 @@ mod tests {
     );
 
     #[test]
+    #[serial_test::serial]
     fn session_meta_extracts_cwd_count_summary() {
         let m = session_meta(SESSION).unwrap();
         assert_eq!(m.session_id, "sess-1");
@@ -668,6 +669,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn parse_messages_maps_parts_to_blocks() {
         let msgs = parse_messages(SESSION);
         // system record is skipped.
@@ -703,6 +705,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn parse_messages_preserves_parallel_agent_calls_and_results() {
         let session = concat!(
             r#"{"uuid":"a1","sessionId":"sess-agents","timestamp":"2026-07-07T00:00:00Z","type":"assistant","message":{"role":"model","parts":[{"functionCall":{"id":"c1","name":"agent","args":{"description":"Check API","prompt":"Review API"}}},{"functionCall":{"id":"c2","name":"task","args":{"description":"Check UI","prompt":"Review UI"}}}]}}"#,
@@ -728,6 +731,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn convert_part_kinds() {
         assert!(convert_part(&json!({"text":""})).is_none());
         assert_eq!(convert_part(&json!({"text":"hi"})).unwrap()["type"], "text");

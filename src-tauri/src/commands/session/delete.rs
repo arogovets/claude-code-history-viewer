@@ -103,6 +103,7 @@ mod tests {
     use tempfile::TempDir;
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn reject_relative_path() {
         let err = delete_session("relative/path.jsonl".into())
             .await
@@ -111,6 +112,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn reject_non_jsonl_extension() {
         let err = delete_session(crate::test_utils::abs("tmp/session.txt"))
             .await
@@ -119,6 +121,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn reject_session_id_with_dots() {
         let err = delete_session(crate::test_utils::abs("tmp/a..b.jsonl"))
             .await
@@ -127,6 +130,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn reject_session_id_with_spaces() {
         let err = delete_session(crate::test_utils::abs("tmp/bad name.jsonl"))
             .await
@@ -136,6 +140,7 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    #[serial_test::serial]
     async fn reject_symlink() {
         let dir = TempDir::new().unwrap();
         let real_file = dir.path().join("real.jsonl");
@@ -151,6 +156,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn reject_directory_target() {
         let dir = TempDir::new().unwrap();
         let subdir = dir.path().join("session.jsonl");
@@ -163,6 +169,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     #[serial]
     async fn trash_valid_jsonl_file() {
         let _home = crate::test_utils::SandboxHome::new();
@@ -175,6 +182,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     #[serial]
     async fn trash_jsonl_and_associated_directory() {
         let _home = crate::test_utils::SandboxHome::new();
@@ -192,6 +200,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn remove_path_deletes_file() {
         let dir = TempDir::new().unwrap();
         let file = dir.path().join("test.txt");
@@ -202,6 +211,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn remove_path_deletes_directory() {
         let dir = TempDir::new().unwrap();
         let sub = dir.path().join("subdir");

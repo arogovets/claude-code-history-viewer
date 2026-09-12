@@ -1114,6 +1114,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn replay_applies_set_patches() {
         let log = build_log(
             json!({"sessionId": "abc", "requests": [], "creationDate": 1000}),
@@ -1128,6 +1129,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn replay_applies_array_appends() {
         let log = build_log(
             json!({"sessionId": "abc", "requests": []}),
@@ -1163,6 +1165,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn replay_skips_corrupt_trailing_line() {
         let log = format!(
             "{}\n{}\n{}",
@@ -1175,6 +1178,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn messages_render_user_assistant_pair() {
         let state = json!({
             "sessionId": "sess-1",
@@ -1231,6 +1235,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn messages_pair_generated_tool_call_ids() {
         let state = json!({
             "sessionId": "sess-1",
@@ -1258,6 +1263,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn probe_counts_progress_task_responses_as_visible() {
         let tmp = tempfile::TempDir::new().unwrap();
         let session_path = tmp.path().join("progress.jsonl");
@@ -1282,6 +1288,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn read_workspace_folder_decodes_uri() {
         let tmp = tempfile::TempDir::new().unwrap();
         let ws_json = tmp.path().join("workspace.json");
@@ -1293,12 +1300,14 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn header_without_kind_zero_errors() {
         let log = json!({"kind": 1, "k": ["x"], "v": 1}).to_string();
         assert!(replay_session(&log).is_err());
     }
 
     #[test]
+    #[serial_test::serial]
     fn load_sessions_skips_empty_chat_panels() {
         let tmp = tempfile::TempDir::new().unwrap();
         let chat_dir = tmp.path().join("chatSessions");
@@ -1354,6 +1363,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn scan_projects_excludes_workspaces_with_only_empty_panels() {
         let ws_root = tempfile::TempDir::new().unwrap();
 
@@ -1427,6 +1437,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn path_validation_rejects_paths_outside_workspace_storage() {
         let ws_root = tempfile::TempDir::new().unwrap();
         let workspace = ws_root.path().join("hash-used");
@@ -1457,6 +1468,7 @@ mod tests {
     /// Legacy (< VS Code 1.109) sessions are single full-JSON documents, never
     /// migrated to the newer patch-log format — they must still surface (#444).
     #[test]
+    #[serial_test::serial]
     fn legacy_json_sessions_are_discovered_and_loaded() {
         let ws_root = tempfile::TempDir::new().unwrap();
         let ws = ws_root.path().join("hash-legacy");
@@ -1510,6 +1522,7 @@ mod tests {
     /// When the same session id exists in both formats, VS Code reads the
     /// `.jsonl` — mirror that priority so the session doesn't list twice.
     #[test]
+    #[serial_test::serial]
     fn same_stem_json_and_jsonl_dedups_to_jsonl() {
         let ws_root = tempfile::TempDir::new().unwrap();
         let ws = ws_root.path().join("hash-dual");
@@ -1557,6 +1570,7 @@ mod tests {
     /// Multi-root windows record a `workspace` (.code-workspace URI) instead
     /// of `folder` — those workspaces were previously skipped entirely.
     #[test]
+    #[serial_test::serial]
     fn multi_root_workspace_key_is_mapped() {
         let ws_root = tempfile::TempDir::new().unwrap();
         let ws = ws_root.path().join("hash-multiroot");
@@ -1587,6 +1601,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn replay_applies_delete_patches() {
         let log = build_log(
             json!({"sessionId": "abc", "customTitle": "temp", "requests": [

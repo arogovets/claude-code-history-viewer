@@ -1432,6 +1432,7 @@ mod tests {
     use std::io::Write as _;
 
     fn test_source(provider: &str, machine: &str, root: &Path) -> Source {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         Source::local(provider, machine, root)
     }
 

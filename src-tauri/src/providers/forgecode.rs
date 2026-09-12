@@ -2093,6 +2093,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     /// Extract usage derives consumed input from prompt and cached tokens.
     fn extract_usage_derives_consumed_input_from_prompt_and_cached_tokens() {
         let usage = extract_usage(&json!({
@@ -2112,6 +2113,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     /// Extract usage preserves explicit input tokens.
     fn extract_usage_preserves_explicit_input_tokens() {
         let usage = extract_usage(&json!({
@@ -2131,6 +2133,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     /// Verify `SQLite` scan projects groups rows by workspace.
     #[serial]
     fn sqlite_scan_projects_groups_rows_by_workspace() {
@@ -2162,6 +2165,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     /// Verify `SQLite` load sessions filters null context and preserves virtual ids.
     #[serial]
     fn sqlite_load_sessions_filters_null_context_and_preserves_virtual_ids() {
@@ -2198,6 +2202,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     /// Verify `SQLite` load messages maps text tool usage cost and metrics.
     fn sqlite_load_messages_maps_text_tool_usage_cost_and_metrics() {
         let tmp = tempfile::tempdir().unwrap();
@@ -2292,6 +2297,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     /// Verify `SQLite` load messages returns empty for malformed context without panicking.
     fn sqlite_load_messages_returns_empty_for_malformed_context_without_panicking() {
         let tmp = tempfile::tempdir().unwrap();
@@ -2307,6 +2313,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     /// Verify detection prefers forge config and checks artifacts.
     fn detection_prefers_forge_config_and_checks_artifacts() {
         let tmp = tempfile::tempdir().unwrap();
@@ -2322,6 +2329,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     /// Extract workspace display name prefers cwd basename and ignores home dir.
     #[serial]
     fn extract_workspace_display_name_prefers_cwd_basename_and_ignores_home_dir() {
@@ -2359,6 +2367,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     /// Verify `SQLite` search matches message content.
     fn sqlite_search_matches_message_content() {
         let tmp = tempfile::tempdir().unwrap();
@@ -2388,6 +2397,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     /// Verify `SQLite` rename session title updates conversation title.
     fn sqlite_rename_session_title_updates_conversation_title() {
         let tmp = tempfile::tempdir().unwrap();
@@ -2417,6 +2427,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     /// Verify `SQLite` delete conversation removes row.
     fn sqlite_delete_conversation_removes_row() {
         let tmp = tempfile::tempdir().unwrap();
@@ -2442,6 +2453,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     /// Parse conversation path accepts virtual session and file paths.
     fn parse_conversation_path_accepts_virtual_session_and_file_paths() {
         assert_eq!(
@@ -2455,6 +2467,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     /// Reject ids that fall outside the `[A-Za-z0-9_-]+` allowlist.
     fn parse_conversation_path_rejects_non_allowlist_components() {
         // path separators and traversal — original constraints

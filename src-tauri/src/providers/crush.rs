@@ -765,6 +765,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn load_sessions_lists_with_title_and_counts() {
         let conn = fixture_db();
         let sessions = load_sessions_conn(&conn, "/Users/jack/proj").unwrap();
@@ -778,6 +779,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn load_messages_maps_text_tool_call_and_result() {
         let conn = fixture_db();
         let msgs = load_messages_conn(&conn, "sess1").unwrap();
@@ -802,6 +804,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn search_matches_and_tags_project() {
         let conn = fixture_db();
         let mut results = Vec::new();
@@ -813,6 +816,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn parse_session_path_splits_dir_and_id() {
         let (dir, id) = parse_session_path("crush:///Users/jack/proj#sess1").unwrap();
         assert_eq!(dir, "/Users/jack/proj");
@@ -821,6 +825,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn discover_finds_crush_db() {
         let tmp = TempDir::new().unwrap();
         let proj = tmp.path().join("myproj");
@@ -836,6 +841,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn map_part_handles_kinds() {
         assert!(map_part(&json!({"type":"finish","data":{"reason":"end_turn"}})).is_none());
         let t = map_part(&json!({"type":"text","data":{"text":"hi"}})).unwrap();
@@ -849,6 +855,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn epoch_handles_seconds_and_ms() {
         assert!(!epoch_to_iso(1_750_000_000).is_empty());
         assert!(!epoch_to_iso(1_750_000_000_000).is_empty());

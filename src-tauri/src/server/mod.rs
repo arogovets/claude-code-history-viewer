@@ -800,6 +800,7 @@ mod tests {
     /// just the same when the project has no recorded edit for the path. The
     /// socket is no longer an input to a filesystem decision.
     #[tokio::test]
+    #[serial_test::serial]
     #[serial]
     async fn test_restore_refuses_unrecorded_path_even_on_authenticated_loopback() {
         let _home = crate::test_utils::SandboxHome::new();
@@ -839,6 +840,7 @@ mod tests {
     /// handler leaves both tests above green, which is the failure mode a
     /// pure-function test cannot see.
     #[tokio::test]
+    #[serial_test::serial]
     #[serial]
     async fn test_restore_endpoint_refuses_a_path_outside_the_allowlist() {
         let _home = crate::test_utils::SandboxHome::new();
@@ -890,6 +892,7 @@ mod tests {
     }
 
     fn test_state(auth_token: Option<&str>) -> Arc<AppState> {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let (event_tx, _rx) =
             tokio::sync::broadcast::channel::<crate::commands::watcher::FileWatchEvent>(1);
         Arc::new(AppState {
@@ -908,6 +911,7 @@ mod tests {
     }
 
     fn test_account_state() -> Arc<AppState> {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let (event_tx, _rx) =
             tokio::sync::broadcast::channel::<crate::commands::watcher::FileWatchEvent>(1);
         let password_hash = hash_password_argon2id("secret-password").unwrap();
@@ -926,6 +930,7 @@ mod tests {
     }
 
     fn test_state_read_only() -> Arc<AppState> {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let (event_tx, _rx) =
             tokio::sync::broadcast::channel::<crate::commands::watcher::FileWatchEvent>(1);
         Arc::new(AppState {
@@ -950,7 +955,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_allow_query_token_only_for_sse_get() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let auth = AuthState::Token {
             token: "abc".to_string(),
             secure_cookies: false,
@@ -986,7 +993,9 @@ mod tests {
         ));
     }
     #[test]
+    #[serial_test::serial]
     fn test_auth_cookie_token_reads_named_cookie() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let auth = AuthState::Token {
             token: "abc 123".to_string(),
             secure_cookies: false,
@@ -1005,7 +1014,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_auth_login_sets_http_only_cookie() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let app = build_router(
             test_state(Some("secret-token")),
             "127.0.0.1",
@@ -1040,7 +1051,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_auth_cookie_allows_protected_api() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let app = build_router(
             test_state(Some("secret-token")),
             "127.0.0.1",
@@ -1064,7 +1077,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_invalid_auth_login_is_rejected() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let app = build_router(
             test_state(Some("secret-token")),
             "127.0.0.1",
@@ -1088,7 +1103,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_account_login_sets_session_and_csrf_cookies() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let app = build_router(test_account_state(), "127.0.0.1", 3727, None, "/");
         let response = app
             .oneshot(
@@ -1122,7 +1139,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_account_session_requires_csrf_for_post() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let app = build_router(test_account_state(), "127.0.0.1", 3727, None, "/");
         let login_response = app
             .clone()
@@ -1157,7 +1176,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_read_only_blocks_mutating_api_paths() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         for path in [
             "/delete_session",
             "/api/delete_session",
@@ -1172,7 +1193,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_read_only_allows_read_api_paths() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         for path in [
             "/get_server_config",
             "/api/get_server_config",
@@ -1189,7 +1212,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_read_only_blocks_unknown_routes_by_default() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         // Deny-by-default: a route that is not on the read allowlist (e.g. a future
         // mutating command someone forgets to classify) is blocked rather than leaked.
         for path in ["/api/some_future_command", "/api/purge_everything"] {
@@ -1205,6 +1230,7 @@ mod tests {
     /// has a stale entry. Adding a `.route("/x", post(..))` without classifying it
     /// fails here — the failure mode the read-only allowlist must never regress into.
     #[test]
+    #[serial_test::serial]
     fn read_only_classification_covers_every_post_route() {
         use std::collections::HashSet;
         // Scope to the build_router body so doc-comment examples and test-only routers
@@ -1252,7 +1278,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_normalize_base_path() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         assert_eq!(normalize_base_path("").unwrap(), "/");
         assert_eq!(normalize_base_path("/").unwrap(), "/");
         assert_eq!(normalize_base_path("/viewer/").unwrap(), "/viewer");
@@ -1269,7 +1297,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_inject_base_path_adds_base_and_runtime_config() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let html = "<html><head><title>x</title></head><body></body></html>";
         let injected = inject_base_path(html, "/tools/history");
 
@@ -1279,7 +1309,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_prefixed_router_serves_api_under_base_path() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let app = build_router(test_state(None), "127.0.0.1", 3727, None, "/viewer");
         let response = app
             .oneshot(
@@ -1296,7 +1328,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_api_health_check() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let app = build_router(test_state(None), "127.0.0.1", 3727, None, "/");
         let response = app
             .oneshot(
@@ -1313,7 +1347,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_prefixed_router_serves_api_health() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let app = build_router(test_state(None), "127.0.0.1", 3727, None, "/viewer");
         let response = app
             .oneshot(
@@ -1330,7 +1366,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_prefixed_router_does_not_expose_root_api() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let app = build_router(test_state(None), "127.0.0.1", 3727, None, "/viewer");
         let response = app
             .oneshot(
@@ -1347,7 +1385,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_prefixed_spa_fallback_injects_base_path() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let app = build_router(test_state(None), "127.0.0.1", 3727, None, "/viewer");
         let response = app
             .oneshot(
@@ -1368,7 +1408,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_prefixed_router_serves_spa_root() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let app = build_router(test_state(None), "127.0.0.1", 3727, None, "/viewer");
         for uri in ["/viewer", "/viewer/"] {
             let response = app
@@ -1391,6 +1433,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn read_only_mode_blocks_mutations_over_http() {
         let app = build_router(test_state_read_only(), "127.0.0.1", 3727, None, "/");
         // A mutating route is rejected with 403 by the read-only layer.
@@ -1425,6 +1468,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn read_only_enforcement_survives_base_path_nesting() {
         // .nest(&base_path, app) strips the prefix, so the inner read-only layer must
         // still see /api/... and block mutations under a configured base path.

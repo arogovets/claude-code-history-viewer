@@ -402,6 +402,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn parse_history_maps_amazon_q_conversation() {
         let conn = fixture_db();
         let (_, value) = scan_rows(&conn)
@@ -421,6 +422,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn project_metadata_skips_empty_and_counts() {
         let conn = fixture_db();
         let rows = scan_rows(&conn);
@@ -442,6 +444,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn db_path_uses_amazon_q_under_data_local_dir() {
         // Sanity: path ends with the expected segments (don't assert the root,
         // which is host-specific).

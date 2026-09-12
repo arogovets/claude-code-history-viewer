@@ -1669,7 +1669,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_deserialize_remote_projects() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let json_str = r#"[{"actual_path":"/Users/arogovets","last_modified":"2026-09-05T17:46:00.269682157+00:00","message_count":15290,"name":"arogovets","path":"codex:///Users/arogovets","provider":"codex","session_count":3},{"actual_path":"/Volumes/Extreme SSD/tt/костя/ Милый-Ветта-Венская","git_info":{"worktree_type":"not_git"},"last_modified":"2026-08-07T04:36:26.017476805+00:00","message_count":31505,"name":" Милый-Ветта-Венская","path":"/Users/arogovets/.claude/projects/-Volumes-Extreme-SSD-tt---------------------------","path_status":"unavailable","provider":"claude","session_count":1}]"#;
         let projects: Result<Vec<ClaudeProject>, _> = serde_json::from_str(json_str);
         assert!(
@@ -1715,6 +1717,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_remote_scan_live() {
         let _sandbox = crate::test_utils::SandboxHome::new();
         let host = get_default_remote_host();

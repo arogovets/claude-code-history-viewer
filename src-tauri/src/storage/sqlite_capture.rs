@@ -308,6 +308,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn backup_produces_validated_copy() {
         let dir = tempfile::tempdir().unwrap();
         let live = make_live_db(dir.path());
@@ -324,6 +325,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn missing_source_is_an_error() {
         let dir = tempfile::tempdir().unwrap();
         let err =
@@ -356,6 +358,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn merge_resurrects_deleted_rows_and_skips_keyless_tables() {
         let dir = tempfile::tempdir().unwrap();
         let prev = dir.path().join("prev.db");
@@ -402,6 +405,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn merge_is_idempotent() {
         let dir = tempfile::tempdir().unwrap();
         let prev = dir.path().join("prev.db");
@@ -412,6 +416,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn corrupt_copy_fails_quick_check() {
         let dir = tempfile::tempdir().unwrap();
         let bad = dir.path().join("bad.db");

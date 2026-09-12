@@ -1327,7 +1327,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_percent_decode_basic() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         assert_eq!(percent_decode("a%20b"), "a b");
         assert_eq!(percent_decode("%2F%2Fx"), "//x");
         // Incomplete / non-hex escapes pass through literally.
@@ -1337,7 +1339,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_percent_decode_no_panic_on_multibyte_after_percent() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         // A literal `%` immediately before a multibyte UTF-8 char must not panic
         // (the byte slice would otherwise land mid-codepoint). E.g. a workspace
         // folder named "100%€done".
@@ -1349,7 +1353,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_convert_user_bubble() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let bubble = json!({
             "type": 1,
             "bubbleId": "user-1",
@@ -1364,7 +1370,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_convert_assistant_text_bubble() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let bubble = json!({
             "type": 2,
             "bubbleId": "asst-1",
@@ -1380,7 +1388,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_convert_user_bubble_with_numeric_timestamp() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let bubble = json!({
             "type": 1,
             "bubbleId": "user-2",
@@ -1394,7 +1404,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_convert_assistant_tool_bubble() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let bubble = json!({
             "type": 2,
             "bubbleId": "asst-2",
@@ -1416,7 +1428,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_convert_thinking_bubble() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let bubble = json!({
             "type": 2,
             "bubbleId": "asst-3",
@@ -1430,7 +1444,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_map_cursor_tool_names() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         assert_eq!(map_cursor_tool_name("read_file"), "Read");
         assert_eq!(map_cursor_tool_name("execute_command"), "Bash");
         assert_eq!(map_cursor_tool_name("codebase_search"), "Grep");
@@ -1439,14 +1455,18 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_parse_cursor_json_with_control_chars() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let data = "{\"text\": \"hello\x01world\"}";
         let result = parse_cursor_json(data).unwrap();
         assert!(result["text"].as_str().unwrap().contains("hello"));
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_read_workspace_folder_format() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         // Test the folder URL parsing logic
         let folder = "file:///Users/jack/project";
         let result = folder.strip_prefix("file://").unwrap();
@@ -1454,19 +1474,25 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_ms_to_iso() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let result = ms_to_iso(1700000000000);
         assert!(result.starts_with("2023-11-14T"));
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_empty_bubble() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let bubble = json!({"type": 2, "bubbleId": "empty", "text": ""});
         assert!(convert_cursor_bubble(&bubble, 2, "session-1").is_none());
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_assistant_bubble_uses_composer_model() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let bubble = json!({
             "type": 2,
             "bubbleId": "a1",
@@ -1479,7 +1505,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_attach_composer_token_usage_to_last_assistant() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let mut messages = vec![
             convert_cursor_bubble(
                 &json!({
@@ -1517,8 +1545,10 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn test_scan_projects_from_migrated_global_composers() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp = tempfile::TempDir::new().unwrap();
         let user_dir = temp.path().join("User");
         let ws_hash = "hash-migrated";
@@ -1669,7 +1699,9 @@ mod tests {
     /// One corrupt workspace DB must not fail (or block) the whole scan — the
     /// valid workspaces still come back, sorted by `last_modified` desc.
     #[test]
+    #[serial_test::serial]
     fn test_scan_projects_in_tolerates_corrupt_workspace_db() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let tmp = tempfile::TempDir::new().unwrap();
         let ws_dir = tmp.path().join("workspaceStorage");
 

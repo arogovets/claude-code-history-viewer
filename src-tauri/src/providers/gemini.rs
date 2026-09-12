@@ -1134,7 +1134,9 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    #[serial_test::serial]
     fn test_parse_gemini_session_legacy_json() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let data = json!({
             "sessionId": "s-legacy",
             "projectHash": "hash-1",
@@ -1159,7 +1161,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_parse_gemini_session_jsonl() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         // Metadata first line, then one message record per line (gemini-cli#23749).
         let data = [
             r#"{"sessionId":"s-jsonl","projectHash":"hash-2","startTime":"2026-06-01T00:00:00Z","lastUpdated":"2026-06-01T00:00:00Z","kind":"main"}"#,
@@ -1180,7 +1184,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_parse_gemini_session_jsonl_set_update_and_rewind() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         // `$set` updates metadata (e.g. lastUpdated); `$rewindTo` is not a message.
         let data = [
             r#"{"sessionId":"s3","projectHash":"h3","lastUpdated":"2026-06-01T00:00:00Z"}"#,
@@ -1201,7 +1207,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_parse_gemini_session_jsonl_metadata_only() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         // A freshly-created session may have only the metadata line and no messages.
         let data = r#"{"sessionId":"s5","projectHash":"h5","kind":"main"}"#;
         let (meta, msgs) = parse_gemini_session(data).expect("metadata-only should parse");
@@ -1210,7 +1218,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_parse_gemini_session_empty_returns_none() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         assert!(parse_gemini_session("").is_none());
         assert!(parse_gemini_session("   \n  \n").is_none());
         // Malformed lines are skipped; with nothing valid, returns None.
@@ -1218,7 +1228,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_parse_gemini_session_jsonl_message_converts() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         // End-to-end: a .jsonl message record converts via convert_gemini_message.
         let data = [
             r#"{"sessionId":"s4","projectHash":"h4"}"#,
@@ -1233,7 +1245,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_map_gemini_tool_name() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         assert_eq!(map_gemini_tool_name("read_file"), "Read");
         assert_eq!(map_gemini_tool_name("ReadFile"), "Read");
         assert_eq!(map_gemini_tool_name("write_file"), "Write");
@@ -1245,7 +1259,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_convert_user_message_string_content() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let msg = json!({
             "id": "user-1",
             "timestamp": "2026-03-24T12:00:00Z",
@@ -1265,7 +1281,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_convert_gemini_response_with_text() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let msg = json!({
             "id": "gemini-1",
             "timestamp": "2026-03-24T12:00:01Z",
@@ -1301,7 +1319,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_convert_gemini_response_with_tool_calls() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let msg = json!({
             "id": "gemini-2",
             "timestamp": "2026-03-24T12:00:02Z",
@@ -1341,7 +1361,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_convert_gemini_response_preserves_subagent_ids() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let msg = json!({
             "id": "gemini-agents",
             "timestamp": "2026-07-07T00:00:00Z",
@@ -1377,7 +1399,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_convert_gemini_response_with_thoughts() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let msg = json!({
             "id": "gemini-3",
             "timestamp": "2026-03-24T12:00:00Z",
@@ -1399,7 +1423,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_convert_error_message() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let msg = json!({
             "id": "err-1",
             "timestamp": "2026-03-24T12:00:00Z",
@@ -1414,7 +1440,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_convert_gemini_content_string() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let content = Value::String("Hello".to_string());
         let result = convert_gemini_content_to_claude(Some(&content)).unwrap();
         let arr = result.as_array().unwrap();
@@ -1423,7 +1451,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_convert_gemini_content_array() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let content = json!([{"text": "Hello"}, {"text": "World"}]);
         let result = convert_gemini_content_to_claude(Some(&content)).unwrap();
         let arr = result.as_array().unwrap();
@@ -1433,12 +1463,16 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_convert_gemini_content_none() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         assert!(convert_gemini_content_to_claude(None).is_none());
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_anonymous_function_call_response_id_matching() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         // functionCall without id followed by functionResponse without id
         let content = json!([
             {
@@ -1465,7 +1499,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_extract_tool_result_content_function_response() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let result = json!([{
             "functionResponse": {
                 "id": "tool-1",
@@ -1478,14 +1514,18 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_extract_tool_result_content_fallback() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let result = json!({"some": "data"});
         let extracted = extract_tool_result_content(&result);
         assert!(extracted.as_str().unwrap().contains("some"));
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_extract_result_display_string() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let display = Value::String("Output text".to_string());
         let result = extract_result_display(&display).unwrap();
         assert_eq!(result["type"], "text");
@@ -1493,21 +1533,27 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_extract_result_display_file_diff() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let display = json!({"fileDiff": "...", "fileName": "test.rs"});
         let result = extract_result_display(&display).unwrap();
         assert!(result["text"].as_str().unwrap().contains("test.rs"));
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_extract_result_display_subagent() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let display = json!({"isSubagentProgress": true, "agentName": "helper"});
         let result = extract_result_display(&display).unwrap();
         assert!(result["text"].as_str().unwrap().contains("helper"));
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_unknown_message_type_returns_none() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let msg = json!({
             "id": "unknown-1",
             "timestamp": "2026-03-24T12:00:00Z",
@@ -1517,7 +1563,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_gemini_response_empty_content() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let msg = json!({
             "id": "gemini-empty",
             "timestamp": "2026-03-24T12:00:00Z",
@@ -1533,7 +1581,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_tool_call_with_error_status() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let msg = json!({
             "id": "gemini-err",
             "timestamp": "2026-03-24T12:00:00Z",
@@ -1564,7 +1614,9 @@ mod tests {
     // ====================================================================
 
     #[test]
+    #[serial_test::serial]
     fn test_part_thought_flag() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let part = json!({"text": "Thinking about this...", "thought": true});
         let result = convert_gemini_part(&part).unwrap();
         assert_eq!(result["type"], "thinking");
@@ -1572,7 +1624,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_part_file_data() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let part = json!({
             "fileData": {
                 "fileUri": "gs://bucket/file.pdf",
@@ -1586,7 +1640,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_part_function_call() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let part = json!({
             "functionCall": {
                 "name": "read_file",
@@ -1603,7 +1659,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_part_function_call_with_explicit_id() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let part = json!({
             "functionCall": {
                 "id": "call_123",
@@ -1617,7 +1675,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_part_function_response() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let part = json!({
             "functionResponse": {
                 "id": "call_123",
@@ -1632,7 +1692,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_part_executable_code() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let part = json!({
             "executableCode": {
                 "code": "print('hello')",
@@ -1647,7 +1709,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_part_code_execution_result() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let part = json!({
             "codeExecutionResult": {
                 "outcome": "OUTCOME_OK",
@@ -1662,7 +1726,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_part_inline_data_image() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let part = json!({
             "inlineData": {
                 "mimeType": "image/png",
@@ -1677,7 +1743,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_part_inline_data_non_image() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let part = json!({
             "inlineData": {
                 "mimeType": "application/pdf",
@@ -1691,7 +1759,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_part_plain_string() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let part = Value::String("plain text".to_string());
         let result = convert_gemini_part(&part).unwrap();
         assert_eq!(result["type"], "text");
@@ -1699,13 +1769,17 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_part_unknown_returns_none() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let part = json!({"unknownField": true});
         assert!(convert_gemini_part(&part).is_none());
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_gemini_response_with_part_level_thought() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let msg = json!({
             "id": "gemini-part-thought",
             "timestamp": "2026-03-24T12:00:00Z",

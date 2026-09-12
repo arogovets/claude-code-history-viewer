@@ -516,10 +516,12 @@ mod tests {
     use axum::body::Body;
 
     fn test_hash() -> String {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         hash_password_argon2id("correct horse battery staple").unwrap()
     }
 
     #[test]
+    #[serial_test::serial]
     fn account_login_creates_session_and_csrf() {
         let auth = AccountAuth::new("admin".to_string(), test_hash(), true);
         let payload = AuthLoginRequest {
@@ -542,6 +544,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn account_login_rejects_wrong_password() {
         let auth = AccountAuth::new("admin".to_string(), test_hash(), true);
         let payload = AuthLoginRequest {
@@ -557,6 +560,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn csrf_header_must_match_session_token() {
         let request = Request::builder()
             .method(Method::POST)
@@ -578,6 +582,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn unknown_usernames_collapse_to_one_bucket() {
         // A username-rotating attacker must not be able to grow the attempts map:
         // every unknown username shares the "_unknown" bucket, so the map stays tiny.
@@ -595,6 +600,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn unknown_username_spam_does_not_lock_real_account() {
         // Spamming unknown usernames locks only the "_unknown" bucket; the real
         // account lives in a separate bucket and must remain able to authenticate.
@@ -614,6 +620,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn login_evicts_oldest_session_when_at_capacity() {
         let auth = AccountAuth::new("admin".to_string(), test_hash(), false);
         {
@@ -645,6 +652,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn account_locks_out_after_max_failures() {
         let auth = AccountAuth::new("admin".to_string(), test_hash(), false);
         let wrong = AuthLoginRequest {

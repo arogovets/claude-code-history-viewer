@@ -1263,6 +1263,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[serial_test::serial]
     fn select_wsl_search_providers_separates_native_and_wsl_sources() {
         let active_providers = vec!["claude".to_string(), "codex".to_string()];
         let requested_wsl_providers = vec!["claude".to_string(), "codex".to_string()];
@@ -1326,6 +1327,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn global_search_ranking_prefers_conversation_roles_over_tool_matches() {
         let mut user = make_message_with_uuid(
             "user-text",
@@ -1365,6 +1367,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn paginate_chat_style_returns_newest_window_first() {
         let messages: Vec<ClaudeMessage> = (1..=5)
             .map(|i| {
@@ -1422,6 +1425,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn paginate_chat_style_empty_input() {
         let page = paginate_messages_chat_style(vec![], 0, 100);
         assert!(page.messages.is_empty());
@@ -1431,6 +1435,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn load_provider_messages_paginated_claude_merges_within_window() {
         let temp_dir = tempfile::TempDir::new().unwrap();
         let file_path = temp_dir.path().join("session.jsonl");
@@ -1479,6 +1484,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn get_provider_message_offset_claude_matches_pagination_space() {
         let temp_dir = tempfile::TempDir::new().unwrap();
         let file_path = temp_dir.path().join("session.jsonl");
@@ -1517,6 +1523,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn select_wsl_vscode_base_prefers_stable_but_preserves_fallback() {
         let insiders_only = vec![(
             PathBuf::from(r"\\wsl.localhost\Ubuntu\home\me\.vscode-server-insiders\data\User"),
@@ -1539,6 +1546,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     /// Merge a tool result message into the previous tool-use message when possible.
     fn merge_tool_result_into_previous_tool_use_message() {
         let tool_use = make_message(
@@ -1574,6 +1582,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     /// Split and merge multiple tool results from a single provider message.
     fn merge_multiple_tool_results_from_single_message() {
         let tool_use = make_message(
@@ -1620,6 +1629,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     /// Verify partial merging preserves unmerged and non-tool content.
     fn partial_merge_preserves_unmerged_and_non_tool_content() {
         let tool_use = make_message(

@@ -1476,6 +1476,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn scan_projects_groups_sessions_by_workspace_directory() {
         let temp = TempDir::new().expect("temp dir");
         let root = code_root(&temp);
@@ -1537,6 +1538,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn scan_projects_falls_back_to_state_cwd_without_workspace_map() {
         let temp = TempDir::new().expect("temp dir");
         let root = code_root(&temp);
@@ -1557,6 +1559,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn load_sessions_reports_metadata_and_entrypoint() {
         let temp = TempDir::new().expect("temp dir");
         let root = code_root(&temp);
@@ -1586,6 +1589,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn load_sessions_marks_vscode_sessions_by_state_custom_marker() {
         let temp = TempDir::new().expect("temp dir");
         let root = code_root(&temp);
@@ -1619,6 +1623,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn load_sessions_prefers_state_title_over_first_user_text() {
         let temp = TempDir::new().expect("temp dir");
         let root = code_root(&temp);
@@ -1637,6 +1642,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn fold_maps_loop_events_to_viewer_messages() {
         let temp = TempDir::new().expect("temp dir");
         let root = code_root(&temp);
@@ -1687,6 +1693,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn fold_drops_vacuous_assistant_step() {
         let temp = TempDir::new().expect("temp dir");
         let root = code_root(&temp);
@@ -1706,6 +1713,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn fold_interrupted_tool_call_settles_with_error_result() {
         let temp = TempDir::new().expect("temp dir");
         let root = code_root(&temp);
@@ -1728,6 +1736,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn fold_defers_user_message_until_tool_exchange_closes() {
         let temp = TempDir::new().expect("temp dir");
         let root = code_root(&temp);
@@ -1751,6 +1760,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn fold_undo_cuts_the_last_user_turn_not_just_one_message() {
         let temp = TempDir::new().expect("temp dir");
         let root = code_root(&temp);
@@ -1780,6 +1790,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn fold_undo_stops_at_compaction_boundary() {
         let temp = TempDir::new().expect("temp dir");
         let root = code_root(&temp);
@@ -1798,6 +1809,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn fold_undo_extends_over_prompt_owned_injections() {
         let temp = TempDir::new().expect("temp dir");
         let root = code_root(&temp);
@@ -1822,6 +1834,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn fold_undo_keeps_injections_owned_by_another_prompt() {
         let temp = TempDir::new().expect("temp dir");
         let root = code_root(&temp);
@@ -1845,6 +1858,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn interrupted_tool_message_carries_the_current_timestamp() {
         let temp = TempDir::new().expect("temp dir");
         let root = code_root(&temp);
@@ -1867,6 +1881,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn undo_during_open_tool_exchange_drops_pending_and_deferred() {
         let temp = TempDir::new().expect("temp dir");
         let root = code_root(&temp);
@@ -1896,6 +1911,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn no_op_undo_keeps_deferred_messages_alive() {
         let temp = TempDir::new().expect("temp dir");
         let root = code_root(&temp);
@@ -1935,6 +1951,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn fold_applies_clear_and_compaction() {
         let temp = TempDir::new().expect("temp dir");
         let root = code_root(&temp);
@@ -1961,6 +1978,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn tool_arguments_string_form_is_parsed() {
         let temp = TempDir::new().expect("temp dir");
         let root = code_root(&temp);
@@ -1979,6 +1997,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn search_matches_folded_content_and_respects_limit() {
         let temp = TempDir::new().expect("temp dir");
         let root = code_root(&temp);
@@ -2003,6 +2022,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    #[serial_test::serial]
     /// A symlinked session directory pointing outside the store must be
     /// rejected by the path guard, not read through.
     fn load_messages_rejects_symlinked_session_dir() {
@@ -2045,6 +2065,7 @@ mod tests {
     /// llm.request → usage.record → parts → step.end), which is where the
     /// token counts belong for the analytics dashboard.
     #[test]
+    #[serial_test::serial]
     fn usage_records_attach_to_the_open_assistant_step() {
         let temp = TempDir::new().expect("temp dir");
         let root = code_root(&temp);
@@ -2080,6 +2101,7 @@ mod tests {
     /// One record per step is the shape on disk, but a step that issued more
     /// than one request must total rather than keep only the last.
     #[test]
+    #[serial_test::serial]
     fn usage_records_accumulate_within_one_step() {
         let temp = TempDir::new().expect("temp dir");
         let root = code_root(&temp);
@@ -2110,6 +2132,7 @@ mod tests {
     /// content-addressed blob next to the wire; the viewer only understands
     /// Claude-shaped `image` blocks, so the fold resolves them.
     #[test]
+    #[serial_test::serial]
     fn image_url_parts_are_converted_to_claude_image_blocks() {
         let temp = TempDir::new().expect("temp dir");
         let root = code_root(&temp);
@@ -2154,6 +2177,7 @@ mod tests {
     /// metadata out of it, so they must not pay for reading and encoding
     /// image blobs whose result is discarded.
     #[test]
+    #[serial_test::serial]
     fn scan_and_search_paths_leave_blobrefs_unresolved() {
         let temp = TempDir::new().expect("temp dir");
         let root = code_root(&temp);
@@ -2199,6 +2223,7 @@ mod tests {
 
     /// Inline data URLs carry the bytes directly — no blob lookup needed.
     #[test]
+    #[serial_test::serial]
     fn image_url_data_urls_are_converted_to_base64_image_blocks() {
         let temp = TempDir::new().expect("temp dir");
         let root = code_root(&temp);
@@ -2235,6 +2260,7 @@ mod tests {
     // test binary rather than just skipping this one case.
     #[cfg(unix)]
     #[test]
+    #[serial_test::serial]
     fn symlinked_journal_directories_are_rejected() {
         use std::os::unix::fs as unix_fs;
 
@@ -2284,6 +2310,7 @@ mod tests {
     /// directory pointing at arbitrary files.
     #[cfg(unix)]
     #[test]
+    #[serial_test::serial]
     fn symlinked_blob_directory_is_not_followed() {
         use std::os::unix::fs as unix_fs;
 
@@ -2323,6 +2350,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn sessions_without_wire_are_skipped() {
         let temp = TempDir::new().expect("temp dir");
         let root = code_root(&temp);

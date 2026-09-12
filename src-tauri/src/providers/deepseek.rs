@@ -718,7 +718,9 @@ mod tests {
     use super::*;
 
     #[test]
+    #[serial_test::serial]
     fn test_slug_to_path() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         assert_eq!(
             slug_to_path("--Users-emac-Dev-tutor--"),
             "/Users/emac/Dev/tutor"
@@ -727,7 +729,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_epoch_ms_to_rfc3339() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let ts = epoch_ms_to_rfc3339(1786951970519);
         assert!(ts.contains("2026") || ts.contains("2025") || ts.contains('T'));
     }

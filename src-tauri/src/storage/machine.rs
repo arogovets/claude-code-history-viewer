@@ -85,6 +85,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn wsl_machine_id_shape() {
         assert!(is_valid_machine_id(&wsl_machine_id("Ubuntu")));
         assert!(!is_valid_machine_id("wsl:"));

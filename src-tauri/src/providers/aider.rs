@@ -698,7 +698,9 @@ def fix():
 ";
 
     #[test]
+    #[serial_test::serial]
     fn test_split_sessions() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let sessions = split_sessions(SAMPLE_HISTORY);
         assert_eq!(sessions.len(), 2);
         assert_eq!(
@@ -716,7 +718,9 @@ def fix():
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_parse_messages() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let sessions = split_sessions(SAMPLE_HISTORY);
         let messages = parse_messages(&sessions[0].content, "test-session", "2025-03-26T14:32:01Z");
 
@@ -731,7 +735,9 @@ def fix():
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_parse_user_message() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let content = "#### Hello world\n\nResponse here";
         let messages = parse_messages(content, "s1", "2025-01-01T00:00:00Z");
         assert_eq!(messages[0].message_type, "user");
@@ -742,7 +748,9 @@ def fix():
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_parse_session_path() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let (file, idx) =
             parse_session_path("aider:///home/user/project/.aider.chat.history.md#3").unwrap();
         assert_eq!(file, "/home/user/project/.aider.chat.history.md");
@@ -750,13 +758,17 @@ def fix():
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_empty_content() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let messages = parse_messages("", "s1", "2025-01-01T00:00:00Z");
         assert!(messages.is_empty());
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_tool_output_grouping() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let content = "> Line 1\n> Line 2\n> Line 3";
         let messages = parse_messages(content, "s1", "2025-01-01T00:00:00Z");
         assert_eq!(messages.len(), 1);

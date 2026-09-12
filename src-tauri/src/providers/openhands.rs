@@ -550,6 +550,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn convert_user_and_assistant_messages() {
         let u = convert_event(&user_event(), "s1", 0).unwrap();
         assert_eq!(u.role.as_deref(), Some("user"));
@@ -563,6 +564,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn convert_tool_call_and_observation_link_by_cause() {
         let call = convert_event(&toolcall_event(), "s1", 2).unwrap();
         assert_eq!(call.role.as_deref(), Some("assistant"));
@@ -582,12 +584,14 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn system_and_unknown_records_are_skipped() {
         assert!(convert_event(&system_event(), "s1", 0).is_none());
         assert!(convert_event(&json!({ "id": 1, "source": "agent" }), "s1", 0).is_none());
     }
 
     #[test]
+    #[serial_test::serial]
     fn events_dir_rejects_traversal() {
         let base = std::path::Path::new("/tmp/oh-base");
         assert!(events_dir_for_in(base, "../../etc").is_err());

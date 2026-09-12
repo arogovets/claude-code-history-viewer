@@ -887,6 +887,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn extract_working_directory_accepts_windows_absolute_paths() {
         let prompt = "The current working directory is `C:\\Users\\max\\repo`.";
 
@@ -897,6 +898,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn extract_working_directory_accepts_unc_paths() {
         let prompt = r"The current working directory is `\\fileserver\share\project`.";
         assert_eq!(
@@ -906,6 +908,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn get_base_path_prefers_kimi_share_dir_over_kimi_home() {
         let temp = TempDir::new().unwrap();
@@ -923,6 +926,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn get_base_path_returns_none_when_default_dir_absent() {
         // The sandbox guarantees the default dir is absent, so the assertion
@@ -987,6 +991,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn search_merges_both_stores_and_keeps_the_newest_within_limit() {
         let temp = TempDir::new().unwrap();
@@ -1038,6 +1043,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn search_still_returns_legacy_hits_when_kimi_code_is_absent() {
         let temp = TempDir::new().unwrap();
@@ -1063,6 +1069,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn detect_reports_the_kimi_code_root_when_legacy_has_no_sessions() {
         let temp = TempDir::new().unwrap();
@@ -1086,6 +1093,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn detect_prefers_the_legacy_root_when_it_holds_sessions() {
         let temp = TempDir::new().unwrap();
@@ -1108,6 +1116,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn detect_falls_through_to_kimi_code_when_legacy_sessions_dir_is_empty() {
         let temp = TempDir::new().unwrap();
@@ -1128,6 +1137,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn detect_falls_through_to_kimi_code_when_legacy_sessions_lack_context_files() {
         let temp = TempDir::new().unwrap();
@@ -1148,6 +1158,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn detect_falls_through_to_kimi_code_when_legacy_context_file_is_empty() {
         let temp = TempDir::new().unwrap();
@@ -1170,6 +1181,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn detect_keeps_the_idle_legacy_root_when_kimi_code_is_absent() {
         let temp = TempDir::new().unwrap();
@@ -1193,6 +1205,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn detect_returns_none_when_neither_store_holds_sessions() {
         let temp = TempDir::new().unwrap();

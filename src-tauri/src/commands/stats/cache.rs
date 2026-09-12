@@ -1322,10 +1322,12 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     /// Repeat calls on an unchanged file are served from cache (single build);
     /// appending to the file changes (size, mtime) and forces a re-parse that
     /// reflects the new data, while a sibling file stays cached.
     fn test_cache_serves_unchanged_file_and_reparses_after_append() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().expect("temp dir");
         let project_dir = temp_dir.path().join("demo-project");
         fs::create_dir_all(&project_dir).expect("project dir");
@@ -1394,9 +1396,11 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     /// The two stats modes occupy independent slots of the same entry: each
     /// mode builds once, then both are served from cache.
     fn test_cache_keeps_separate_slots_per_stats_mode() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().expect("temp dir");
         let file = temp_dir.path().join("modes.jsonl");
         write_session(
@@ -1441,9 +1445,11 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     /// Composed global stats are identical to the full scan, unfiltered and
     /// with a day-aligned date filter, in both stats modes.
     fn test_global_compose_matches_full_scan_unfiltered_and_day_filtered() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().expect("temp dir");
         let project_dir = temp_dir.path().join("demo-project");
         fs::create_dir_all(&project_dir).expect("project dir");
@@ -1483,10 +1489,12 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     /// Composed message-pipeline results (project stats, token stats, session
     /// comparison) are identical to their full scans, unfiltered and with a
     /// day-aligned date filter.
     fn test_message_compose_matches_full_scan_for_project_token_and_comparison() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().expect("temp dir");
         let project_dir = temp_dir.path().join("demo-project");
         fs::create_dir_all(&project_dir).expect("project dir");
@@ -1556,10 +1564,12 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     /// A filter boundary that lands inside a day's data cannot be composed
     /// from daily buckets; composition must signal a full scan and the cached
     /// wrapper must return exactly the scan result.
     fn test_partial_day_filter_needs_full_scan() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().expect("temp dir");
         let file = temp_dir.path().join("partial-day.jsonl");
         write_session(
@@ -1590,10 +1600,12 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     /// A deduped usage key spanning two days poisons filtered composition
     /// (the cold scan re-attributes usage to the first in-range row);
     /// unfiltered composition stays exact.
     fn test_dedup_spanning_days_needs_full_scan_when_filtered() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().expect("temp dir");
         let file = temp_dir.path().join("dedup-span.jsonl");
         write_session(
@@ -1649,10 +1661,12 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     /// Run-merging reproduces the scan's gap semantics: runs within the
     /// break threshold merge (including across days), larger gaps split, and
     /// every period counts at least one minute.
     fn test_merged_active_minutes_matches_gap_semantics() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         // Two runs 30 minutes apart merge into one period of 70 minutes.
         let merged = merged_active_minutes(&[
             (dt("2025-03-01T10:00:00Z"), dt("2025-03-01T10:20:00Z")),
@@ -1678,10 +1692,12 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     /// End-to-end through the cached wrapper: a warm cache answers a
     /// day-filtered query from daily buckets with the same result as a cold
     /// scan.
     fn test_wrapper_date_filter_output_matches_cold_scan() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().expect("temp dir");
         let project_dir = temp_dir.path().join("demo-project");
         fs::create_dir_all(&project_dir).expect("project dir");

@@ -406,6 +406,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn scan_load_and_retag_via_interpreter_home() {
         let tmp = TempDir::new().unwrap();
@@ -447,6 +448,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn load_messages_rejects_path_outside_base() {
         let tmp = TempDir::new().unwrap();

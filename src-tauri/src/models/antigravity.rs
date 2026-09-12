@@ -134,14 +134,18 @@ mod tests {
     use super::*;
 
     #[test]
+    #[serial_test::serial]
     fn test_antigravity_state_default() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let state = AntigravityState::default();
         assert!(state.sessions.is_empty());
         assert!(state.last_poll_at.is_none());
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_session_lifecycle_status_default() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let lifecycle = SessionLifecycle::default();
         assert!(matches!(lifecycle.status, SessionLifecycleStatus::Active));
         assert_eq!(lifecycle.last_seen_at, 0);
@@ -149,14 +153,18 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_session_totals_default() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let totals = SessionTotals::default();
         assert_eq!(totals.total_tokens, 0);
         assert_eq!(totals.input_tokens, 0);
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_antigravity_state_serialization() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let state = AntigravityState {
             last_poll_at: Some(1_700_000_000_000),
             sessions: HashMap::new(),
@@ -167,7 +175,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_lifecycle_status_serialization() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let active = SessionLifecycleStatus::Active;
         let json = serde_json::to_string(&active).unwrap();
         assert_eq!(json, "\"active\"");
@@ -178,7 +188,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_parse_persisted_session_state_from_json() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let json = r#"{
             "signature": "test-sig",
             "latest": {

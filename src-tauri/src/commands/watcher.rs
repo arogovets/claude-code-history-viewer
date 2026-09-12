@@ -676,7 +676,9 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
+    #[serial_test::serial]
     fn test_extract_paths() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let path = PathBuf::from("/Users/test/.claude/projects/my-project/session.jsonl");
         let result = extract_paths(&path);
 
@@ -688,7 +690,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_extract_paths_nested() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let path = PathBuf::from("/Users/test/.claude/projects/my-project/subfolder/session.jsonl");
         let result = extract_paths(&path);
 
@@ -700,7 +704,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_extract_paths_invalid() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let path = PathBuf::from("/Users/test/session.jsonl");
         let result = extract_paths(&path);
 
@@ -708,7 +714,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_to_file_watch_event_ignores_unchanged_content_signature() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp = TempDir::new().unwrap();
         // Nothing here wants the home directory, but `to_file_watch_event`
         // resolves it while classifying the path. Point it at this test's own
@@ -746,7 +754,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_extract_codex_paths() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let path = PathBuf::from("/Users/test/.codex/sessions/2025/10/rollout-abc.jsonl");
         let result = extract_codex_paths(&path).unwrap();
 
@@ -755,8 +765,10 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn test_extract_pi_store_paths_matches_direct_session_files_only() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp = TempDir::new().unwrap();
         let root = temp.path().join("agent").join("sessions");
         let project = root.join("--Users-jack-my-proj");
@@ -785,7 +797,9 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    #[serial_test::serial]
     fn test_extract_pi_store_paths_rejects_symlinked_project_dir() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         use std::os::unix::fs as unix_fs;
 
         let temp = TempDir::new().unwrap();
@@ -805,7 +819,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_extract_kimi_context_paths() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp = TempDir::new().unwrap();
         let old_kimi_home = std::env::var_os("KIMI_HOME");
         std::env::set_var("KIMI_HOME", temp.path());
@@ -849,8 +865,10 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn test_extract_kimi_state_paths() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp = TempDir::new().unwrap();
         let old_kimi_home = std::env::var_os("KIMI_HOME");
         std::env::set_var("KIMI_HOME", temp.path());
@@ -894,8 +912,10 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn test_extract_kimi_paths_from_custom_home() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp = TempDir::new().unwrap();
         let old_kimi_home = std::env::var_os("KIMI_HOME");
         std::env::set_var("KIMI_HOME", temp.path());
@@ -940,7 +960,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_extract_opencode_session_paths() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let path = PathBuf::from(
             "/Users/test/.local/share/opencode/storage/session/project_1/session_1.json",
         );
@@ -951,7 +973,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_extract_opencode_message_paths_with_manifest_lookup() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp = TempDir::new().unwrap();
         let storage = temp.path().join("storage");
         let session_dir = storage.join("session").join("project_1");
@@ -975,8 +999,10 @@ mod tests {
     /// Before the LRU fix this used a plain `HashMap`, so `len()` would equal
     /// the full insert count (10,100) and this assertion would fail.
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn test_opencode_cache_is_bounded() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let cache = OPENCODE_SESSION_PROJECT_CACHE.get_or_init(create_opencode_cache);
         let mut guard = cache.lock().unwrap();
         guard.clear();

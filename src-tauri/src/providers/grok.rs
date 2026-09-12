@@ -994,6 +994,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn decode_cwd_dirname_percent_decodes_paths() {
         assert_eq!(
             decode_cwd_dirname("%2FUsers%2Flucashr%2FDownloads"),
@@ -1002,6 +1003,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn get_base_path_prefers_grok_home() {
         let temp = TempDir::new().unwrap();
@@ -1013,6 +1015,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn get_base_path_returns_none_when_default_dir_absent() {
         // The sandbox guarantees the default dir is absent, so the assertion
@@ -1025,6 +1028,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn scan_load_and_search_fixture_session() {
         let temp = TempDir::new().unwrap();
@@ -1085,6 +1089,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn convert_chat_message_maps_tool_result_and_backend_call() {
         let mut counter = 0u64;
         let tool_result = json!({

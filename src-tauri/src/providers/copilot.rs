@@ -881,6 +881,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn group_key_strips_file_prefix_and_trailing_slash() {
         assert_eq!(group_key("/Users/me/repo"), "/Users/me/repo");
         assert_eq!(group_key("file:///Users/me/repo"), "/Users/me/repo");
@@ -888,6 +889,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn merge_collapses_cli_and_vscode_for_same_folder() {
         let cli = project("/Users/me/repo", "copilot-cli:///Users/me/repo", 2, 50);
         let vsc = project(
@@ -927,6 +929,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn merge_keeps_distinct_folders_separate() {
         let a = project("/repo/a", "copilot-cli:///repo/a", 1, 5);
         let b = project("/repo/b", "copilot-cli:///repo/b", 2, 10);
@@ -935,6 +938,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn project_ref_round_trips() {
         let r = ProjectRef {
             actual: "/Users/me/repo".to_string(),
@@ -957,12 +961,14 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn decode_project_ref_returns_none_for_legacy_url() {
         // Old format without base64 payload should not falsely decode.
         assert!(decode_project_ref("copilot:///repo/a").is_none());
     }
 
     #[test]
+    #[serial_test::serial]
     fn search_results_sort_before_truncate() {
         let mut results = vec![
             message("old", "2026-01-01T00:00:00Z"),
@@ -979,6 +985,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn is_vscode_session_path_detects_chatsessions_files() {
         assert!(is_vscode_session_path(
             "/Users/me/Library/Application Support/Code/User/workspaceStorage/abc/chatSessions/x.jsonl"

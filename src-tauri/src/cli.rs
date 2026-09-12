@@ -237,12 +237,14 @@ mod tests {
     // ===== Stage A (UUID) tests — preserved from PR #261 =====
 
     #[test]
+    #[serial_test::serial]
     fn returns_none_when_no_flag_present() {
         let args = argv(&["app", "--serve"]);
         assert!(parse_session_hint(&args).is_none());
     }
 
     #[test]
+    #[serial_test::serial]
     fn parses_space_separated_uuid() {
         let args = argv(&["app", "--session", "1265cd74-caa9-472e-b343-c4f44b5cf12c"]);
         let hint = parse_session_hint(&args).expect("hint");
@@ -251,6 +253,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn parses_equals_form() {
         let args = argv(&["app", "--session=1265cd74-caa9-472e-b343-c4f44b5cf12c"]);
         let hint = parse_session_hint(&args).expect("hint");
@@ -258,6 +261,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn accepts_uuid_prefix() {
         let args = argv(&["app", "--session", "1265cd74"]);
         let hint = parse_session_hint(&args).expect("hint");
@@ -265,6 +269,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn rejects_non_hex_value_that_is_not_a_path() {
         let args = argv(&["app", "--session", "hello-world-not-a-uuid"]);
         // Contains non-hex chars and no leading `/` or drive letter — reject.
@@ -272,12 +277,14 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn rejects_too_short_value() {
         let args = argv(&["app", "--session", "1265cd7"]);
         assert!(parse_session_hint(&args).is_none());
     }
 
     #[test]
+    #[serial_test::serial]
     fn rejects_too_long_non_path_value() {
         let args = argv(&[
             "app",
@@ -288,18 +295,21 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn returns_none_when_flag_value_is_another_flag() {
         let args = argv(&["app", "--session", "--serve"]);
         assert!(parse_session_hint(&args).is_none());
     }
 
     #[test]
+    #[serial_test::serial]
     fn returns_none_when_flag_has_no_following_argument() {
         let args = argv(&["app", "--session"]);
         assert!(parse_session_hint(&args).is_none());
     }
 
     #[test]
+    #[serial_test::serial]
     fn returns_none_when_equals_form_has_empty_value() {
         let args = argv(&["app", "--session="]);
         assert!(parse_session_hint(&args).is_none());
@@ -308,6 +318,7 @@ mod tests {
     // ===== Stage B Path tests =====
 
     #[test]
+    #[serial_test::serial]
     fn parses_abs_unix_path_as_path_kind() {
         let args = argv(&[
             "app",
@@ -320,6 +331,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn parses_abs_windows_backslash_path_as_path_kind() {
         let args = argv(&[
             "app",
@@ -331,6 +343,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn parses_abs_windows_forwardslash_path_as_path_kind() {
         let args = argv(&["app", "--session", "C:/Users/jack/session.jsonl"]);
         let hint = parse_session_hint(&args).expect("hint");
@@ -338,6 +351,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn parses_unc_path_as_path_kind() {
         let args = argv(&["app", "--session", "\\\\server\\share\\session.jsonl"]);
         let hint = parse_session_hint(&args).expect("hint");
@@ -345,6 +359,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn rejects_relative_path_as_session_value() {
         // A relative path like "demo" or "demo/session.jsonl" is not accepted
         // under --session — use --session-folder or a full path instead.
@@ -355,6 +370,7 @@ mod tests {
     // ===== Stage B Folder tests =====
 
     #[test]
+    #[serial_test::serial]
     fn parses_session_folder_flag() {
         let args = argv(&["app", "--session-folder", "demo"]);
         let hint = parse_session_hint(&args).expect("hint");
@@ -363,6 +379,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn parses_session_folder_equals_form() {
         let args = argv(&["app", "--session-folder=demo"]);
         let hint = parse_session_hint(&args).expect("hint");
@@ -370,6 +387,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn rejects_empty_session_folder() {
         let args = argv(&["app", "--session-folder="]);
         assert!(parse_session_hint(&args).is_none());
@@ -378,6 +396,7 @@ mod tests {
     // ===== Stage B Title tests =====
 
     #[test]
+    #[serial_test::serial]
     fn parses_session_title_flag() {
         let args = argv(&["app", "--session-title", "auth bug"]);
         let hint = parse_session_hint(&args).expect("hint");
@@ -386,6 +405,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn parses_session_title_equals_form() {
         let args = argv(&["app", "--session-title=refactoring"]);
         let hint = parse_session_hint(&args).expect("hint");
@@ -393,6 +413,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn rejects_empty_session_title() {
         let args = argv(&["app", "--session-title="]);
         assert!(parse_session_hint(&args).is_none());
@@ -401,6 +422,7 @@ mod tests {
     // ===== Stage B Precedence tests =====
 
     #[test]
+    #[serial_test::serial]
     fn session_wins_over_session_folder() {
         let args = argv(&[
             "app",
@@ -414,6 +436,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn session_folder_wins_over_session_title() {
         let args = argv(&["app", "--session-folder", "demo", "--session-title", "auth"]);
         let hint = parse_session_hint(&args).expect("hint");
@@ -421,6 +444,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn malformed_session_does_not_fall_through_to_folder() {
         // When --session has a malformed value we reject it outright rather
         // than walking to the next flag (which would silently change the
@@ -443,6 +467,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn parses_file_url_as_path_hint() {
         #[cfg(target_os = "windows")]
         let (file_url, expected_path) = (
@@ -461,6 +486,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn parses_custom_scheme_uuid_url() {
         let hint = parse_session_hint_from_url(&url(
             "claude-code-history-viewer://session/1265cd74-caa9-472e-b343-c4f44b5cf12c",
@@ -471,6 +497,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn parses_custom_scheme_folder_url() {
         let hint =
             parse_session_hint_from_url(&url("claude-code-history-viewer://session-folder/demo"))
@@ -480,6 +507,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn parses_custom_scheme_title_with_spaces() {
         let hint = parse_session_hint_from_url(&url(
             "claude-code-history-viewer://session-title/auth%20bug",
@@ -490,6 +518,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn rejects_custom_scheme_with_bad_uuid_host() {
         let hint =
             parse_session_hint_from_url(&url("claude-code-history-viewer://session/not-a-uuid"));
@@ -497,12 +526,14 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn rejects_custom_scheme_with_unknown_host() {
         let hint = parse_session_hint_from_url(&url("claude-code-history-viewer://unknown/demo"));
         assert!(hint.is_none());
     }
 
     #[test]
+    #[serial_test::serial]
     fn rejects_custom_scheme_with_empty_path() {
         let hint =
             parse_session_hint_from_url(&url("claude-code-history-viewer://session-folder/"));
@@ -510,12 +541,14 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn rejects_unknown_scheme() {
         let hint = parse_session_hint_from_url(&url("http://example.com/session/foo"));
         assert!(hint.is_none());
     }
 
     #[test]
+    #[serial_test::serial]
     fn title_survives_utf8_multibyte_round_trip() {
         // "한글 제목" percent-encoded. If percent_decode treats bytes as chars
         // instead of decoding into a Vec<u8> + from_utf8, the result is mojibake.
@@ -528,6 +561,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn title_preserves_literal_plus_character() {
         // A raw `+` in a URL path segment must stay `+`, not become a space.
         // `+` → space is form-urlencoded semantics, not path semantics.
@@ -539,6 +573,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn title_plus_is_not_decoded_to_space() {
         // Explicit bare `+` (not `%2B`) stays literal.
         let hint =

@@ -677,6 +677,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn parse_thread_user_agent_and_tool_results() {
         let msgs = parse_thread(&db_thread(), "thread-1", "2026-06-20T10:00:00Z");
         // user, assistant, tool-result(user) ; "Resume" ignored
@@ -703,6 +704,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn tool_result_content_extracts_text_from_all_shapes() {
         // Legacy bare string passes through.
         assert_eq!(tool_result_content(&json!("auth.rs:42")), "auth.rs:42");
@@ -727,6 +729,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn parse_legacy_serialized_thread() {
         let legacy = json!({
             "version": "0.1.0",
@@ -749,6 +752,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn workspace_grouping_from_folder_paths() {
         assert_eq!(
             workspace_of(Some(r#"["/Users/jack/proj","/other"]"#)),
@@ -759,6 +763,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn db_path_uses_platform_app_name() {
         let Some(p) = get_db_path() else { return };
         let s = p.to_string_lossy().replace('\\', "/");
@@ -774,6 +779,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn table_columns_and_optional_col() {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute("CREATE TABLE threads (id TEXT, summary TEXT)", [])
@@ -798,6 +804,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn scan_and_load_tolerate_old_5col_schema() {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute(
@@ -832,6 +839,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn scan_and_load_use_new_schema_columns() {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute(
@@ -866,6 +874,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn decode_plain_and_zstd() {
         let value = json!({ "messages": [] });
         let json_bytes = serde_json::to_vec(&value).unwrap();

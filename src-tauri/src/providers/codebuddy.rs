@@ -917,6 +917,7 @@ mod tests {
     /// parse it into a real object so frontend renderers can read individual
     /// params (e.g. `BashCard` reads `input.command`).
     #[test]
+    #[serial_test::serial]
     fn function_call_parses_arguments_string_to_object() {
         let raw = json!({
             "type": "function_call",
@@ -951,6 +952,7 @@ mod tests {
     /// Even when arguments is malformed JSON, conversion shouldn't panic —
     /// it should fall back to `Value::Null` so the message still renders.
     #[test]
+    #[serial_test::serial]
     fn function_call_handles_malformed_arguments_gracefully() {
         let raw = json!({
             "type": "function_call",
@@ -970,6 +972,7 @@ mod tests {
     /// Verify we extract it and produce a Claude-native `tool_result` with
     /// `tool_use_id` matching the original `callId`.
     #[test]
+    #[serial_test::serial]
     fn function_call_result_extracts_output_field() {
         let raw = json!({
             "type": "function_call_result",
@@ -1010,6 +1013,7 @@ mod tests {
     /// Error status should mark the result as `is_error: true` so the
     /// `StatusBadge` shows the red "error" state instead of green "completed".
     #[test]
+    #[serial_test::serial]
     fn function_call_result_marks_errors() {
         let raw = json!({
             "type": "function_call_result",
@@ -1029,6 +1033,7 @@ mod tests {
     /// into "user", which mislabeled system reminders / command output messages
     /// and broke filtering & visual distinction in the UI.
     #[test]
+    #[serial_test::serial]
     fn convert_message_preserves_system_role() {
         let raw = json!({
             "type": "message",
@@ -1052,6 +1057,7 @@ mod tests {
 
     /// Sanity check: assistant role still maps to "assistant".
     #[test]
+    #[serial_test::serial]
     fn convert_message_preserves_assistant_role() {
         let raw = json!({
             "type": "message",
@@ -1070,6 +1076,7 @@ mod tests {
     /// caller code should not pass empty paths, but if it does we want a clear
     /// error rather than silently scanning whatever `Path::new("")` resolves to.
     #[test]
+    #[serial_test::serial]
     fn load_sessions_rejects_empty_path() {
         let result = load_sessions("", false);
         assert!(result.is_err(), "empty path must error, got: {result:?}");
@@ -1082,6 +1089,7 @@ mod tests {
     /// `load_sessions` must reject paths outside `~/.codebuddy/projects` to
     /// prevent path-traversal-style reads of arbitrary directories on disk.
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn load_sessions_rejects_path_outside_codebuddy_root() {
         let _home = crate::test_utils::SandboxHome::new();
@@ -1108,6 +1116,7 @@ mod tests {
     /// top-level `tool_use` field stays `None` and downstream code (`load.rs`)
     /// extracts from content as needed. This test pins that contract.
     #[test]
+    #[serial_test::serial]
     fn function_call_does_not_double_write_tool_use() {
         let raw = json!({
             "type": "function_call",
@@ -1146,6 +1155,7 @@ mod tests {
     /// chain is exercised by this test (no hand-rolled walkdir copy here).
     #[cfg(unix)]
     #[test]
+    #[serial_test::serial]
     fn scan_projects_skips_symlinked_jsonl() {
         use std::os::unix::fs::symlink;
 
@@ -1183,6 +1193,7 @@ mod tests {
     /// that started on one topic and pivoted to another to keep showing the
     /// stale original title. Pin the last-wins contract.
     #[test]
+    #[serial_test::serial]
     fn extract_session_info_uses_last_topic() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let projects_root = tmp.path().join("projects");
@@ -1215,6 +1226,7 @@ mod tests {
     /// NOT clobber a previously-valid title. Otherwise a single accidental
     /// empty topic write would erase the session label entirely.
     #[test]
+    #[serial_test::serial]
     fn extract_session_info_ignores_empty_topic() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let projects_root = tmp.path().join("projects");
@@ -1246,6 +1258,7 @@ mod tests {
     /// `-`. Without this, hyphenated project names like
     /// `claude-code-history-viewer` get truncated to just `viewer`.
     #[test]
+    #[serial_test::serial]
     fn scan_projects_uses_cwd_for_display_name() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let projects_root = tmp.path().join("projects");
@@ -1292,6 +1305,7 @@ mod tests {
     /// path starting with `var-folders-...` would never match the real
     /// `/var -> /private/var` symlink.
     #[test]
+    #[serial_test::serial]
     fn scan_projects_falls_back_to_fs_decoding_when_cwd_missing() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let canonical_tmp = std::fs::canonicalize(tmp.path()).expect("canonicalize tempdir");

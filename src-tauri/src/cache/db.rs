@@ -857,7 +857,9 @@ mod tests {
     use super::*;
 
     #[test]
+    #[serial_test::serial]
     fn test_sqlite_cache_roundtrip() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let conn = open_test_connection().expect("open test conn");
 
         let project = ClaudeProject {
@@ -934,7 +936,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_merge_and_save_preserves_deleted_items() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let conn = open_test_connection().expect("open test conn");
 
         let p1 = ClaudeProject {
@@ -1081,6 +1085,7 @@ fn same_history_path(left: &str, right: &str) -> bool {
 mod offline_identity_tests {
     use super::*;
     #[test]
+    #[serial_test::serial]
     fn offline_marker_and_host_alias_match_without_cross_host_leaks() {
         assert!(same_history_path(
             "remote://gortamazian?status=unavailable#/repo",
@@ -1202,6 +1207,7 @@ mod offline_history_tests {
     use crate::commands::session::SubagentSession;
 
     #[test]
+    #[serial_test::serial]
     fn offline_pages_walk_backwards_without_overlap() {
         let conn = open_test_connection().unwrap();
         let messages: Vec<ClaudeMessage> = (0..7).map(|i| serde_json::from_value(serde_json::json!({
@@ -1241,6 +1247,7 @@ mod offline_history_tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn subagents_recover_legacy_child_rows_on_same_host() {
         let conn = open_test_connection().unwrap();
         for host in ["host-a", "host-b"] {
@@ -1270,6 +1277,7 @@ mod offline_history_tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn subagents_preserve_metadata_and_distinguish_unknown_from_empty() {
         let conn = open_test_connection().unwrap();
         let parent = "remote://http://host-a:3728#/s.jsonl";

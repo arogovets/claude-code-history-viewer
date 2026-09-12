@@ -1082,7 +1082,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_rename_claude_session_appends_local_command_event() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = tempfile::TempDir::new().unwrap();
         let file_path = temp_dir.path().join("session-123.jsonl");
         let session_id = "session-123";
@@ -1151,7 +1153,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_reset_claude_session_removes_rename_event_without_rewriting_user_message() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = tempfile::TempDir::new().unwrap();
         let file_path = temp_dir.path().join("session-456.jsonl");
         let session_id = "session-456";
@@ -1192,7 +1196,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_reset_removes_custom_title_for_reset_name() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         // A full rename cycle (legacy + custom-title) followed by a reset must
         // leave no trace of the name, in the JSONL or in CCHV's summary.
         let temp_dir = tempfile::TempDir::new().unwrap();
@@ -1228,7 +1234,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_reset_preserves_unrelated_custom_title() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         // An older custom-title (e.g. one the CLI set) must survive a reset that
         // targets a different, CCHV-applied name — the picker reverts to it.
         let temp_dir = tempfile::TempDir::new().unwrap();
@@ -1265,7 +1273,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_reset_claude_session_strips_legacy_prefix_without_rename_event() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = tempfile::TempDir::new().unwrap();
         let file_path = temp_dir.path().join("session-legacy.jsonl");
         let session_id = "session-legacy";
@@ -1314,14 +1324,18 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_claude_rename_title_rejects_newline() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let result = validate_claude_rename_title("bad\ntitle");
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("newline"));
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_parse_opencode_session_path_valid() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let parsed = parse_opencode_session_path("opencode://project_123/session_456").unwrap();
         assert_eq!(
             parsed,
@@ -1330,17 +1344,23 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_parse_opencode_session_path_invalid_prefix() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         assert!(parse_opencode_session_path("/tmp/invalid").is_err());
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_parse_opencode_session_path_rejects_traversal() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         assert!(parse_opencode_session_path("opencode://project/../etc").is_err());
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_strip_title_prefix() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         assert_eq!(
             strip_title_prefix("[My Title] Original message"),
             "Original message"
@@ -1357,7 +1377,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_extract_message_content_direct_string() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let json: serde_json::Value = serde_json::json!({
             "message": "Hello world"
         });
@@ -1368,7 +1390,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_extract_message_content_nested() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let json: serde_json::Value = serde_json::json!({
             "message": {
                 "role": "user",
@@ -1382,7 +1406,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_extract_message_content_array() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let json: serde_json::Value = serde_json::json!({
             "message": {
                 "role": "user",
@@ -1398,7 +1424,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_find_first_user_message_skips_non_user_types() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let lines = vec![
             r#"{"type":"file-history-snapshot","data":{}}"#.to_string(),
             r#"{"type":"progress","data":"loading"}"#.to_string(),
@@ -1408,7 +1436,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_find_first_user_message_skips_meta() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let lines = vec![
             r#"{"type":"user","isMeta":true,"message":"init command"}"#.to_string(),
             r#"{"type":"user","message":"Real user message"}"#.to_string(),
@@ -1417,7 +1447,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_update_message_content_string() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let mut json: serde_json::Value = serde_json::json!({
             "message": {
                 "role": "user",
@@ -1429,7 +1461,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_update_message_content_array() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let mut json: serde_json::Value = serde_json::json!({
             "message": {
                 "role": "user",
@@ -1450,23 +1484,31 @@ mod tests {
     // --- strip_title_prefix edge cases ---
 
     #[test]
+    #[serial_test::serial]
     fn test_strip_title_prefix_empty_string() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         assert_eq!(strip_title_prefix(""), "");
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_strip_title_prefix_unclosed_bracket() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         // Unclosed bracket should return original string
         assert_eq!(strip_title_prefix("[Unclosed title"), "[Unclosed title");
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_strip_title_prefix_only_brackets() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         assert_eq!(strip_title_prefix("[]"), "");
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_strip_title_prefix_unicode() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         assert_eq!(
             strip_title_prefix("[日本語タイトル] メッセージ"),
             "メッセージ"
@@ -1474,26 +1516,34 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_strip_title_prefix_with_newline() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         assert_eq!(strip_title_prefix("[Title]\nMessage"), "Message");
     }
 
     // --- extract_message_content edge cases ---
 
     #[test]
+    #[serial_test::serial]
     fn test_extract_message_content_missing_field() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let json: serde_json::Value = serde_json::json!({"uuid": "123"});
         assert_eq!(extract_message_content(&json), None);
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_extract_message_content_null_message() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let json: serde_json::Value = serde_json::json!({"message": null});
         assert_eq!(extract_message_content(&json), None);
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_extract_message_content_empty_array() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let json: serde_json::Value = serde_json::json!({
             "message": {"role": "user", "content": []}
         });
@@ -1501,7 +1551,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_extract_message_content_array_no_text_type() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let json: serde_json::Value = serde_json::json!({
             "message": {
                 "role": "user",
@@ -1514,7 +1566,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_extract_message_content_multiple_text_items() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         // Should return first text item
         let json: serde_json::Value = serde_json::json!({
             "message": {
@@ -1531,7 +1585,9 @@ mod tests {
     // --- find_first_user_message_index edge cases ---
 
     #[test]
+    #[serial_test::serial]
     fn test_find_first_user_message_empty_lines() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let lines: Vec<String> = vec![];
         let result = find_first_user_message_index(&lines);
         assert!(result.is_err());
@@ -1539,7 +1595,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_find_first_user_message_no_user_messages() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let lines = vec![
             r#"{"type":"assistant","message":"Hello"}"#.to_string(),
             r#"{"type":"system","message":"Init"}"#.to_string(),
@@ -1549,7 +1607,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_find_first_user_message_invalid_json() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let lines = vec![
             "not valid json".to_string(),
             r#"{"type":"user","message":"Valid"}"#.to_string(),
@@ -1559,7 +1619,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_find_first_user_message_user_without_content() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let lines = vec![
             r#"{"type":"user"}"#.to_string(), // No message field
             r#"{"type":"user","message":"Has content"}"#.to_string(),
@@ -1571,13 +1633,17 @@ mod tests {
     // --- update_message_content edge cases ---
 
     #[test]
+    #[serial_test::serial]
     fn test_update_message_content_no_message_field() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let mut json: serde_json::Value = serde_json::json!({"uuid": "123"});
         assert!(!update_message_content(&mut json, "New"));
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_update_message_content_array_no_text_type() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let mut json: serde_json::Value = serde_json::json!({
             "message": {
                 "role": "user",
@@ -1590,7 +1656,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_update_message_content_direct_string() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let mut json: serde_json::Value = serde_json::json!({
             "message": "Direct string"
         });
@@ -1601,6 +1669,7 @@ mod tests {
     // --- validate_claude_path tests (SECURITY) ---
 
     #[test]
+    #[serial_test::serial]
     fn test_validate_claude_path_rejects_relative_path() {
         let _home = crate::test_utils::SandboxHome::new();
         let result = validate_claude_path("relative/path/file.jsonl");
@@ -1609,6 +1678,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_validate_claude_path_rejects_invalid_filename() {
         let _home = crate::test_utils::SandboxHome::new();
         // Filename with dots should be rejected by regex
@@ -1618,6 +1688,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_validate_claude_path_rejects_non_claude_directory() {
         let _home = crate::test_utils::SandboxHome::new();
         // Use a path with valid filename but wrong directory
@@ -1635,6 +1706,7 @@ mod tests {
     /// accept-path coverage vacuous while appearing green (#545). When it did
     /// run, it asserted against whichever file happened to be enumerated first.
     #[test]
+    #[serial_test::serial]
     fn test_validate_claude_path_valid_path() {
         let home = crate::test_utils::SandboxHome::new();
         let (_base, session_path) = make_claude_dir(&home.path().join(".claude"), "session-1");
@@ -1648,6 +1720,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_validate_claude_path_nonexistent_file() {
         let _home = crate::test_utils::SandboxHome::new();
         // Nonexistent file should fail at canonicalize
@@ -1673,6 +1746,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn validate_claude_path_accepts_registered_custom_directory() {
         let _home = crate::test_utils::SandboxHome::new();
         let temp = tempfile::TempDir::new().unwrap();
@@ -1688,6 +1762,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn validate_claude_path_rejects_directory_that_is_not_registered() {
         let _home = crate::test_utils::SandboxHome::new();
         let temp = tempfile::TempDir::new().unwrap();
@@ -1705,6 +1780,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn resolve_claude_roots_skips_directory_without_projects_subdir() {
         let _home = crate::test_utils::SandboxHome::new();
         let temp = tempfile::TempDir::new().unwrap();
@@ -1720,6 +1796,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn resolve_claude_roots_skips_symlinked_custom_directory() {
         let _home = crate::test_utils::SandboxHome::new();
         let temp = tempfile::TempDir::new().unwrap();
@@ -1741,6 +1818,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn resolve_claude_roots_always_includes_default_claude_dir() {
         // Against the sandbox, so this asserts unconditionally. It used to
         // resolve the developer's real home and skip the assertion entirely
@@ -1758,6 +1836,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn push_root_rejects_symlinked_root() {
         let temp = tempfile::TempDir::new().unwrap();
         let real = real_temp_root(&temp).join("real-root");
@@ -1778,6 +1857,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn validate_claude_path_rejects_non_jsonl_extension() {
         let _home = crate::test_utils::SandboxHome::new();
         let temp = tempfile::TempDir::new().unwrap();
@@ -1803,6 +1883,7 @@ mod tests {
     /// a Windows-only test that only ever ran on Unix, where the `cfg` under
     /// test is compiled out entirely (#541).
     #[test]
+    #[serial_test::serial]
     fn normalizes_windows_verbatim_path_prefix_for_root_comparison() {
         let expected_drive = if cfg!(windows) {
             r"c:\users\alice\.claude"
@@ -1832,6 +1913,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn validate_claude_path_accepts_symlinked_project_directory() {
         let _home = crate::test_utils::SandboxHome::new();
         // Mirrors the shared-sessions layout: a project directory under
@@ -1863,6 +1945,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn validate_claude_path_rejects_symlink_below_project_directory() {
         let _home = crate::test_utils::SandboxHome::new();
         // A symlink deeper than the project directory is not allowed.
@@ -1891,6 +1974,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn validate_claude_path_rejects_symlinked_session_file() {
         let _home = crate::test_utils::SandboxHome::new();
         // The session file itself must be a real file, not a symlink.
@@ -1915,6 +1999,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn validate_claude_path_rejects_path_traversal_under_projects() {
         let _home = crate::test_utils::SandboxHome::new();
         let temp = tempfile::TempDir::new().unwrap();
@@ -1936,6 +2021,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_validate_claude_path_filename_with_special_chars() {
         // The guard's home, not `dirs::home_dir()` - the latter is the real one
         // on Windows, so the fixture would sit outside the sandbox.
@@ -1957,7 +2043,9 @@ mod tests {
     // --- Title validation tests ---
 
     #[test]
+    #[serial_test::serial]
     fn test_claude_rename_title_allows_closing_bracket() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         // Claude-style rename events store the title as command output, so
         // bracket characters no longer conflict with legacy prefix stripping.
         let title_with_bracket = "Test ] Title";
@@ -1965,7 +2053,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_strip_title_prefix_nested_brackets_documented_limitation() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         // This test documents the known limitation that nested brackets
         // don't work correctly (as documented in the function)
         let input = "[Nested [brackets]] Message";

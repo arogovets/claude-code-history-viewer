@@ -209,6 +209,7 @@ mod tests {
     // candidate path canonicalizes to the symlink target, so the allowlist
     // entries must be canonicalized too or valid sessions are rejected.
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn accepts_session_under_symlinked_claude_root() {
         // Built inside the guard's home. It used to create its own `TempDir`
@@ -236,6 +237,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn rejects_session_outside_allowlist() {
         let _home = crate::test_utils::SandboxHome::new();
@@ -260,6 +262,7 @@ mod tests {
     /// parent that does not exist, and rejected them as "Invalid path", which
     /// broke every guarded `WebUI` endpoint for those providers under `--serve`.
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn accepts_provider_uri_session_paths() {
         let _home = crate::test_utils::SandboxHome::new();
@@ -278,6 +281,7 @@ mod tests {
     /// A URI is waved past the filesystem allowlist, so it must not be able to
     /// smuggle a traversal through it.
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn rejects_traversal_inside_a_provider_uri() {
         let _home = crate::test_utils::SandboxHome::new();
@@ -293,6 +297,7 @@ mod tests {
 
     // Kimi sessions live under ~/.kimi/sessions (or $KIMI_HOME) — #349.
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn test_safe_session_path_allows_kimi_sessions() {
         // The guard owns `HOME`; the fixture goes inside it. This used to
@@ -317,6 +322,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn test_safe_session_path_allows_custom_kimi_home() {
         let _home = crate::test_utils::SandboxHome::new();
@@ -367,6 +373,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn safe_session_path_allows_codex_home_sessions() {
         let _home = crate::test_utils::SandboxHome::new();
@@ -383,6 +390,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn safe_session_path_allows_codex_home_archived_sessions() {
         let _home = crate::test_utils::SandboxHome::new();

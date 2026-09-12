@@ -4011,7 +4011,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_extract_rename_from_content() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         // Valid rename
         let content = serde_json::json!(
             "<local-command-stdout>Session renamed to: MyProject</local-command-stdout>"
@@ -4218,7 +4220,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_try_extract_custom_title() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         assert_eq!(
             try_extract_custom_title("custom-title", Some("MyTitle")),
             Some("MyTitle".to_string())
@@ -4326,6 +4330,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn workflow_run_id_for_detects_workflow_layout_only() {
         assert_eq!(
             workflow_run_id_for(Path::new(
@@ -4341,6 +4346,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn read_subagent_tool_use_id_reads_meta_json() {
         let dir = TempDir::new().unwrap();
         let meta = dir.path().join("agent-x.meta.json");
@@ -4356,6 +4362,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn read_subagent_tool_use_id_none_when_missing_invalid_or_empty() {
         let dir = TempDir::new().unwrap();
         // Missing file.
@@ -4379,6 +4386,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    #[serial_test::serial]
     fn read_subagent_tool_use_id_rejects_symlink() {
         let dir = TempDir::new().unwrap();
         let real = dir.path().join("real.meta.json");

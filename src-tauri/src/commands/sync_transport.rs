@@ -409,6 +409,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[serial_test::serial]
     fn derived_cache_files_are_not_syncable() {
         assert!(is_skipped_sync_file(".session_cache.json"));
         assert!(is_skipped_sync_file("projects/p/.session_cache.json"));

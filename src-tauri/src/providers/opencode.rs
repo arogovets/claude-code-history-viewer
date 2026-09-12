@@ -1933,6 +1933,7 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    #[serial_test::serial]
     fn normalizes_lowercase_tool_names() {
         assert_eq!(normalize_opencode_tool_name("read"), "Read");
         assert_eq!(normalize_opencode_tool_name("bash"), "Bash");
@@ -1945,6 +1946,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn process_parts_preserves_parallel_task_calls() {
         let parts = json!([
             {
@@ -1985,6 +1987,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn merges_message_usage_with_part_usage_without_double_counting() {
         let message_usage = parse_opencode_token_usage(&json!({
             "input": 100,
@@ -2008,6 +2011,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn keeps_github_search_tools_as_is() {
         assert_eq!(
             normalize_opencode_tool_name("github_search_repositories"),
@@ -2016,6 +2020,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn normalizes_camel_case_input_keys() {
         let normalized = normalize_opencode_tool_input(
             "Edit",
@@ -2042,6 +2047,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn extracts_error_tool_result_from_state() {
         let part = json!({
             "state": {
@@ -2177,6 +2183,7 @@ mod tests {
     /// parent, not a sidechain file, so the panel's parent→child link can only
     /// come from here.
     #[test]
+    #[serial_test::serial]
     fn sqlite_load_child_sessions_reads_subagent_rows() {
         let tmp = tempfile::tempdir().unwrap();
         let conn = create_test_db(tmp.path());
@@ -2210,6 +2217,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn sqlite_scan_projects_reads_from_db() {
         let tmp = tempfile::tempdir().unwrap();
         let conn = create_test_db(tmp.path());
@@ -2225,6 +2233,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn sqlite_load_sessions_reads_from_db() {
         let tmp = tempfile::tempdir().unwrap();
         let conn = create_test_db(tmp.path());
@@ -2241,6 +2250,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn sqlite_load_messages_reads_from_db() {
         let tmp = tempfile::tempdir().unwrap();
         let conn = create_test_db(tmp.path());
@@ -2267,6 +2277,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn sqlite_returns_none_when_no_db() {
         let tmp = tempfile::tempdir().unwrap();
         // No opencode.db created
@@ -2279,6 +2290,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn sqlite_search_finds_matching_parts() {
         let tmp = tempfile::tempdir().unwrap();
         let conn = create_test_db(tmp.path());
@@ -2296,6 +2308,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn count_json_sessions_excluding_counts_correctly() {
         let tmp = tempfile::tempdir().unwrap();
         let sessions_dir = tmp.path().join("sessions");
@@ -2335,6 +2348,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn build_db_session_map_groups_by_project() {
         let tmp = tempfile::tempdir().unwrap();
         let conn = create_test_db(tmp.path());
@@ -2361,6 +2375,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn sqlite_scan_projects_splits_global_by_session_directory() {
         let tmp = tempfile::tempdir().unwrap();
         let conn = create_test_db(tmp.path());
@@ -2413,6 +2428,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn sqlite_load_sessions_filters_global_directory_project() {
         let tmp = tempfile::tempdir().unwrap();
         let conn = create_test_db(tmp.path());
@@ -2451,6 +2467,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn sqlite_load_sessions_includes_global_empty_directory_session() {
         let tmp = tempfile::tempdir().unwrap();
         let conn = create_test_db(tmp.path());

@@ -518,6 +518,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn scan_single_project_counts_messages() {
         let conn = fixture_db();
         let projects = scan_in_conn(&conn).unwrap();
@@ -532,6 +533,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn load_sessions_groups_conversations_and_orphans() {
         let conn = fixture_db();
         let sessions = load_sessions_conn(&conn).unwrap();
@@ -551,6 +553,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn load_messages_makes_user_assistant_pairs_with_usage() {
         let conn = fixture_db();
         let msgs = load_messages_conn(&conn, "c1").unwrap();
@@ -566,6 +569,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn load_messages_orphan_bucket_selects_null_conversation() {
         let conn = fixture_db();
         let msgs = load_messages_conn(&conn, NO_CONVERSATION).unwrap();
@@ -576,6 +580,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn search_matches_prompt_or_response_and_tags_project() {
         let conn = fixture_db();
         let results = search_conn(&conn, "LOGIN", 10).unwrap();
@@ -589,6 +594,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn timestamps_are_normalized_to_utc() {
         assert_eq!(
             normalize_utc_ts("2026-06-20T10:00:00"),
