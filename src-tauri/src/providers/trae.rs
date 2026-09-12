@@ -200,15 +200,24 @@ fn scan_workspace(hash: &str, db_path: &Path) -> Option<ClaudeProject> {
 /// Load the chat sessions for one Trae workspace (`trae://<hash>`).
 pub fn load_sessions(
     project_path: &str,
+    exclude_sidechain: bool,
+) -> Result<Vec<ClaudeSession>, String> {
+    let Some(storage) = workspace_storage() else {
+        return Ok(vec![]);
+    };
+    load_sessions_in(&storage, project_path, exclude_sidechain)
+}
+
+/// [`load_sessions`] against an explicit storage root (snapshot or live).
+pub fn load_sessions_in(
+    storage: &Path,
+    project_path: &str,
     _exclude_sidechain: bool,
 ) -> Result<Vec<ClaudeSession>, String> {
     let hash = project_path.strip_prefix(SCHEME).unwrap_or(project_path);
     if !valid_hash(hash) {
         return Ok(vec![]);
     }
-    let Some(storage) = workspace_storage() else {
-        return Ok(vec![]);
-    };
     let db_path = storage.join(hash).join("state.vscdb");
     if !db_path.is_file() {
         return Ok(vec![]);
@@ -254,15 +263,254 @@ pub fn load_sessions(
     Ok(sessions)
 }
 
+// ============================================================================
+// Archive glue (snapshot-backed reads; the explicit-storage seams above are
+// reused). IDs are opaque (`trae://{hash}#{session}`), so no output rewriting
+// is needed. Every workspace database is captured consistently; the merge
+// layer carries deleted workspaces/sessions forward.
+// ============================================================================
+
+use crate::storage::registry::DiscoveredSource as ArchiveDiscoveredSource;
+use crate::storage::{SnapshotInfo as ArchiveSnapshotInfo, Source as ArchiveSource};
+
+/// Physical Trae workspace storage on this machine, if present. Each
+/// workspace database is captured through the backup API (discovered fresh
+/// on every pass so new workspaces join automatically).
+pub(crate) fn archive_discover() -> Vec<ArchiveDiscoveredSource> {
+    let machine = crate::storage::registry::discovery_machine_id();
+    match workspace_storage() {
+        Some(storage) => {
+            let mut found = ArchiveDiscoveredSource::local(
+                crate::storage::ROLE_PRIMARY,
+                storage.clone(),
+                &machine,
+            );
+            found.extra_sqlite_dbs = workspace_dbs(&storage)
+                .into_iter()
+                .map(|(hash, _)| format!("{hash}/state.vscdb"))
+                .collect();
+            // The file walk covers everything else (journals, blobs).
+            vec![found]
+        }
+        None => Vec::new(),
+    }
+}
+
+/// Scan projects under an explicit storage root (snapshot data root).
+// Returns Result for registry table uniformity; the scan is infallible.
+#[allow(clippy::unnecessary_wraps)]
+pub(crate) fn archive_scan(
+    _source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+) -> Result<Vec<ClaudeProject>, String> {
+    Ok(scan_projects_in(&snapshot.data_path))
+}
+
+/// Merge preserved sessions forward inside a staged workspace database.
+/// Trae keeps whole session lists in single KV blobs, so row-level merging
+/// cannot see deletions: keys absent from the staged copy are restored
+/// wholesale, and session lists present on both sides are unioned by session
+/// id (staged content wins conflicts). Returns resurrected session count.
+pub(crate) fn archive_blob_merge(prev_db: &Path, staged_db: &Path) -> Result<usize, String> {
+    use rusqlite::{Connection, OpenFlags};
+    let prev = Connection::open_with_flags(prev_db, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|e| format!("Failed to open previous Trae DB: {e}"))?;
+    let staged =
+        Connection::open(staged_db).map_err(|e| format!("Failed to open staged Trae DB: {e}"))?;
+    staged
+        .busy_timeout(std::time::Duration::from_secs(5))
+        .map_err(|e| format!("Failed to set busy timeout: {e}"))?;
+
+    let keys_of = |conn: &Connection| -> Result<Vec<String>, String> {
+        let mut stmt = conn
+            .prepare("SELECT key FROM ItemTable")
+            .map_err(|e| format!("Failed to list Trae keys: {e}"))?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| format!("Failed to read Trae keys: {e}"))?;
+        let mut keys = Vec::new();
+        for key in rows {
+            keys.push(key.map_err(|e| format!("Failed to read Trae key: {e}"))?);
+        }
+        Ok(keys)
+    };
+    let read_value = |conn: &Connection, key: &str| -> Option<String> {
+        conn.query_row("SELECT value FROM ItemTable WHERE key = ?1", [key], |row| {
+            row.get::<_, String>(0)
+        })
+        .ok()
+    };
+
+    let prev_keys = keys_of(&prev)?;
+    let mut resurrected = 0usize;
+
+    for key in &prev_keys {
+        let Some(prev_raw) = read_value(&prev, key) else {
+            continue;
+        };
+        let Some(staged_raw) = read_value(&staged, key) else {
+            // Whole collection vanished upstream: restore it verbatim.
+            staged
+                .execute(
+                    "INSERT INTO ItemTable (key, value) VALUES (?1, ?2)",
+                    rusqlite::params![key, prev_raw],
+                )
+                .map_err(|e| format!("Failed to restore Trae key {key}: {e}"))?;
+            resurrected += 1;
+            continue;
+        };
+        let (merged, added) = union_session_lists(&staged_raw, &prev_raw);
+        if added > 0 {
+            staged
+                .execute(
+                    "UPDATE ItemTable SET value = ?1 WHERE key = ?2",
+                    rusqlite::params![merged, key],
+                )
+                .map_err(|e| format!("Failed to merge Trae key {key}: {e}"))?;
+            resurrected += added;
+        }
+    }
+    Ok(resurrected)
+}
+
+/// Union two session-list blobs by session id, keeping the staged structure
+/// and letting staged entries win conflicts. Returns (merged JSON, added).
+fn union_session_lists(staged_raw: &str, prev_raw: &str) -> (String, usize) {
+    let Ok(mut staged) = serde_json::from_str::<Value>(staged_raw) else {
+        return (staged_raw.to_string(), 0);
+    };
+    let Ok(prev) = serde_json::from_str::<Value>(prev_raw) else {
+        return (staged_raw.to_string(), 0);
+    };
+    // Same container convention as `extract_sessions`.
+    const CONTAINERS: [&str; 4] = ["list", "sessions", "conversations", "entries"];
+    let container_of = |value: &Value| -> Option<&str> {
+        if value.as_array().is_some() {
+            return Some("");
+        }
+        let obj = value.as_object()?;
+        CONTAINERS
+            .iter()
+            .find(|c| obj.get(**c).is_some_and(|v| v.is_array() || v.is_object()))
+            .copied()
+    };
+    let Some(container) = container_of(&staged) else {
+        // Staged blob holds no session list; if the previous one does, the
+        // whole collection vanished upstream — restore it verbatim.
+        if extract_sessions(&prev).is_empty() {
+            return (staged_raw.to_string(), 0);
+        }
+        return (prev_raw.to_string(), extract_sessions(&prev).len());
+    };
+    let session_id = |s: &Value| {
+        s.get("id")
+            .or_else(|| s.get("sessionId"))
+            .or_else(|| s.get("key"))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    };
+    let staged_ids: std::collections::HashSet<String> = if container.is_empty() {
+        staged
+            .as_array()
+            .map_or(Vec::new(), |a| a.iter().filter_map(session_id).collect())
+    } else {
+        match staged.get(container) {
+            Some(Value::Array(a)) => a.iter().filter_map(session_id).collect(),
+            Some(Value::Object(m)) => m.values().filter_map(session_id).collect(),
+            _ => Vec::new(),
+        }
+    }
+    .into_iter()
+    .collect();
+    let missing: Vec<Value> = extract_session_objects(&prev)
+        .into_iter()
+        .filter(|s| session_id(s).is_some_and(|id| !staged_ids.contains(&id)))
+        .collect();
+    if missing.is_empty() {
+        return (staged_raw.to_string(), 0);
+    }
+    let added = missing.len();
+    if container.is_empty() {
+        if let Some(arr) = staged.as_array_mut() {
+            arr.extend(missing);
+        }
+    } else if let Some(obj) = staged.as_object_mut() {
+        match obj.get_mut(container) {
+            Some(Value::Array(arr)) => arr.extend(missing),
+            Some(Value::Object(map)) => {
+                for item in missing {
+                    let key =
+                        session_id(&item).unwrap_or_else(|| format!("restored-{}", map.len()));
+                    map.insert(key, item);
+                }
+            }
+            _ => {}
+        }
+    }
+    (staged.to_string(), added)
+}
+
+/// Raw session objects in a blob, using the same container convention as
+/// `extract_sessions` (ids resolved by callers).
+fn extract_session_objects(value: &Value) -> Vec<Value> {
+    const CONTAINERS: [&str; 4] = ["list", "sessions", "conversations", "entries"];
+    if let Some(arr) = value.as_array() {
+        return arr.clone();
+    }
+    if let Some(obj) = value.as_object() {
+        for key in CONTAINERS {
+            match obj.get(key) {
+                Some(Value::Array(a)) => return a.clone(),
+                Some(Value::Object(m)) => return m.values().cloned().collect(),
+                _ => {}
+            }
+        }
+    }
+    Vec::new()
+}
+
+/// Sessions for a stable workspace URI, read from the snapshot.
+pub(crate) fn archive_load_sessions(
+    _source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+    stable_project: &str,
+) -> Result<Vec<ClaudeSession>, String> {
+    load_sessions_in(&snapshot.data_path, stable_project, false)
+}
+
+/// Messages for a stable session URI, read from the snapshot.
+pub(crate) fn archive_load_messages(
+    _source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+    stable_session: &str,
+) -> Result<Vec<ClaudeMessage>, String> {
+    load_messages_in(&snapshot.data_path, stable_session)
+}
+
+/// Search confined to one snapshot.
+pub(crate) fn archive_search(
+    _source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<ClaudeMessage>, String> {
+    search_in(&snapshot.data_path, query, limit)
+}
+
 /// Load messages for one Trae session (`trae://<hash>#<sessionId>`).
 pub fn load_messages(session_path: &str) -> Result<Vec<ClaudeMessage>, String> {
+    let Some(storage) = workspace_storage() else {
+        return Ok(vec![]);
+    };
+    load_messages_in(&storage, session_path)
+}
+
+/// [`load_messages`] against an explicit storage root (snapshot or live).
+pub fn load_messages_in(storage: &Path, session_path: &str) -> Result<Vec<ClaudeMessage>, String> {
     let (hash, session_id) = parse_session_path(session_path)?;
     if !valid_hash(&hash) {
         return Ok(vec![]);
     }
-    let Some(storage) = workspace_storage() else {
-        return Ok(vec![]);
-    };
     let db_path = storage.join(&hash).join("state.vscdb");
     if !db_path.is_file() {
         return Ok(vec![]);
@@ -285,9 +533,14 @@ pub fn search(query: &str, limit: usize) -> Result<Vec<ClaudeMessage>, String> {
     let Some(storage) = workspace_storage() else {
         return Ok(vec![]);
     };
+    search_in(&storage, query, limit)
+}
+
+/// [`search`] against an explicit storage root (snapshot or live).
+pub fn search_in(storage: &Path, query: &str, limit: usize) -> Result<Vec<ClaudeMessage>, String> {
     let query_lower = query.to_lowercase();
     let mut results = Vec::new();
-    for (_hash, db_path) in workspace_dbs(&storage) {
+    for (_hash, db_path) in workspace_dbs(storage) {
         let project_name = workspace_folder(&db_path)
             .map(|f| {
                 Path::new(&f)

@@ -108,9 +108,11 @@ pub fn merge_missing_rows(prev_db: &Path, staged_db: &Path) -> Result<usize, Str
     Ok(resurrected)
 }
 
-/// Copy rows of one table whose primary key is absent from the staged copy.
-/// Tables without exactly one single-column primary key, or whose key column
-/// is missing on either side, are skipped (never guessed).
+/// Copy rows of one table whose identity is absent from the staged copy.
+/// The identity is a single-column primary key, else a single-column UNIQUE
+/// index (the `key TEXT UNIQUE` KV shape used by Cursor/Trae/Cline stores).
+/// Tables without an agreed identity, or whose key column is missing on
+/// either side, are skipped (never guessed).
 fn merge_table(tx: &rusqlite::Transaction<'_>, table: &str) -> Result<usize, String> {
     let quoted = format!("\"{}\"", table.replace('"', "\"\""));
     // NOTE: the schema-qualified PRAGMA form is `PRAGMA schema.table_info(t)`;
@@ -120,43 +122,33 @@ fn merge_table(tx: &rusqlite::Transaction<'_>, table: &str) -> Result<usize, Str
         let mut stmt = tx
             .prepare(&format!("PRAGMA {qualified}"))
             .map_err(|e| format!("PRAGMA table_info failed for {qualified}: {e}"))?;
-        let rows = stmt
+        let mut cols = Vec::new();
+        for row in stmt
             .query_map([], |row| {
                 let name: String = row.get("name")?;
                 let pk_order: i64 = row.get("pk")?;
                 Ok((name, pk_order > 0))
             })
-            .map_err(|e| format!("Failed to read table_info for {qualified}: {e}"))?;
-        rows.collect::<Result<Vec<_>, _>>()
-            .map_err(|e| format!("Failed to collect table_info for {qualified}: {e}"))
+            .map_err(|e| format!("Failed to read table_info for {qualified}: {e}"))?
+        {
+            cols.push(row.map_err(|e| format!("Failed to read table_info for {qualified}: {e}"))?);
+        }
+        Ok(cols)
     };
-    let prev_cols = columns_of("prev");
-    let new_cols = columns_of("main");
-    let (prev_cols, new_cols) = match (prev_cols, new_cols) {
+    let (prev_cols, new_cols) = match (columns_of("prev"), columns_of("main")) {
         (Ok(prev), Ok(new)) => (prev, new),
         // Table missing on one side (schema drift): nothing to merge.
         _ => return Ok(0),
     };
-    let prev_pk: Vec<&str> = prev_cols
-        .iter()
-        .filter(|(_, pk)| *pk)
-        .map(|(name, _)| name.as_str())
-        .collect();
-    let new_pk: Vec<&str> = new_cols
-        .iter()
-        .filter(|(_, pk)| *pk)
-        .map(|(name, _)| name.as_str())
-        .collect();
-    if prev_pk.len() != 1 || new_pk != prev_pk {
+    let Some(pk) = agreed_identity(tx, &quoted, &prev_cols, &new_cols)? else {
         return Ok(0);
-    }
-    let pk = prev_pk[0];
+    };
     let common: Vec<&str> = prev_cols
         .iter()
         .map(|(name, _)| name.as_str())
         .filter(|name| new_cols.iter().any(|(other, _)| other == name))
         .collect();
-    if !common.contains(&pk) || common.is_empty() {
+    if !common.contains(&pk.as_str()) || common.is_empty() {
         return Ok(0);
     }
     let cols = common
@@ -165,14 +157,87 @@ fn merge_table(tx: &rusqlite::Transaction<'_>, table: &str) -> Result<usize, Str
         .collect::<Vec<_>>()
         .join(", ");
     let pk_quoted = format!("\"{}\"", pk.replace('"', "\"\""));
+    // NULL identities never match (SQLite semantics would resurrect every
+    // NULL-keyed row on every sync); only concrete keys merge forward.
     let sql = format!(
         "INSERT INTO main.{quoted} ({cols}) SELECT {cols} FROM prev.{quoted} \
-         WHERE {pk_quoted} NOT IN (SELECT {pk_quoted} FROM main.{quoted})"
+         WHERE {pk_quoted} IS NOT NULL \
+           AND {pk_quoted} NOT IN (SELECT {pk_quoted} FROM main.{quoted} WHERE {pk_quoted} IS NOT NULL)"
     );
     let changed = tx
         .execute(&sql, [])
         .map_err(|e| format!("History merge into {quoted} failed: {e}"))?;
     Ok(changed)
+}
+
+/// Agreed single-column row identity for a table present on both sides:
+/// the primary key when both sides agree on exactly one, else a UNIQUE index
+/// over exactly one column that both sides share. `None` means do not merge.
+fn agreed_identity(
+    tx: &rusqlite::Transaction<'_>,
+    quoted: &str,
+    prev_cols: &[(String, bool)],
+    new_cols: &[(String, bool)],
+) -> Result<Option<String>, String> {
+    let single_pk = |cols: &[(String, bool)]| -> Option<String> {
+        let mut pks = cols.iter().filter(|(_, pk)| *pk).map(|(name, _)| name);
+        match (pks.next(), pks.next()) {
+            (Some(only), None) => Some(only.clone()),
+            _ => None,
+        }
+    };
+    if let (Some(prev_pk), Some(new_pk)) = (single_pk(prev_cols), single_pk(new_cols)) {
+        if prev_pk == new_pk {
+            return Ok(Some(prev_pk));
+        }
+        return Ok(None);
+    }
+    // Fall back to single-column UNIQUE indexes (KV stores).
+    let unique_single = |schema: &str| -> Result<Option<String>, String> {
+        let mut stmt = tx
+            .prepare(&format!("PRAGMA {schema}.index_list({quoted})"))
+            .map_err(|e| format!("PRAGMA index_list failed: {e}"))?;
+        let indexes: Vec<(String, bool, String)> = {
+            let mut out = Vec::new();
+            for row in stmt
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>("name")?,
+                        row.get::<_, bool>("unique")?,
+                        row.get::<_, String>("origin")?,
+                    ))
+                })
+                .map_err(|e| format!("Failed to read index_list: {e}"))?
+            {
+                out.push(row.map_err(|e| format!("Failed to read index_list: {e}"))?);
+            }
+            out
+        };
+        for (name, unique, _origin) in indexes {
+            if !unique {
+                continue;
+            }
+            let quoted_idx = format!("\"{}\"", name.replace('"', "\"\""));
+            let mut cols_stmt = tx
+                .prepare(&format!("PRAGMA {schema}.index_info({quoted_idx})"))
+                .map_err(|e| format!("PRAGMA index_info failed: {e}"))?;
+            let mut cols = Vec::new();
+            for row in cols_stmt
+                .query_map([], |row| row.get::<_, String>("name"))
+                .map_err(|e| format!("Failed to read index_info: {e}"))?
+            {
+                cols.push(row.map_err(|e| format!("Failed to read index_info: {e}"))?);
+            }
+            if cols.len() == 1 {
+                return Ok(Some(cols.remove(0)));
+            }
+        }
+        Ok(None)
+    };
+    match (unique_single("prev")?, unique_single("main")?) {
+        (Some(prev_id), Some(new_id)) if prev_id == new_id => Ok(Some(prev_id)),
+        _ => Ok(None),
+    }
 }
 
 /// Validate a staged database copy: open read-only and run `quick_check`.
@@ -270,13 +335,19 @@ mod tests {
         let conn = Connection::open(path).unwrap();
         conn.execute_batch(
             "CREATE TABLE sessions(id TEXT PRIMARY KEY, title TEXT);
-             CREATE TABLE no_pk(body TEXT);",
+             CREATE TABLE no_pk(body TEXT);
+             CREATE TABLE kv(key TEXT UNIQUE ON CONFLICT REPLACE, value TEXT);",
         )
         .unwrap();
         for row in rows {
             conn.execute(
                 "INSERT INTO sessions(id, title) VALUES (?1, ?2)",
                 rusqlite::params![row, format!("t-{row}")],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO kv(key, value) VALUES (?1, ?2)",
+                rusqlite::params![format!("k-{row}"), format!("v-{row}")],
             )
             .unwrap();
         }
@@ -291,8 +362,15 @@ mod tests {
         let staged = dir.path().join("staged.db");
         make_db(&prev, &["a", "b"]);
         make_db(&staged, &["b", "c"]);
+        // NULL-keyed KV rows must never duplicate across merges.
+        for db in [&prev, &staged] {
+            Connection::open(db)
+                .unwrap()
+                .execute("INSERT INTO kv(key, value) VALUES (NULL, 'n')", [])
+                .unwrap();
+        }
         let resurrected = merge_missing_rows(&prev, &staged).unwrap();
-        assert_eq!(resurrected, 1);
+        assert_eq!(resurrected, 2, "one session row + one kv row");
         let conn = Connection::open(&staged).unwrap();
         let ids: Vec<String> = conn
             .prepare("SELECT id FROM sessions ORDER BY id")
@@ -302,6 +380,24 @@ mod tests {
             .flatten()
             .collect();
         assert_eq!(ids, vec!["a", "b", "c"]);
+        let keys: Vec<Option<String>> = conn
+            .prepare("SELECT key FROM kv ORDER BY key")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .flatten()
+            .collect();
+        assert_eq!(
+            keys,
+            vec![
+                None,
+                Some("k-a".to_string()),
+                Some("k-b".to_string()),
+                Some("k-c".to_string())
+            ]
+        );
+        // Idempotent: a second merge finds nothing missing.
+        assert_eq!(merge_missing_rows(&prev, &staged).unwrap(), 0);
         quick_check_db(&staged).unwrap();
     }
 

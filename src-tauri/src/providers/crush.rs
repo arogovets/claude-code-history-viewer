@@ -72,6 +72,12 @@ pub fn scan_projects() -> Result<Vec<ClaudeProject>, String> {
 /// One `crush.db` → one project, or `None` when the DB is unreadable or empty.
 fn scan_db(db_path: &Path) -> Option<ClaudeProject> {
     let project_dir = project_dir_of(db_path)?;
+    scan_db_as(db_path, &project_dir)
+}
+
+/// [`scan_db`] with an explicit project dir (snapshot DBs report the original
+/// user directory, never snapshot interior).
+fn scan_db_as(db_path: &Path, project_dir: &str) -> Option<ClaudeProject> {
     let conn = open_db(db_path).ok()?;
     let (session_count, message_count, last_modified) = project_stats(&conn).ok()?;
     if session_count == 0 {
@@ -81,11 +87,11 @@ fn scan_db(db_path: &Path) -> Option<ClaudeProject> {
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .filter(|n| !n.is_empty())
-        .unwrap_or_else(|| project_dir.clone());
+        .unwrap_or_else(|| project_dir.to_string());
     Some(ClaudeProject {
         name,
         path: format!("{SCHEME}{project_dir}"),
-        actual_path: project_dir,
+        actual_path: project_dir.to_string(),
         session_count,
         message_count,
         last_modified,
@@ -107,7 +113,10 @@ pub fn load_sessions(
     load_sessions_conn(&conn, project_dir)
 }
 
-fn load_sessions_conn(conn: &Connection, project_dir: &str) -> Result<Vec<ClaudeSession>, String> {
+pub(crate) fn load_sessions_conn(
+    conn: &Connection,
+    project_dir: &str,
+) -> Result<Vec<ClaudeSession>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT s.id, s.title, s.created_at, s.updated_at, \
@@ -166,7 +175,10 @@ pub fn load_messages(session_path: &str) -> Result<Vec<ClaudeMessage>, String> {
     load_messages_conn(&conn, &session_id)
 }
 
-fn load_messages_conn(conn: &Connection, session_id: &str) -> Result<Vec<ClaudeMessage>, String> {
+pub(crate) fn load_messages_conn(
+    conn: &Connection,
+    session_id: &str,
+) -> Result<Vec<ClaudeMessage>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT id, role, parts, created_at FROM messages \
@@ -229,7 +241,7 @@ pub fn search(query: &str, limit: usize) -> Result<Vec<ClaudeMessage>, String> {
     Ok(results)
 }
 
-fn search_one_db(
+pub(crate) fn search_one_db(
     conn: &Connection,
     pattern: &str,
     query_lower: &str,
@@ -377,7 +389,7 @@ fn find_crush_db(
 // Helpers
 // ============================================================================
 
-fn project_dir_of(db_path: &Path) -> Option<String> {
+pub(crate) fn project_dir_of(db_path: &Path) -> Option<String> {
     // <project>/.crush/crush.db -> <project>
     db_path
         .parent()
@@ -394,7 +406,7 @@ fn db_path_for(project_dir: &str) -> Result<PathBuf, String> {
     }
 }
 
-fn parse_session_path(session_path: &str) -> Result<(String, String), String> {
+pub(crate) fn parse_session_path(session_path: &str) -> Result<(String, String), String> {
     let rest = session_path.strip_prefix(SCHEME).unwrap_or(session_path);
     rest.rsplit_once(SESSION_SEP)
         .map(|(dir, id)| (dir.to_string(), id.to_string()))
@@ -407,6 +419,168 @@ fn open_db(path: &Path) -> Result<Connection, String> {
     conn.busy_timeout(std::time::Duration::from_secs(5))
         .map_err(|e| format!("Failed to set busy timeout: {e}"))?;
     Ok(conn)
+}
+
+// ============================================================================
+// Archive glue. One source per `<project>/.crush/crush.db` (role "project").
+// URIs embed the original user project dir, so outputs are already stable and
+// need no rewriting; the snapshot database is opened read-only.
+// ============================================================================
+
+use crate::storage::registry::DiscoveredSource as ArchiveDiscoveredSource;
+use crate::storage::registry::ResolvedSource as ArchiveResolvedSource;
+use crate::storage::{SnapshotInfo as ArchiveSnapshotInfo, Source as ArchiveSource};
+
+/// Every Crush project database on this machine as an independent source.
+pub(crate) fn archive_discover() -> Vec<ArchiveDiscoveredSource> {
+    let machine = crate::storage::registry::discovery_machine_id();
+    discover_dbs(MAX_DBS)
+        .into_iter()
+        .filter_map(|db| {
+            let crush_dir = db.parent()?.to_path_buf();
+            let file_name = db
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(str::to_string)?;
+            let mut found = ArchiveDiscoveredSource::local("project", crush_dir, &machine);
+            found.sqlite_dbs = vec![file_name];
+            Some(found)
+        })
+        .collect()
+}
+
+/// The user project dir named by a stable Crush URI, if parseable.
+fn project_dir_of_stable(stable: &str) -> Option<String> {
+    let rest = stable.strip_prefix(SCHEME).unwrap_or(stable);
+    let (dir, _) = match rest.rsplit_once(SESSION_SEP) {
+        Some((dir, id)) if !id.contains('/') && !id.contains('\\') => (dir, id),
+        _ => (rest, ""),
+    };
+    if dir.is_empty() {
+        return None;
+    }
+    // The session fragment (if any) was validated above; the dir must be
+    // absolute to name a real project.
+    if std::path::Path::new(dir).is_absolute() {
+        Some(dir.to_string())
+    } else {
+        None
+    }
+}
+
+/// Expected database path for a user project dir (mirrors `db_path_for`).
+fn expected_db_for(dir: &str) -> String {
+    format!("{dir}/.crush/crush.db")
+}
+
+/// Locate the covering source by user project dir (not by snapshot paths:
+/// Crush URIs name live user directories).
+pub(crate) fn archive_locate(sources: &[ArchiveResolvedSource], stable: &str) -> Option<usize> {
+    let dir = project_dir_of_stable(stable)?;
+    let want = expected_db_for(&dir);
+    sources.iter().position(|candidate| {
+        let origin = candidate.source.origin.as_str();
+        origin == want
+            || candidate
+                .source
+                .original_root
+                .as_deref()
+                .is_some_and(|root| {
+                    format!("{root}/crush.db") == want
+                        || Path::new(root)
+                            .parent()
+                            .is_some_and(|parent| parent.to_string_lossy().as_ref() == dir)
+                })
+    })
+}
+
+/// Open the snapshot database recorded by a source.
+fn archive_open_db(
+    source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+) -> Result<Connection, String> {
+    let file_name = source
+        .sqlite_dbs
+        .first()
+        .ok_or("Crush source has no captured database")?;
+    open_db(&snapshot.data_path.join(file_name))
+}
+
+/// Scan one snapshot database, reporting the original user directory.
+// Returns Result for registry table uniformity; the scan is infallible.
+#[allow(clippy::unnecessary_wraps)]
+pub(crate) fn archive_scan(
+    source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+) -> Result<Vec<ClaudeProject>, String> {
+    let db = snapshot
+        .data_path
+        .join(source.sqlite_dbs.first().cloned().unwrap_or_default());
+    let Some(project_dir) = source
+        .original_root
+        .as_deref()
+        .map(Path::new)
+        .and_then(|p| p.parent())
+        .map(|p| p.to_string_lossy().to_string())
+    else {
+        return Ok(Vec::new());
+    };
+    Ok(scan_db_as(&db, &project_dir).into_iter().collect())
+}
+
+/// Sessions for a stable project URI, read from the snapshot database.
+pub(crate) fn archive_load_sessions(
+    source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+    stable_project: &str,
+) -> Result<Vec<ClaudeSession>, String> {
+    let project_dir = stable_project
+        .strip_prefix(SCHEME)
+        .unwrap_or(stable_project);
+    let conn = archive_open_db(source, snapshot)?;
+    load_sessions_conn(&conn, project_dir)
+}
+
+/// Messages for a stable session URI, read from the snapshot database.
+pub(crate) fn archive_load_messages(
+    source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+    stable_session: &str,
+) -> Result<Vec<ClaudeMessage>, String> {
+    let (_, session_id) = parse_session_path(stable_session)?;
+    let conn = archive_open_db(source, snapshot)?;
+    load_messages_conn(&conn, &session_id)
+}
+
+/// Search confined to one snapshot database.
+pub(crate) fn archive_search(
+    source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<ClaudeMessage>, String> {
+    if query.is_empty() || limit == 0 {
+        return Ok(Vec::new());
+    }
+    let conn = archive_open_db(source, snapshot)?;
+    let project_name = source
+        .original_root
+        .as_deref()
+        .map(Path::new)
+        .and_then(|p| p.parent())
+        .and_then(|p| p.file_name())
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let mut results = Vec::new();
+    search_one_db(
+        &conn,
+        &format!("%{query}%"),
+        &query.to_lowercase(),
+        &project_name,
+        limit,
+        &mut results,
+    );
+    Ok(results)
 }
 
 fn project_stats(conn: &Connection) -> Result<(usize, usize, String), String> {

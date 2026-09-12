@@ -89,6 +89,13 @@ pub type SearchFn = fn(&Source, &SnapshotInfo, &str, usize) -> Result<Vec<Claude
 /// Pick the covering source index for a stable ID, if any.
 pub type LocateFn = fn(&[ResolvedSource], &str) -> Option<usize>;
 
+/// Merge preserved history inside a staged SQLite copy, for blob-collection
+/// stores where an entire session list lives in one KV value (row-level merge
+/// cannot see deletions inside the blob). Runs after backup, before hashing;
+/// returns resurrected item count. On error the caller keeps the previous
+/// database wholesale.
+pub type SqliteBlobMergeFn = fn(prev_db: &Path, staged_db: &Path) -> Result<usize, String>;
+
 /// One row per migrated provider.
 pub struct ProviderArchiveSpec {
     pub provider: &'static str,
@@ -107,6 +114,9 @@ pub struct ProviderArchiveSpec {
     /// Whether outputs embed absolute paths needing snapshot→stable rewrite.
     /// `false` for content-derived opaque URIs (opencode://, trae://, …).
     pub rewrite_outputs: bool,
+    /// Blob-collection merge for KV stores (`None` when row-level merge
+    /// suffices).
+    pub blob_merge: Option<SqliteBlobMergeFn>,
 }
 
 // ---------------------------------------------------------------------------
@@ -125,6 +135,7 @@ fn spec_table() -> Vec<ProviderArchiveSpec> {
             search: Some(providers::pi::archive_search),
             locate: locate_by_subpath_or_single,
             rewrite_outputs: true,
+            blob_merge: None,
         },
         ProviderArchiveSpec {
             provider: "ompi",
@@ -135,6 +146,7 @@ fn spec_table() -> Vec<ProviderArchiveSpec> {
             search: Some(providers::ompi::archive_search),
             locate: locate_by_subpath_or_single,
             rewrite_outputs: true,
+            blob_merge: None,
         },
         ProviderArchiveSpec {
             provider: "continue",
@@ -145,6 +157,7 @@ fn spec_table() -> Vec<ProviderArchiveSpec> {
             search: Some(providers::continue_dev::archive_search),
             locate: locate_by_subpath_or_single,
             rewrite_outputs: true,
+            blob_merge: None,
         },
         ProviderArchiveSpec {
             provider: "pearai",
@@ -155,6 +168,7 @@ fn spec_table() -> Vec<ProviderArchiveSpec> {
             search: Some(providers::pearai::archive_search),
             locate: locate_by_subpath_or_single,
             rewrite_outputs: true,
+            blob_merge: None,
         },
         ProviderArchiveSpec {
             provider: "grok",
@@ -165,6 +179,7 @@ fn spec_table() -> Vec<ProviderArchiveSpec> {
             search: Some(providers::grok::archive_search),
             locate: locate_by_subpath_or_single,
             rewrite_outputs: true,
+            blob_merge: None,
         },
         ProviderArchiveSpec {
             provider: "kimi",
@@ -175,6 +190,7 @@ fn spec_table() -> Vec<ProviderArchiveSpec> {
             search: Some(providers::kimi::archive_search),
             locate: locate_by_subpath_or_single,
             rewrite_outputs: true,
+            blob_merge: None,
         },
         ProviderArchiveSpec {
             provider: "vibe",
@@ -185,6 +201,7 @@ fn spec_table() -> Vec<ProviderArchiveSpec> {
             search: Some(providers::vibe::archive_search),
             locate: locate_by_subpath_or_single,
             rewrite_outputs: true,
+            blob_merge: None,
         },
         ProviderArchiveSpec {
             provider: "gemini",
@@ -195,6 +212,7 @@ fn spec_table() -> Vec<ProviderArchiveSpec> {
             search: Some(providers::gemini::archive_search),
             locate: locate_by_subpath_or_single,
             rewrite_outputs: true,
+            blob_merge: None,
         },
         ProviderArchiveSpec {
             provider: "qwen",
@@ -205,6 +223,7 @@ fn spec_table() -> Vec<ProviderArchiveSpec> {
             search: Some(providers::qwen::archive_search),
             locate: locate_by_subpath_or_single,
             rewrite_outputs: true,
+            blob_merge: None,
         },
         ProviderArchiveSpec {
             provider: "deepseek",
@@ -215,6 +234,7 @@ fn spec_table() -> Vec<ProviderArchiveSpec> {
             search: None,
             locate: locate_by_subpath_or_single,
             rewrite_outputs: true,
+            blob_merge: None,
         },
         ProviderArchiveSpec {
             provider: "openhands",
@@ -225,6 +245,7 @@ fn spec_table() -> Vec<ProviderArchiveSpec> {
             search: Some(providers::openhands::archive_search),
             locate: locate_by_subpath_or_single,
             rewrite_outputs: false,
+            blob_merge: None,
         },
         ProviderArchiveSpec {
             provider: "aider",
@@ -235,6 +256,7 @@ fn spec_table() -> Vec<ProviderArchiveSpec> {
             search: Some(providers::aider::archive_search),
             locate: locate_by_subpath_or_single,
             rewrite_outputs: true,
+            blob_merge: None,
         },
         ProviderArchiveSpec {
             provider: "codebuddy",
@@ -245,6 +267,7 @@ fn spec_table() -> Vec<ProviderArchiveSpec> {
             search: Some(providers::codebuddy::archive_search),
             locate: locate_by_subpath_or_single,
             rewrite_outputs: true,
+            blob_merge: None,
         },
         ProviderArchiveSpec {
             provider: "cursor-agent",
@@ -255,6 +278,7 @@ fn spec_table() -> Vec<ProviderArchiveSpec> {
             search: Some(providers::cursor_agent::archive_search),
             locate: locate_by_subpath_or_single,
             rewrite_outputs: true,
+            blob_merge: None,
         },
         ProviderArchiveSpec {
             provider: "codex",
@@ -265,6 +289,7 @@ fn spec_table() -> Vec<ProviderArchiveSpec> {
             search: Some(providers::codex::archive_search),
             locate: locate_by_subpath_or_single,
             rewrite_outputs: true,
+            blob_merge: None,
         },
         ProviderArchiveSpec {
             provider: "openinterpreter",
@@ -275,6 +300,7 @@ fn spec_table() -> Vec<ProviderArchiveSpec> {
             search: Some(providers::openinterpreter::archive_search),
             locate: locate_by_subpath_or_single,
             rewrite_outputs: true,
+            blob_merge: None,
         },
         ProviderArchiveSpec {
             provider: "opencode",
@@ -285,6 +311,7 @@ fn spec_table() -> Vec<ProviderArchiveSpec> {
             search: Some(providers::opencode::archive_search),
             locate: locate_by_subpath_or_single,
             rewrite_outputs: false,
+            blob_merge: None,
         },
         ProviderArchiveSpec {
             provider: "forgecode",
@@ -295,6 +322,7 @@ fn spec_table() -> Vec<ProviderArchiveSpec> {
             search: Some(providers::forgecode::archive_search),
             locate: locate_by_subpath_or_single,
             rewrite_outputs: false,
+            blob_merge: None,
         },
         ProviderArchiveSpec {
             provider: "goose",
@@ -305,6 +333,7 @@ fn spec_table() -> Vec<ProviderArchiveSpec> {
             search: Some(providers::goose::archive_search),
             locate: locate_by_subpath_or_single,
             rewrite_outputs: false,
+            blob_merge: None,
         },
         ProviderArchiveSpec {
             provider: "llm",
@@ -315,6 +344,7 @@ fn spec_table() -> Vec<ProviderArchiveSpec> {
             search: Some(providers::llm::archive_search),
             locate: locate_by_subpath_or_single,
             rewrite_outputs: false,
+            blob_merge: None,
         },
         ProviderArchiveSpec {
             provider: "amazonq",
@@ -325,6 +355,7 @@ fn spec_table() -> Vec<ProviderArchiveSpec> {
             search: Some(providers::amazon_q::archive_search),
             locate: locate_by_subpath_or_single,
             rewrite_outputs: false,
+            blob_merge: None,
         },
         ProviderArchiveSpec {
             provider: "forgecode",
@@ -335,6 +366,7 @@ fn spec_table() -> Vec<ProviderArchiveSpec> {
             search: Some(providers::forgecode::archive_search),
             locate: locate_by_subpath_or_single,
             rewrite_outputs: false,
+            blob_merge: None,
         },
         ProviderArchiveSpec {
             provider: "goose",
@@ -345,6 +377,7 @@ fn spec_table() -> Vec<ProviderArchiveSpec> {
             search: Some(providers::goose::archive_search),
             locate: locate_by_subpath_or_single,
             rewrite_outputs: false,
+            blob_merge: None,
         },
         ProviderArchiveSpec {
             provider: "llm",
@@ -355,6 +388,7 @@ fn spec_table() -> Vec<ProviderArchiveSpec> {
             search: Some(providers::llm::archive_search),
             locate: locate_by_subpath_or_single,
             rewrite_outputs: false,
+            blob_merge: None,
         },
         ProviderArchiveSpec {
             provider: "zed",
@@ -365,6 +399,7 @@ fn spec_table() -> Vec<ProviderArchiveSpec> {
             search: Some(providers::zed::archive_search),
             locate: locate_by_subpath_or_single,
             rewrite_outputs: false,
+            blob_merge: None,
         },
         ProviderArchiveSpec {
             provider: "amazonq",
@@ -375,6 +410,7 @@ fn spec_table() -> Vec<ProviderArchiveSpec> {
             search: Some(providers::amazon_q::archive_search),
             locate: locate_by_subpath_or_single,
             rewrite_outputs: false,
+            blob_merge: None,
         },
         ProviderArchiveSpec {
             provider: "kiro",
@@ -385,6 +421,42 @@ fn spec_table() -> Vec<ProviderArchiveSpec> {
             search: Some(providers::kiro::archive_search),
             locate: locate_by_subpath_or_single,
             rewrite_outputs: false,
+            blob_merge: None,
+        },
+        ProviderArchiveSpec {
+            provider: "trae",
+            discover: providers::trae::archive_discover,
+            scan: providers::trae::archive_scan,
+            load_sessions: providers::trae::archive_load_sessions,
+            load_messages: providers::trae::archive_load_messages,
+            search: Some(providers::trae::archive_search),
+            locate: locate_by_subpath_or_single,
+            rewrite_outputs: false,
+            blob_merge: Some(providers::trae::archive_blob_merge),
+        },
+        ProviderArchiveSpec {
+            provider: "cursor",
+            discover: providers::cursor::archive_discover,
+            scan: providers::cursor::archive_scan,
+            load_sessions: providers::cursor::archive_load_sessions,
+            load_messages: providers::cursor::archive_load_messages,
+            search: Some(providers::cursor::archive_search),
+            locate: locate_by_subpath_or_single,
+            // Mixed IDs: `cursor://{abs-workspace}` forms embed snapshot
+            // interior and need rewriting; opaque composer IDs pass through.
+            rewrite_outputs: true,
+            blob_merge: None,
+        },
+        ProviderArchiveSpec {
+            provider: "crush",
+            discover: providers::crush::archive_discover,
+            scan: providers::crush::archive_scan,
+            load_sessions: providers::crush::archive_load_sessions,
+            load_messages: providers::crush::archive_load_messages,
+            search: Some(providers::crush::archive_search),
+            locate: providers::crush::archive_locate,
+            rewrite_outputs: false,
+            blob_merge: None,
         },
     ]
 }
@@ -2730,6 +2802,426 @@ mod conformance_tests {
                 .unwrap()
         )
         .contains(marker));
+    }
+
+    // -- trae (workspace sqlite dbs) -----------------------------------------------------
+
+    fn trae_workspace_db(ws: &Path, sessions: &[(&str, &str)]) {
+        let conn = rusqlite::Connection::open(ws.join("state.vscdb")).unwrap();
+        conn.execute(
+            "CREATE TABLE ItemTable (key TEXT UNIQUE ON CONFLICT REPLACE, value TEXT)",
+            [],
+        )
+        .unwrap();
+        let list: Vec<_> = sessions
+            .iter()
+            .map(|(sid, text)| {
+                serde_json::json!({
+                    "id": sid, "title": format!("{sid} title"),
+                    "messages": [{"role": "user", "content": text}],
+                })
+            })
+            .collect();
+        conn.execute(
+            "INSERT INTO ItemTable (key, value) VALUES ('memento/icube-ai-agent-storage', ?1)",
+            rusqlite::params![serde_json::json!({"list": list}).to_string()],
+        )
+        .unwrap();
+        std::fs::write(ws.join("workspace.json"), r#"{"folder":"file:///w/tproj"}"#).unwrap();
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn trae_archive_conformance() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
+        let _env = ClearEnvGuard::clear(PROVIDER_ENVS);
+        // config_dir() is OS-resolved; drive discovery through the fixture by
+        // pointing it at the sandbox is impossible, so seed the OS location
+        // only if hermetic — instead register + sync explicitly like zed.
+        // Trae honors no env override; use explicit source registration.
+        let marker = "conformance-marker-trae";
+        let live_dir = tempfile::tempdir().unwrap();
+        let storage = live_dir.path().join("workspaceStorage");
+        let ws_a = storage.join("hash-aaa");
+        std::fs::create_dir_all(&ws_a).unwrap();
+        trae_workspace_db(&ws_a, &[("sess-a1", &format!("hello {marker}"))]);
+        let ws_b = storage.join("hash-bbb");
+        std::fs::create_dir_all(&ws_b).unwrap();
+        trae_workspace_db(&ws_b, &[("sess-b1", "second")]);
+
+        let machine = discovery_machine_id();
+        let mut found =
+            DiscoveredSource::local(crate::storage::ROLE_PRIMARY, storage.clone(), &machine);
+        found.extra_sqlite_dbs = vec![
+            "hash-aaa/state.vscdb".to_string(),
+            "hash-bbb/state.vscdb".to_string(),
+        ];
+        let source = source_for_discovered("trae", &found);
+        let opts = crate::storage::SyncOptions {
+            extra_sqlite_dbs: vec![],
+        };
+        // NOTE: extra dbs live on the source record after claim; pass them
+        // explicitly here since discovery ran before registration.
+        let mut opts = opts;
+        opts.extra_sqlite_dbs = found.extra_sqlite_dbs.clone();
+        crate::storage::sync_source(&source, &storage, &opts).unwrap();
+
+        let sources = read_sources("trae");
+        assert!(!sources.is_empty());
+        let projects =
+            crate::providers::trae::archive_scan(&sources[0].source, &sources[0].snapshot).unwrap();
+        assert_eq!(projects.len(), 2, "trae: {projects:?}");
+        let project_a = projects
+            .iter()
+            .find(|p| p.path == "trae://hash-aaa")
+            .expect("hash-aaa")
+            .path
+            .clone();
+
+        let sessions = load_provider_sessions("trae", &project_a, &sources)
+            .await
+            .unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert!(message_text(
+            &load_provider_messages("trae", "trae://hash-aaa#sess-a1", &sources)
+                .await
+                .unwrap()
+        )
+        .contains(marker));
+        assert!(!search_provider("trae", marker, 10, &sources)
+            .await
+            .unwrap()
+            .is_empty());
+
+        // Delete sess-a1 upstream (row-level), extend, add sess-c1.
+        {
+            let conn = rusqlite::Connection::open(ws_a.join("state.vscdb")).unwrap();
+            let value: String = conn
+                .query_row(
+                    "SELECT value FROM ItemTable WHERE key = 'memento/icube-ai-agent-storage'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            let mut doc: serde_json::Value = serde_json::from_str(&value).unwrap();
+            doc["list"] = serde_json::json!([{
+                "id": "sess-a2", "title": "second",
+                "messages": [{"role": "user", "content": "more"}],
+            }]);
+            conn.execute(
+                "UPDATE ItemTable SET value = ?1 WHERE key = 'memento/icube-ai-agent-storage'",
+                rusqlite::params![doc.to_string()],
+            )
+            .unwrap();
+        }
+        let ws_c = storage.join("hash-ccc");
+        std::fs::create_dir_all(&ws_c).unwrap();
+        trae_workspace_db(&ws_c, &[("sess-c1", "third")]);
+        // New workspace joins capture automatically on re-sync.
+        let mut found2 = found.clone();
+        found2
+            .extra_sqlite_dbs
+            .push("hash-ccc/state.vscdb".to_string());
+        let source2 = source_for_discovered("trae", &found2);
+        let mut opts2 = opts.clone();
+        opts2.extra_sqlite_dbs = found2.extra_sqlite_dbs.clone();
+        crate::storage::sync_source(&source2, &storage, &opts2).unwrap();
+
+        let sources = read_sources("trae");
+        let sessions_a = load_provider_sessions("trae", &project_a, &sources)
+            .await
+            .unwrap();
+        assert_eq!(
+            sessions_a.len(),
+            2,
+            "sess-a1 preserved + sess-a2, got {sessions_a:?}"
+        );
+        let sessions_c = load_provider_sessions("trae", "trae://hash-ccc", &sources)
+            .await
+            .unwrap();
+        assert_eq!(sessions_c.len(), 1);
+
+        std::fs::remove_dir_all(live_dir.path()).unwrap();
+        let sources = read_sources("trae");
+        assert_eq!(
+            load_provider_sessions("trae", &project_a, &sources)
+                .await
+                .unwrap()
+                .len(),
+            2
+        );
+        assert!(message_text(
+            &load_provider_messages("trae", "trae://hash-aaa#sess-a1", &sources)
+                .await
+                .unwrap()
+        )
+        .contains(marker));
+    }
+
+    // -- cursor (global + workspace sqlite dbs) ------------------------------------------------
+
+    fn cursor_global_db(user_dir: &Path, composers: &[(&str, &str, &str)]) {
+        let global = user_dir.join("globalStorage");
+        std::fs::create_dir_all(&global).unwrap();
+        let conn = rusqlite::Connection::open(global.join("state.vscdb")).unwrap();
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS cursorDiskKV (key TEXT UNIQUE ON CONFLICT REPLACE, value TEXT)",
+            [],
+        )
+        .unwrap();
+        for (cid, name, text) in composers {
+            let composer = serde_json::json!({
+                "composerId": cid, "name": name, "createdAt": 1_700_000_000_000u64,
+                "lastUpdatedAt": 1_700_000_100_000u64, "isArchived": false,
+                "unifiedMode": "agent",
+                "workspaceIdentifier": {"id": "ws-hash", "uri": {"fsPath": "/w/cproj", "path": "/w/cproj"}},
+                "fullConversationHeadersOnly": [
+                    {"bubbleId": "b1", "type": 1},
+                    {"bubbleId": "b2", "type": 2},
+                ],
+            });
+            conn.execute(
+                "INSERT INTO cursorDiskKV (key, value) VALUES (?1, ?2)",
+                rusqlite::params![format!("composerData:{cid}"), composer.to_string()],
+            )
+            .unwrap();
+            for (bid, btype) in [("b1", 1), ("b2", 2)] {
+                conn.execute(
+                    "INSERT INTO cursorDiskKV (key, value) VALUES (?1, ?2)",
+                    rusqlite::params![
+                        format!("bubbleId:{cid}:{bid}"),
+                        serde_json::json!({
+                            "bubbleId": bid, "type": btype, "text": text,
+                            "createdAt": "2026-09-01T00:00:00Z",
+                        })
+                        .to_string()
+                    ],
+                )
+                .unwrap();
+            }
+        }
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn cursor_archive_conformance() {
+        let sandbox = crate::test_utils::SandboxHome::new();
+        let _env = ClearEnvGuard::clear(PROVIDER_ENVS);
+        // CURSOR_USER_DIR override keeps discovery hermetic.
+        let user_dir = sandbox.path().join("cursor-user");
+        std::env::set_var("CURSOR_USER_DIR", &user_dir);
+        struct CursorGuard;
+        impl Drop for CursorGuard {
+            fn drop(&mut self) {
+                std::env::remove_var("CURSOR_USER_DIR");
+            }
+        }
+        let _cursor_guard = CursorGuard;
+        let marker = "conformance-marker-cursor";
+        let ws = user_dir.join("workspaceStorage/ws-hash");
+        std::fs::create_dir_all(&ws).unwrap();
+        std::fs::write(ws.join("workspace.json"), r#"{"folder":"file:///w/cproj"}"#).unwrap();
+        cursor_global_db(
+            &user_dir,
+            &[("comp-1", "first", &format!("hello {marker}"))],
+        );
+
+        // A legacy workspace db exercises multi-db capture alongside global.
+        {
+            let ws_conn = rusqlite::Connection::open(ws.join("state.vscdb")).unwrap();
+            ws_conn
+                .execute(
+                    "CREATE TABLE ItemTable (key TEXT UNIQUE ON CONFLICT REPLACE, value TEXT)",
+                    [],
+                )
+                .unwrap();
+        }
+        let projects = scan_provider("cursor").await.unwrap();
+        assert_eq!(projects.len(), 1, "cursor: {projects:?}");
+        let project = projects[0].path.clone();
+
+        let sources = read_sources("cursor");
+        let sessions = load_provider_sessions("cursor", &project, &sources)
+            .await
+            .unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].file_path, "cursor://comp-1");
+        assert!(message_text(
+            &load_provider_messages("cursor", "cursor://comp-1", &sources)
+                .await
+                .unwrap()
+        )
+        .contains(marker));
+        assert!(!search_provider("cursor", marker, 10, &sources)
+            .await
+            .unwrap()
+            .is_empty());
+
+        // Delete comp-1 upstream, add comp-2; merge-back preserves comp-1.
+        {
+            let conn =
+                rusqlite::Connection::open(user_dir.join("globalStorage/state.vscdb")).unwrap();
+            conn.execute(
+                "DELETE FROM cursorDiskKV WHERE key LIKE 'composerData:comp-1%'",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "DELETE FROM cursorDiskKV WHERE key LIKE 'bubbleId:comp-1%'",
+                [],
+            )
+            .unwrap();
+        }
+        cursor_global_db(&user_dir, &[("comp-2", "second", "second")]);
+        let projects_after = scan_provider("cursor").await.unwrap();
+        assert_eq!(projects_after.len(), 1);
+        let sessions_after =
+            load_provider_sessions("cursor", &projects_after[0].path, &read_sources("cursor"))
+                .await
+                .unwrap();
+        assert_eq!(sessions_after.len(), 2, "comp-1 preserved + comp-2");
+
+        std::fs::remove_dir_all(&user_dir).unwrap();
+        assert_eq!(scan_provider("cursor").await.unwrap().len(), 1);
+        let sources = read_sources("cursor");
+        assert_eq!(
+            load_provider_sessions("cursor", &project, &sources)
+                .await
+                .unwrap()
+                .len(),
+            2
+        );
+        assert!(message_text(
+            &load_provider_messages("cursor", "cursor://comp-1", &sources)
+                .await
+                .unwrap()
+        )
+        .contains(marker));
+    }
+
+    // -- crush (per-project sqlite dbs) ----------------------------------------------------------
+
+    fn crush_test_db(db_path: &Path, sessions: &[(&str, &str, &[&str])]) {
+        if let Some(parent) = db_path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        let conn = rusqlite::Connection::open(db_path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT, created_at INTEGER, updated_at INTEGER);
+             CREATE TABLE messages (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, role TEXT NOT NULL, parts TEXT NOT NULL DEFAULT '[]', created_at INTEGER);",
+        )
+        .unwrap();
+        for (sid, title, texts) in sessions {
+            conn.execute(
+                "INSERT INTO sessions VALUES (?1, ?2, 1750000000, 1750000100)",
+                rusqlite::params![sid, title],
+            )
+            .unwrap();
+            for (i, text) in texts.iter().enumerate() {
+                conn.execute(
+                    "INSERT INTO messages VALUES (?1, ?2, 'user', ?3, 1750000000)",
+                    rusqlite::params![
+                        format!("{sid}-m{i}"),
+                        sid,
+                        serde_json::json!([{"type": "text", "data": {"text": text}}]).to_string()
+                    ],
+                )
+                .unwrap();
+            }
+        }
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn crush_archive_conformance() {
+        let sandbox = crate::test_utils::SandboxHome::new();
+        let _env = ClearEnvGuard::clear(PROVIDER_ENVS);
+        // Crush discovers under ~/client (depth 2); seed two project DBs.
+        let proj_a = sandbox.path().join("client/crusha");
+        let proj_b = sandbox.path().join("client/crushb");
+        let marker = "conformance-marker-crush";
+        crush_test_db(
+            &proj_a.join(".crush/crush.db"),
+            &[("sess-a1", "first", &[&format!("hello {marker}")])],
+        );
+        crush_test_db(
+            &proj_b.join(".crush/crush.db"),
+            &[("sess-b1", "second", &["second"])],
+        );
+
+        let projects = scan_provider("crush").await.unwrap();
+        assert_eq!(projects.len(), 2, "crush: {projects:?}");
+        let project_a = projects
+            .iter()
+            .find(|p| p.name == "crusha")
+            .expect("crusha")
+            .path
+            .clone();
+        assert!(project_a.starts_with("crush://"));
+
+        let sources = read_sources("crush");
+        assert_eq!(sources.len(), 2);
+        let sessions = load_provider_sessions("crush", &project_a, &sources)
+            .await
+            .unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert!(message_text(
+            &load_provider_messages("crush", &sessions[0].file_path, &sources)
+                .await
+                .unwrap()
+        )
+        .contains(marker));
+        assert!(!search_provider("crush", marker, 10, &sources)
+            .await
+            .unwrap()
+            .is_empty());
+
+        // Delete sess-a1 upstream, extend, add sess-a2 in the same db.
+        {
+            let conn = rusqlite::Connection::open(proj_a.join(".crush/crush.db")).unwrap();
+            conn.execute("DELETE FROM sessions WHERE id = 'sess-a1'", [])
+                .unwrap();
+            conn.execute("DELETE FROM messages WHERE session_id = 'sess-a1'", [])
+                .unwrap();
+            conn.execute(
+                "INSERT INTO sessions VALUES ('sess-a2', 'second', 1750000000, 1750000100)",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO messages VALUES ('sess-a2-m0', 'sess-a2', 'user', ?1, 1750000000)",
+                rusqlite::params![
+                    serde_json::json!([{"type": "text", "data": {"text": "more"}}]).to_string()
+                ],
+            )
+            .unwrap();
+        }
+        let projects_after = scan_provider("crush").await.unwrap();
+        assert_eq!(projects_after.len(), 2);
+        let sessions_a = load_provider_sessions(
+            "crush",
+            &projects_after
+                .iter()
+                .find(|p| p.name == "crusha")
+                .expect("crusha")
+                .path,
+            &read_sources("crush"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(sessions_a.len(), 2, "sess-a1 preserved + sess-a2");
+
+        // Removing a whole project dir keeps its history browsable.
+        std::fs::remove_dir_all(&proj_a).unwrap();
+        assert_eq!(scan_provider("crush").await.unwrap().len(), 2);
+        let sources = read_sources("crush");
+        assert_eq!(
+            load_provider_sessions("crush", &project_a, &sources)
+                .await
+                .unwrap()
+                .len(),
+            2
+        );
     }
 
     // -- aider ------------------------------------------------------------------

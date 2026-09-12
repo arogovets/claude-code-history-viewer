@@ -191,10 +191,7 @@ pub async fn scan_all_projects(
 
     type SyncScanner = fn() -> Result<Vec<ClaudeProject>, String>;
     let sync_scanners: &[(&str, SyncScanner)] = &[
-        ("trae", providers::trae::scan_projects),
         ("cline", providers::cline::scan_projects),
-        ("cursor", providers::cursor::scan_projects),
-        ("crush", providers::crush::scan_projects),
         ("antigravity", providers::antigravity::scan_projects),
         ("copilot", providers::copilot::scan_projects),
     ];
@@ -445,10 +442,7 @@ pub async fn load_provider_sessions(
         "copilot" => providers::copilot::load_sessions(&project_path, exclude)?,
 
         "cline" => providers::cline::load_sessions(&project_path, exclude)?,
-        "crush" => providers::crush::load_sessions(&project_path, exclude)?,
-        "cursor" => providers::cursor::load_sessions(&project_path, exclude)?,
         "antigravity" => providers::antigravity::load_sessions(&project_path, exclude)?,
-        "trae" => providers::trae::load_sessions(&project_path, exclude)?,
         _ => return Err(format!("Unknown provider: {provider}")),
     };
 
@@ -487,6 +481,9 @@ fn legacy_load_sessions(
         "amazonq" => providers::amazon_q::load_sessions(project_path, exclude),
         "kiro" => providers::kiro::load_sessions(project_path, exclude),
         "codex" => providers::codex::load_sessions(project_path, exclude),
+        "trae" => providers::trae::load_sessions(project_path, exclude),
+        "cursor" => providers::cursor::load_sessions(project_path, exclude),
+        "crush" => providers::crush::load_sessions(project_path, exclude),
         "openinterpreter" => providers::openinterpreter::load_sessions(project_path, exclude),
         "opencode" => providers::opencode::load_sessions(project_path, exclude),
         "forgecode" => providers::forgecode::load_sessions(project_path, exclude),
@@ -521,6 +518,9 @@ fn legacy_search(provider: &str, query: &str, limit: usize) -> Result<Vec<Claude
         // Codex filters are applied globally after fan-out; bootstrap passes
         // none explicitly.
         "codex" => providers::codex::search(query, limit, &serde_json::json!({})),
+        "trae" => providers::trae::search(query, limit),
+        "cursor" => providers::cursor::search(query, limit),
+        "crush" => providers::crush::search(query, limit),
         "openinterpreter" => providers::openinterpreter::search(query, limit),
         _ => Err(format!("Unknown provider: {provider}")),
     }
@@ -1000,42 +1000,12 @@ pub async fn search_all_providers(
         }
     }
 
-    // Crush
-    if providers_to_search.iter().any(|p| p == "crush") {
-        match providers::crush::search(&query, max_results) {
-            Ok(results) => all_results.extend(results),
-            Err(e) => {
-                log::warn!("Crush search failed: {e}");
-            }
-        }
-    }
-
-    // Cursor
-    if providers_to_search.iter().any(|p| p == "cursor") {
-        match providers::cursor::search(&query, max_results) {
-            Ok(results) => all_results.extend(results),
-            Err(e) => {
-                log::warn!("Cursor search failed: {e}");
-            }
-        }
-    }
-
     // Antigravity
     if providers_to_search.iter().any(|p| p == "antigravity") {
         match providers::antigravity::search(&query, max_results) {
             Ok(results) => all_results.extend(results),
             Err(e) => {
                 log::warn!("Antigravity search failed: {e}");
-            }
-        }
-    }
-
-    // Trae IDE
-    if providers_to_search.iter().any(|p| p == "trae") {
-        match providers::trae::search(&query, max_results) {
-            Ok(results) => all_results.extend(results),
-            Err(e) => {
-                log::warn!("Trae search failed: {e}");
             }
         }
     }

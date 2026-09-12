@@ -392,14 +392,75 @@ fn sync_source_locked(
 
     let mut db_carry_hint: HashMap<String, bool> = HashMap::new();
     for db_rel in &db_relpaths {
+        // A database that simply isn't there contributes nothing: genuinely
+        // absent files are skipped (or carried as not-present when previously
+        // preserved). Only an existing-but-unreadable store can abort.
+        if !live_root.join(native_path(db_rel)).is_file() {
+            continue;
+        }
         match capture_sqlite_live(live_root, db_rel, &staging_data_dir) {
             Ok(staged) => {
-                let bytes = std::fs::read(&staged).map_err(|e| {
+                // Blob-collection merge for KV stores (row-level merge in
+                // assembly cannot see deletions inside a single blob value).
+                // Skipped when the fresh backup is already byte-identical to
+                // the preserved copy.
+                let prev_entry = carry_from.iter().rev().find_map(|snap| {
+                    snap.manifest
+                        .files
+                        .iter()
+                        .find(|f| f.path == *db_rel)
+                        .map(|f| (snap.data_path.join(native_path(db_rel)), f.sha256.clone()))
+                        .filter(|(abs, _)| abs.is_file())
+                });
+                let mut staged_bytes = std::fs::read(&staged).map_err(|e| {
                     format!("Failed to read staged SQLite {}: {e}", staged.display())
                 })?;
+                let already_identical = prev_entry.as_ref().is_some_and(|(_, hash)| {
+                    !hash.is_empty() && *hash == sha256_hex(&staged_bytes)
+                });
+                if !already_identical {
+                    if let Some(merge) = crate::storage::registry::spec_for(&source.provider)
+                        .and_then(|spec| spec.blob_merge)
+                    {
+                        if let Some((prev_abs, _)) = &prev_entry {
+                            match merge(prev_abs, &staged) {
+                                Ok(0) => {}
+                                Ok(n) => {
+                                    log::info!(
+                                        "SQLite blob merge for {db_rel}: {n} items carried forward"
+                                    );
+                                    crate::storage::sqlite_capture::quick_check_db(&staged)?;
+                                    staged_bytes = std::fs::read(&staged).map_err(|e| {
+                                        format!(
+                                            "Failed to re-read merged SQLite {}: {e}",
+                                            staged.display()
+                                        )
+                                    })?;
+                                }
+                                Err(e) => {
+                                    log::warn!(
+                                        "SQLite blob merge failed for {db_rel}, keeping preserved copy: {e}"
+                                    );
+                                    std::fs::remove_file(&staged).map_err(|e| {
+                                        format!(
+                                            "Failed to clear unmerged SQLite staging {db_rel}: {e}"
+                                        )
+                                    })?;
+                                    link_or_copy(prev_abs, &staged)?;
+                                    staged_bytes = std::fs::read(&staged).map_err(|e| {
+                                        format!(
+                                            "Failed to read preserved SQLite {}: {e}",
+                                            staged.display()
+                                        )
+                                    })?;
+                                }
+                            }
+                        }
+                    }
+                }
                 live_files.push(LiveFile {
                     rel: db_rel.clone(),
-                    bytes: Some(bytes),
+                    bytes: Some(staged_bytes),
                     mtime_secs: live_mtime(&live_root.join(native_path(db_rel))),
                 });
             }
