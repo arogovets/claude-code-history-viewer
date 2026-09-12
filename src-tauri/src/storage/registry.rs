@@ -296,6 +296,96 @@ fn spec_table() -> Vec<ProviderArchiveSpec> {
             locate: locate_by_subpath_or_single,
             rewrite_outputs: false,
         },
+        ProviderArchiveSpec {
+            provider: "goose",
+            discover: providers::goose::archive_discover,
+            scan: providers::goose::archive_scan,
+            load_sessions: providers::goose::archive_load_sessions,
+            load_messages: providers::goose::archive_load_messages,
+            search: Some(providers::goose::archive_search),
+            locate: locate_by_subpath_or_single,
+            rewrite_outputs: false,
+        },
+        ProviderArchiveSpec {
+            provider: "llm",
+            discover: providers::llm::archive_discover,
+            scan: providers::llm::archive_scan,
+            load_sessions: providers::llm::archive_load_sessions,
+            load_messages: providers::llm::archive_load_messages,
+            search: Some(providers::llm::archive_search),
+            locate: locate_by_subpath_or_single,
+            rewrite_outputs: false,
+        },
+        ProviderArchiveSpec {
+            provider: "amazonq",
+            discover: providers::amazon_q::archive_discover,
+            scan: providers::amazon_q::archive_scan,
+            load_sessions: providers::amazon_q::archive_load_sessions,
+            load_messages: providers::amazon_q::archive_load_messages,
+            search: Some(providers::amazon_q::archive_search),
+            locate: locate_by_subpath_or_single,
+            rewrite_outputs: false,
+        },
+        ProviderArchiveSpec {
+            provider: "forgecode",
+            discover: providers::forgecode::archive_discover,
+            scan: providers::forgecode::archive_scan,
+            load_sessions: providers::forgecode::archive_load_sessions,
+            load_messages: providers::forgecode::archive_load_messages,
+            search: Some(providers::forgecode::archive_search),
+            locate: locate_by_subpath_or_single,
+            rewrite_outputs: false,
+        },
+        ProviderArchiveSpec {
+            provider: "goose",
+            discover: providers::goose::archive_discover,
+            scan: providers::goose::archive_scan,
+            load_sessions: providers::goose::archive_load_sessions,
+            load_messages: providers::goose::archive_load_messages,
+            search: Some(providers::goose::archive_search),
+            locate: locate_by_subpath_or_single,
+            rewrite_outputs: false,
+        },
+        ProviderArchiveSpec {
+            provider: "llm",
+            discover: providers::llm::archive_discover,
+            scan: providers::llm::archive_scan,
+            load_sessions: providers::llm::archive_load_sessions,
+            load_messages: providers::llm::archive_load_messages,
+            search: Some(providers::llm::archive_search),
+            locate: locate_by_subpath_or_single,
+            rewrite_outputs: false,
+        },
+        ProviderArchiveSpec {
+            provider: "zed",
+            discover: providers::zed::archive_discover,
+            scan: providers::zed::archive_scan,
+            load_sessions: providers::zed::archive_load_sessions,
+            load_messages: providers::zed::archive_load_messages,
+            search: Some(providers::zed::archive_search),
+            locate: locate_by_subpath_or_single,
+            rewrite_outputs: false,
+        },
+        ProviderArchiveSpec {
+            provider: "amazonq",
+            discover: providers::amazon_q::archive_discover,
+            scan: providers::amazon_q::archive_scan,
+            load_sessions: providers::amazon_q::archive_load_sessions,
+            load_messages: providers::amazon_q::archive_load_messages,
+            search: Some(providers::amazon_q::archive_search),
+            locate: locate_by_subpath_or_single,
+            rewrite_outputs: false,
+        },
+        ProviderArchiveSpec {
+            provider: "kiro",
+            discover: providers::kiro::archive_discover,
+            scan: providers::kiro::archive_scan,
+            load_sessions: providers::kiro::archive_load_sessions,
+            load_messages: providers::kiro::archive_load_messages,
+            search: Some(providers::kiro::archive_search),
+            locate: locate_by_subpath_or_single,
+            rewrite_outputs: false,
+        },
     ]
 }
 
@@ -2104,6 +2194,542 @@ mod conformance_tests {
                 .len(),
             3
         );
+    }
+
+    // -- goose (single sqlite db) --------------------------------------------------------
+
+    fn goose_test_db(base: &Path) {
+        let conn = rusqlite::Connection::open(base.join("sessions.db")).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE sessions (
+                id TEXT PRIMARY KEY, working_dir TEXT NOT NULL, name TEXT,
+                description TEXT, created_at TEXT, updated_at TEXT
+            );
+            CREATE TABLE messages (
+                id INTEGER PRIMARY KEY, session_id TEXT NOT NULL, role TEXT NOT NULL,
+                content_json TEXT NOT NULL, created_timestamp INTEGER NOT NULL,
+                message_id TEXT
+            );",
+        )
+        .unwrap();
+    }
+
+    fn goose_add_session(base: &Path, sid: &str, cwd: &str, texts: &[&str]) {
+        let conn = rusqlite::Connection::open(base.join("sessions.db")).unwrap();
+        conn.execute(
+            "INSERT INTO sessions (id, working_dir, name, created_at, updated_at)
+             VALUES (?1, ?2, ?3, '2026-09-01', '2026-09-01')",
+            rusqlite::params![sid, cwd, sid],
+        )
+        .unwrap();
+        for (i, text) in texts.iter().enumerate() {
+            conn.execute(
+                "INSERT INTO messages (session_id, role, content_json, created_timestamp, message_id)
+                 VALUES (?1, 'user', ?2, 1757000000, ?3)",
+                rusqlite::params![
+                    sid,
+                    serde_json::json!([{"type": "text", "text": text}]).to_string(),
+                    format!("{sid}-m{i}")
+                ],
+            )
+            .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn goose_archive_conformance() {
+        let sandbox = crate::test_utils::SandboxHome::new();
+        let _env = ClearEnvGuard::clear(PROVIDER_ENVS);
+        let base = sandbox.path().join(".local/share/goose/sessions");
+        std::fs::create_dir_all(&base).unwrap();
+        let marker = "conformance-marker-goose";
+        goose_test_db(&base);
+        goose_add_session(&base, "gs1", "/w/gproj", &[&format!("hello {marker}")]);
+        goose_add_session(&base, "gs2", "/w/gproj", &["second"]);
+
+        let projects = scan_provider("goose").await.unwrap();
+        assert_eq!(projects.len(), 1, "goose: {projects:?}");
+        assert_eq!(projects[0].path, "goose:///w/gproj");
+        let project = projects[0].path.clone();
+        let sources = read_sources("goose");
+        assert!(sources[0].snapshot.data_path.join("sessions.db").is_file());
+
+        let sessions = load_provider_sessions("goose", &project, &sources)
+            .await
+            .unwrap();
+        assert_eq!(sessions.len(), 2);
+        assert!(message_text(
+            &load_provider_messages("goose", "goose://gs1", &sources)
+                .await
+                .unwrap()
+        )
+        .contains(marker));
+        assert!(!search_provider("goose", marker, 10, &sources)
+            .await
+            .unwrap()
+            .is_empty());
+
+        {
+            let conn = rusqlite::Connection::open(base.join("sessions.db")).unwrap();
+            conn.execute("DELETE FROM sessions WHERE id = 'gs1'", [])
+                .unwrap();
+            conn.execute("DELETE FROM messages WHERE session_id = 'gs1'", [])
+                .unwrap();
+        }
+        goose_add_session(&base, "gs3", "/w/gproj", &["third"]);
+        let projects_after = scan_provider("goose").await.unwrap();
+        assert_eq!(projects_after.len(), 1);
+        let sessions_after =
+            load_provider_sessions("goose", &projects_after[0].path, &read_sources("goose"))
+                .await
+                .unwrap();
+        assert_eq!(sessions_after.len(), 3, "gs1 preserved + gs2 + gs3");
+
+        std::fs::remove_dir_all(sandbox.path().join(".local")).unwrap();
+        assert_eq!(scan_provider("goose").await.unwrap().len(), 1);
+        let sources = read_sources("goose");
+        assert_eq!(
+            load_provider_sessions("goose", &project, &sources)
+                .await
+                .unwrap()
+                .len(),
+            3
+        );
+        assert!(message_text(
+            &load_provider_messages("goose", "goose://gs1", &sources)
+                .await
+                .unwrap()
+        )
+        .contains(marker));
+    }
+
+    // -- llm (single sqlite db, synthetic project) -------------------------------------
+
+    fn llm_test_db(base: &Path) {
+        let conn = rusqlite::Connection::open(base.join("logs.db")).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE conversations (id TEXT PRIMARY KEY, name TEXT, model TEXT);
+             CREATE TABLE responses (
+                id TEXT PRIMARY KEY, model TEXT, prompt TEXT, response TEXT,
+                conversation_id TEXT, datetime_utc TEXT,
+                input_tokens INTEGER, output_tokens INTEGER
+            );",
+        )
+        .unwrap();
+    }
+
+    fn llm_add_response(base: &Path, conv: &str, rid: &str, prompt: &str) {
+        let conn = rusqlite::Connection::open(base.join("logs.db")).unwrap();
+        conn.execute(
+            "INSERT OR IGNORE INTO conversations (id, name) VALUES (?1, ?2)",
+            rusqlite::params![conv, conv],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO responses (id, model, prompt, response, conversation_id, datetime_utc)
+             VALUES (?1, 'm', ?2, 'ok', ?3, '2026-09-01T00:00:00')",
+            rusqlite::params![rid, prompt, conv],
+        )
+        .unwrap();
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn llm_archive_conformance() {
+        let sandbox = crate::test_utils::SandboxHome::new();
+        let _env = ClearEnvGuard::clear(PROVIDER_ENVS);
+        // Point the provider at the sandbox via its env override.
+        let base = sandbox.path().join("llm-home");
+        std::fs::create_dir_all(&base).unwrap();
+        std::env::set_var("LLM_USER_PATH", &base);
+        struct LlmGuard;
+        impl Drop for LlmGuard {
+            fn drop(&mut self) {
+                std::env::remove_var("LLM_USER_PATH");
+            }
+        }
+        let _guard = LlmGuard;
+        let marker = "conformance-marker-llm";
+        llm_test_db(&base);
+        llm_add_response(&base, "c1", "r1", &format!("hello {marker}"));
+        llm_add_response(&base, "c2", "r2", "second");
+
+        let projects = scan_provider("llm").await.unwrap();
+        assert_eq!(projects.len(), 1, "llm: {projects:?}");
+        assert_eq!(projects[0].path, "llm://__all__");
+        let project = projects[0].path.clone();
+
+        let sources = read_sources("llm");
+        let sessions = load_provider_sessions("llm", &project, &sources)
+            .await
+            .unwrap();
+        assert_eq!(sessions.len(), 2);
+        assert!(message_text(
+            &load_provider_messages("llm", "llm://c1", &sources)
+                .await
+                .unwrap()
+        )
+        .contains(marker));
+        assert!(!search_provider("llm", marker, 10, &sources)
+            .await
+            .unwrap()
+            .is_empty());
+
+        {
+            let conn = rusqlite::Connection::open(base.join("logs.db")).unwrap();
+            conn.execute("DELETE FROM conversations WHERE id = 'c1'", [])
+                .unwrap();
+            conn.execute("DELETE FROM responses WHERE conversation_id = 'c1'", [])
+                .unwrap();
+        }
+        llm_add_response(&base, "c3", "r3", "third");
+        let projects_after = scan_provider("llm").await.unwrap();
+        assert_eq!(projects_after.len(), 1);
+        let sessions_after =
+            load_provider_sessions("llm", &projects_after[0].path, &read_sources("llm"))
+                .await
+                .unwrap();
+        assert_eq!(sessions_after.len(), 3, "c1 preserved + c2 + c3");
+
+        std::fs::remove_dir_all(&base).unwrap();
+        assert_eq!(scan_provider("llm").await.unwrap().len(), 1);
+        let sources = read_sources("llm");
+        assert_eq!(
+            load_provider_sessions("llm", &project, &sources)
+                .await
+                .unwrap()
+                .len(),
+            3
+        );
+    }
+
+    // -- zed (single sqlite db, zstd/json threads) ---------------------------------------
+
+    fn zed_test_db(base: &Path) {
+        let conn = rusqlite::Connection::open(base.join("threads.db")).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE threads (
+                id TEXT PRIMARY KEY, summary TEXT, folder_paths TEXT,
+                created_at TEXT, updated_at TEXT, data_type TEXT, data BLOB
+            );",
+        )
+        .unwrap();
+    }
+
+    fn zed_add_thread(base: &Path, tid: &str, ws: &str, texts: &[&str]) {
+        let messages: Vec<_> = texts
+            .iter()
+            .map(|text| serde_json::json!({"User": {"id": tid, "content": [{"Text": text}]}}))
+            .collect();
+        let conn = rusqlite::Connection::open(base.join("threads.db")).unwrap();
+        conn.execute(
+            "INSERT INTO threads (id, summary, folder_paths, created_at, updated_at, data_type, data)
+             VALUES (?1, ?2, ?3, '2026-09-01', '2026-09-01', 'json', ?4)",
+            rusqlite::params![
+                tid,
+                tid,
+                serde_json::json!([ws]).to_string(),
+                serde_json::json!({"messages": messages}).to_string().into_bytes()
+            ],
+        )
+        .unwrap();
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn zed_archive_conformance() {
+        // Zed resolves its dir from OS data dirs, which the sandbox cannot
+        // rewrite on macOS, so this test drives the archive flow explicitly
+        // (sync + registry flows) instead of through live discovery. The
+        // scan_provider dispatch path is covered by every other provider.
+        let _sandbox = crate::test_utils::SandboxHome::new();
+        let _env = ClearEnvGuard::clear(PROVIDER_ENVS);
+        let marker = "conformance-marker-zed";
+        let live_dir = tempfile::tempdir().unwrap();
+        let live_threads = live_dir.path().join("threads");
+        std::fs::create_dir_all(&live_threads).unwrap();
+        zed_test_db(&live_threads);
+        zed_add_thread(
+            &live_threads,
+            "thread-1",
+            "/w/zproj",
+            &[&format!("hello {marker}")],
+        );
+        zed_add_thread(&live_threads, "thread-2", "/w/zproj", &["second"]);
+
+        let machine = discovery_machine_id();
+        let mut found =
+            DiscoveredSource::local(crate::storage::ROLE_PRIMARY, live_threads.clone(), &machine);
+        found.sqlite_dbs = vec!["threads.db".to_string()];
+        let source = source_for_discovered("zed", &found);
+        let opts = crate::storage::SyncOptions {
+            extra_sqlite_dbs: vec![],
+        };
+        crate::storage::sync_source(&source, &live_threads, &opts).unwrap();
+
+        // read_sources picks up the registered source even though live
+        // discovery cannot see this fixture root.
+        let sources = read_sources("zed");
+        assert!(!sources.is_empty());
+        let projects =
+            crate::providers::zed::archive_scan(&sources[0].source, &sources[0].snapshot).unwrap();
+        assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0].path, "zed:///w/zproj");
+        let project = projects[0].path.clone();
+
+        let sessions = load_provider_sessions("zed", &project, &sources)
+            .await
+            .unwrap();
+        assert_eq!(sessions.len(), 2);
+        assert!(message_text(
+            &load_provider_messages("zed", "zed://thread-1", &sources)
+                .await
+                .unwrap()
+        )
+        .contains(marker));
+        assert!(!search_provider("zed", marker, 10, &sources)
+            .await
+            .unwrap()
+            .is_empty());
+
+        // Delete thread-1 upstream, re-sync, assert row-level preservation.
+        {
+            let conn = rusqlite::Connection::open(live_threads.join("threads.db")).unwrap();
+            conn.execute("DELETE FROM threads WHERE id = 'thread-1'", [])
+                .unwrap();
+        }
+        zed_add_thread(&live_threads, "thread-3", "/w/zproj", &["third"]);
+        crate::storage::sync_source(&source, &live_threads, &opts).unwrap();
+        let sources = read_sources("zed");
+        let sessions_after = load_provider_sessions("zed", &project, &sources)
+            .await
+            .unwrap();
+        assert_eq!(
+            sessions_after.len(),
+            3,
+            "thread-1 preserved via row merge-back"
+        );
+
+        // The live database can vanish; everything keeps working.
+        std::fs::remove_dir_all(live_dir.path()).unwrap();
+        let sources = read_sources("zed");
+        assert_eq!(
+            load_provider_sessions("zed", &project, &sources)
+                .await
+                .unwrap()
+                .len(),
+            3
+        );
+        assert!(message_text(
+            &load_provider_messages("zed", "zed://thread-1", &sources)
+                .await
+                .unwrap()
+        )
+        .contains(marker));
+    }
+
+    // -- amazon_q / kiro (single sqlite db, shared conversation format) ----------
+
+    fn q_test_db(base: &Path, db_name: &str, table: &str) {
+        let conn = rusqlite::Connection::open(base.join(db_name)).unwrap();
+        conn.execute_batch(&format!(
+            "CREATE TABLE {table} (key TEXT PRIMARY KEY, value TEXT);"
+        ))
+        .unwrap();
+    }
+
+    fn q_conversation_value(texts: &[&str]) -> String {
+        let history: Vec<_> = texts
+            .iter()
+            .map(|text| {
+                serde_json::json!({
+                    "user": {
+                        "content": {"Prompt": {"prompt": text}},
+                        "timestamp": "2026-09-01T00:00:00Z",
+                    },
+                    "assistant": {"Response": {"message_id": "a1", "content": "ok"}},
+                })
+            })
+            .collect();
+        serde_json::json!({"history": history}).to_string()
+    }
+
+    fn q_add_conversation(base: &Path, db_name: &str, table: &str, key: &str, texts: &[&str]) {
+        let conn = rusqlite::Connection::open(base.join(db_name)).unwrap();
+        conn.execute(
+            &format!("INSERT INTO {table} (key, value) VALUES (?1, ?2)"),
+            rusqlite::params![key, q_conversation_value(texts)],
+        )
+        .unwrap();
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn amazonq_archive_conformance() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
+        let _env = ClearEnvGuard::clear(PROVIDER_ENVS);
+        // data_local_dir() is OS-resolved (not sandbox-controlled on macOS),
+        // so seed the OS location only when it already falls inside the
+        // sandbox; otherwise drive the archive flow explicitly like zed.
+        // Simplest hermetic route that still covers dispatch: XDG_DATA_HOME
+        // is honored on no platform here... instead register explicitly.
+        let marker = "conformance-marker-amazonq";
+        let live_dir = tempfile::tempdir().unwrap();
+        let live_base = live_dir.path().join("amazon-q");
+        std::fs::create_dir_all(&live_base).unwrap();
+        q_test_db(&live_base, "data.sqlite3", "conversations");
+        q_add_conversation(
+            &live_base,
+            "data.sqlite3",
+            "conversations",
+            "/w/qproj",
+            &[&format!("hello {marker}")],
+        );
+
+        let machine = discovery_machine_id();
+        let mut found =
+            DiscoveredSource::local(crate::storage::ROLE_PRIMARY, live_base.clone(), &machine);
+        found.sqlite_dbs = vec!["data.sqlite3".to_string()];
+        let source = source_for_discovered("amazonq", &found);
+        let opts = crate::storage::SyncOptions {
+            extra_sqlite_dbs: vec![],
+        };
+        crate::storage::sync_source(&source, &live_base, &opts).unwrap();
+
+        let sources = read_sources("amazonq");
+        assert!(!sources.is_empty());
+        let projects =
+            crate::providers::amazon_q::archive_scan(&sources[0].source, &sources[0].snapshot)
+                .unwrap();
+        assert_eq!(projects.len(), 1, "amazonq: {projects:?}");
+        assert_eq!(projects[0].path, "amazonq:///w/qproj");
+        let project = projects[0].path.clone();
+
+        let sessions = load_provider_sessions("amazonq", &project, &sources)
+            .await
+            .unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert!(message_text(
+            &load_provider_messages("amazonq", &sessions[0].file_path, &sources)
+                .await
+                .unwrap()
+        )
+        .contains(marker));
+        assert!(!search_provider("amazonq", marker, 10, &sources)
+            .await
+            .unwrap()
+            .is_empty());
+
+        // Delete the conversation upstream; the merged snapshot keeps it.
+        {
+            let conn = rusqlite::Connection::open(live_base.join("data.sqlite3")).unwrap();
+            conn.execute("DELETE FROM conversations WHERE key = '/w/qproj'", [])
+                .unwrap();
+        }
+        crate::storage::sync_source(&source, &live_base, &opts).unwrap();
+        let sources = read_sources("amazonq");
+        assert_eq!(
+            load_provider_sessions("amazonq", &project, &sources)
+                .await
+                .unwrap()
+                .len(),
+            1,
+            "deleted conversation preserved via row merge-back"
+        );
+
+        std::fs::remove_dir_all(live_dir.path()).unwrap();
+        let sources = read_sources("amazonq");
+        assert!(message_text(
+            &load_provider_messages("amazonq", &sessions[0].file_path, &sources)
+                .await
+                .unwrap()
+        )
+        .contains(marker));
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn kiro_archive_conformance() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
+        let _env = ClearEnvGuard::clear(PROVIDER_ENVS);
+        let marker = "conformance-marker-kiro";
+        let live_dir = tempfile::tempdir().unwrap();
+        let live_base = live_dir.path().join("kiro-cli");
+        std::fs::create_dir_all(&live_base).unwrap();
+        {
+            let conn = rusqlite::Connection::open(live_base.join("data.sqlite3")).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE conversations_v2 (
+                    key TEXT NOT NULL, conversation_id TEXT PRIMARY KEY,
+                    value TEXT NOT NULL, created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL
+                );",
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO conversations_v2 (key, conversation_id, value, created_at, updated_at)
+                 VALUES ('/w/kproj', 'conv-1', ?1, 1757000000, 1757000000)",
+                rusqlite::params![q_conversation_value(&[&format!("hello {marker}")])],
+            )
+            .unwrap();
+        }
+
+        let machine = discovery_machine_id();
+        let mut found =
+            DiscoveredSource::local(crate::storage::ROLE_PRIMARY, live_base.clone(), &machine);
+        found.sqlite_dbs = vec!["data.sqlite3".to_string()];
+        let source = source_for_discovered("kiro", &found);
+        let opts = crate::storage::SyncOptions {
+            extra_sqlite_dbs: vec![],
+        };
+        crate::storage::sync_source(&source, &live_base, &opts).unwrap();
+
+        let sources = read_sources("kiro");
+        assert!(!sources.is_empty());
+        let projects =
+            crate::providers::kiro::archive_scan(&sources[0].source, &sources[0].snapshot).unwrap();
+        assert_eq!(projects.len(), 1, "kiro: {projects:?}");
+        let project = projects[0].path.clone();
+
+        let sessions = load_provider_sessions("kiro", &project, &sources)
+            .await
+            .unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert!(message_text(
+            &load_provider_messages("kiro", &sessions[0].file_path, &sources)
+                .await
+                .unwrap()
+        )
+        .contains(marker));
+
+        {
+            let conn = rusqlite::Connection::open(live_base.join("data.sqlite3")).unwrap();
+            conn.execute(
+                "DELETE FROM conversations_v2 WHERE conversation_id = 'conv-1'",
+                [],
+            )
+            .unwrap();
+        }
+        crate::storage::sync_source(&source, &live_base, &opts).unwrap();
+        let sources = read_sources("kiro");
+        assert_eq!(
+            load_provider_sessions("kiro", &project, &sources)
+                .await
+                .unwrap()
+                .len(),
+            1,
+            "deleted conversation preserved via row merge-back"
+        );
+
+        std::fs::remove_dir_all(live_dir.path()).unwrap();
+        let sources = read_sources("kiro");
+        assert!(message_text(
+            &load_provider_messages("kiro", &sessions[0].file_path, &sources)
+                .await
+                .unwrap()
+        )
+        .contains(marker));
     }
 
     // -- aider ------------------------------------------------------------------

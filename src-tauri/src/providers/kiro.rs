@@ -30,9 +30,10 @@ fn get_db_path() -> Option<PathBuf> {
     )
 }
 
-fn open_db() -> Result<Connection, String> {
-    let path = get_db_path().ok_or("Kiro CLI not found")?;
-    let conn = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+/// Open a Kiro database at an explicit path (snapshot copy or live file),
+/// read-only.
+fn open_db_at(path: &std::path::Path) -> Result<Connection, String> {
+    let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(|e| format!("Failed to open Kiro DB: {e}"))?;
     conn.busy_timeout(std::time::Duration::from_secs(5))
         .map_err(|e| format!("Failed to set busy timeout: {e}"))?;
@@ -41,7 +42,13 @@ fn open_db() -> Result<Connection, String> {
 
 /// Scan Kiro projects (grouped by cwd/key)
 pub fn scan_projects() -> Result<Vec<ClaudeProject>, String> {
-    let conn = open_db()?;
+    let db = get_db_path().ok_or("Kiro CLI not found")?;
+    scan_projects_in(&db)
+}
+
+/// [`scan_projects`] against an explicit database path (snapshot or live).
+pub fn scan_projects_in(db_path: &std::path::Path) -> Result<Vec<ClaudeProject>, String> {
+    let conn = open_db_at(db_path)?;
     let mut stmt = conn
         .prepare(
             "SELECT key, COUNT(*) as cnt, MAX(updated_at) as last_upd
@@ -85,10 +92,20 @@ pub fn scan_projects() -> Result<Vec<ClaudeProject>, String> {
 /// Load sessions for a Kiro project
 pub fn load_sessions(
     project_path: &str,
+    exclude_sidechain: bool,
+) -> Result<Vec<ClaudeSession>, String> {
+    let db = get_db_path().ok_or("Kiro CLI not found")?;
+    load_sessions_in(&db, project_path, exclude_sidechain)
+}
+
+/// [`load_sessions`] against an explicit database path (snapshot or live).
+pub fn load_sessions_in(
+    db_path: &std::path::Path,
+    project_path: &str,
     _exclude_sidechain: bool,
 ) -> Result<Vec<ClaudeSession>, String> {
     let key = project_path.strip_prefix("kiro://").unwrap_or(project_path);
-    let conn = open_db()?;
+    let conn = open_db_at(db_path)?;
 
     let mut stmt = conn
         .prepare(
@@ -159,8 +176,17 @@ pub fn load_sessions(
 
 /// Load messages from a Kiro conversation
 pub fn load_messages(session_path: &str) -> Result<Vec<ClaudeMessage>, String> {
+    let db = get_db_path().ok_or("Kiro CLI not found")?;
+    load_messages_in(&db, session_path)
+}
+
+/// [`load_messages`] against an explicit database path (snapshot or live).
+pub fn load_messages_in(
+    db_path: &std::path::Path,
+    session_path: &str,
+) -> Result<Vec<ClaudeMessage>, String> {
     let conv_id = session_path.strip_prefix("kiro://").unwrap_or(session_path);
-    let conn = open_db()?;
+    let conn = open_db_at(db_path)?;
 
     let value: String = conn
         .query_row(
@@ -173,13 +199,103 @@ pub fn load_messages(session_path: &str) -> Result<Vec<ClaudeMessage>, String> {
     Ok(q_conversation::parse_history(PROVIDER, &value, conv_id))
 }
 
+// ============================================================================
+// Archive glue (snapshot-backed reads; the explicit-db seams above are reused
+// against the snapshotted database copy, never the live one).
+// ============================================================================
+
+use crate::storage::registry::DiscoveredSource as ArchiveDiscoveredSource;
+use crate::storage::{SnapshotInfo as ArchiveSnapshotInfo, Source as ArchiveSource};
+
+/// Physical Kiro dir on this machine, if the database exists.
+pub(crate) fn archive_discover() -> Vec<ArchiveDiscoveredSource> {
+    let machine = crate::storage::registry::discovery_machine_id();
+    match get_db_path() {
+        Some(db) => match db.parent().and_then(|base| {
+            db.file_name()
+                .and_then(|n| n.to_str())
+                .map(|file_name| (base.to_path_buf(), file_name.to_string()))
+        }) {
+            Some((base, file_name)) => {
+                let mut found =
+                    ArchiveDiscoveredSource::local(crate::storage::ROLE_PRIMARY, base, &machine);
+                found.sqlite_dbs = vec![file_name];
+                vec![found]
+            }
+            None => Vec::new(),
+        },
+        None => Vec::new(),
+    }
+}
+
+/// Snapshot database path for a source (filename from the source record).
+fn archive_db_path(
+    source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+) -> Result<std::path::PathBuf, String> {
+    let file_name = source
+        .sqlite_dbs
+        .first()
+        .ok_or("Kiro source has no captured database")?;
+    Ok(snapshot.data_path.join(file_name))
+}
+
+/// Scan projects from the snapshot database.
+pub(crate) fn archive_scan(
+    source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+) -> Result<Vec<ClaudeProject>, String> {
+    scan_projects_in(&archive_db_path(source, snapshot)?)
+}
+
+/// Sessions for a stable project URI, read from the snapshot database.
+pub(crate) fn archive_load_sessions(
+    source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+    stable_project: &str,
+) -> Result<Vec<ClaudeSession>, String> {
+    load_sessions_in(&archive_db_path(source, snapshot)?, stable_project, false)
+}
+
+/// Messages for a stable conversation URI, read from the snapshot database.
+pub(crate) fn archive_load_messages(
+    source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+    stable_session: &str,
+) -> Result<Vec<ClaudeMessage>, String> {
+    load_messages_in(&archive_db_path(source, snapshot)?, stable_session)
+}
+
+/// Search confined to one snapshot database.
+pub(crate) fn archive_search(
+    source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<ClaudeMessage>, String> {
+    search_in(&archive_db_path(source, snapshot)?, query, limit)
+}
+
 /// Search across all Kiro conversations
 pub fn search(query: &str, limit: usize) -> Result<Vec<ClaudeMessage>, String> {
     if query.is_empty() || limit == 0 {
         return Ok(Vec::new());
     }
 
-    let conn = open_db()?;
+    let db = get_db_path().ok_or("Kiro CLI not found")?;
+    search_in(&db, query, limit)
+}
+
+/// [`search`] against an explicit database path (snapshot or live).
+pub fn search_in(
+    db_path: &std::path::Path,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<ClaudeMessage>, String> {
+    if query.is_empty() || limit == 0 {
+        return Ok(Vec::new());
+    }
+    let conn = open_db_at(db_path)?;
     let pattern = format!("%{query}%");
     let query_lower = query.to_lowercase();
 

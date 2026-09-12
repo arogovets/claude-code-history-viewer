@@ -46,23 +46,25 @@ pub fn get_base_path() -> Option<String> {
         .map(|p| p.to_string_lossy().to_string())
 }
 
-fn open_db() -> Result<Connection, String> {
-    let path = get_db_path().ok_or("Amazon Q CLI not found")?;
+/// Open an Amazon Q database at an explicit path (snapshot copy or live
+/// file), read-only.
+fn open_db_at(path: &std::path::Path) -> Result<Connection, String> {
     if !path.is_file() {
         return Err("Amazon Q CLI database not found".to_string());
     }
-    let conn = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+    let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(|e| format!("Failed to open Amazon Q DB: {e}"))?;
     conn.busy_timeout(std::time::Duration::from_secs(5))
         .map_err(|e| format!("Failed to set busy timeout: {e}"))?;
     Ok(conn)
 }
 
-/// `data.sqlite3` mtime as an RFC3339 string, for conversations that carry no
-/// in-history timestamps.
-fn db_mtime_iso() -> String {
-    get_db_path()
-        .and_then(|p| std::fs::metadata(p).ok())
+/// Database mtime as an RFC3339 string for an explicit database path
+/// (snapshot or live), used for conversations that carry no in-history
+/// timestamps.
+fn db_mtime_iso_at(path: &std::path::Path) -> String {
+    std::fs::metadata(path)
+        .ok()
         .and_then(|m| m.modified().ok())
         .and_then(|t| t.duration_since(std::time::SystemTime::UNIX_EPOCH).ok())
         .map(|d| ms_to_iso_secs(d.as_secs()))
@@ -79,8 +81,14 @@ fn ms_to_iso_secs(secs: u64) -> String {
 
 /// Scan Amazon Q projects — one per `conversations.key` (cwd).
 pub fn scan_projects() -> Result<Vec<ClaudeProject>, String> {
-    let conn = open_db()?;
-    let fallback = db_mtime_iso();
+    let db = get_db_path().ok_or("Amazon Q CLI not found")?;
+    scan_projects_in(&db)
+}
+
+/// [`scan_projects`] against an explicit database path (snapshot or live).
+pub fn scan_projects_in(db_path: &std::path::Path) -> Result<Vec<ClaudeProject>, String> {
+    let conn = open_db_at(db_path)?;
+    let fallback = db_mtime_iso_at(db_path);
     let mut stmt = conn
         .prepare("SELECT key, value FROM conversations")
         .map_err(|e| e.to_string())?;
@@ -125,10 +133,20 @@ pub fn scan_projects() -> Result<Vec<ClaudeProject>, String> {
 /// Load the (single) session for one Amazon Q project (`amazonq://<cwd>`).
 pub fn load_sessions(
     project_path: &str,
+    exclude_sidechain: bool,
+) -> Result<Vec<ClaudeSession>, String> {
+    let db = get_db_path().ok_or("Amazon Q CLI not found")?;
+    load_sessions_in(&db, project_path, exclude_sidechain)
+}
+
+/// [`load_sessions`] against an explicit database path (snapshot or live).
+pub fn load_sessions_in(
+    db_path: &std::path::Path,
+    project_path: &str,
     _exclude_sidechain: bool,
 ) -> Result<Vec<ClaudeSession>, String> {
     let key = project_path.strip_prefix(SCHEME).unwrap_or(project_path);
-    let conn = open_db()?;
+    let conn = open_db_at(db_path)?;
 
     // .optional(): "no row" -> Ok(None) (stale project path -> empty), but a real
     // DB error propagates instead of being silently swallowed as an empty list.
@@ -153,7 +171,7 @@ pub fn load_sessions(
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_default();
     let (first, last) = q_conversation::history_time_bounds(&value);
-    let fallback = db_mtime_iso();
+    let fallback = db_mtime_iso_at(db_path);
     let first = first.unwrap_or_else(|| fallback.clone());
     let last = last.unwrap_or(fallback);
     let summary = q_conversation::first_prompt_summary(&value, SUMMARY_MAX_CHARS);
@@ -180,8 +198,17 @@ pub fn load_sessions(
 
 /// Load messages for one Amazon Q conversation (`amazonq://<cwd>`).
 pub fn load_messages(session_path: &str) -> Result<Vec<ClaudeMessage>, String> {
+    let db = get_db_path().ok_or("Amazon Q CLI not found")?;
+    load_messages_in(&db, session_path)
+}
+
+/// [`load_messages`] against an explicit database path (snapshot or live).
+pub fn load_messages_in(
+    db_path: &std::path::Path,
+    session_path: &str,
+) -> Result<Vec<ClaudeMessage>, String> {
     let key = session_path.strip_prefix(SCHEME).unwrap_or(session_path);
-    let conn = open_db()?;
+    let conn = open_db_at(db_path)?;
     let value: String = conn
         .query_row(
             "SELECT value FROM conversations WHERE key = ?1",
@@ -192,12 +219,99 @@ pub fn load_messages(session_path: &str) -> Result<Vec<ClaudeMessage>, String> {
     Ok(q_conversation::parse_history(PROVIDER, &value, key))
 }
 
+// ============================================================================
+// Archive glue (snapshot-backed reads; the explicit-db seams above are reused
+// against the snapshotted database copy, never the live one).
+// ============================================================================
+
+use crate::storage::registry::DiscoveredSource as ArchiveDiscoveredSource;
+use crate::storage::{SnapshotInfo as ArchiveSnapshotInfo, Source as ArchiveSource};
+
+/// Physical Amazon Q dir on this machine, if the database exists.
+pub(crate) fn archive_discover() -> Vec<ArchiveDiscoveredSource> {
+    let machine = crate::storage::registry::discovery_machine_id();
+    match get_db_path() {
+        Some(db) => match db.parent().and_then(|base| {
+            db.file_name()
+                .and_then(|n| n.to_str())
+                .map(|file_name| (base.to_path_buf(), file_name.to_string()))
+        }) {
+            Some((base, file_name)) => {
+                let mut found =
+                    ArchiveDiscoveredSource::local(crate::storage::ROLE_PRIMARY, base, &machine);
+                found.sqlite_dbs = vec![file_name];
+                vec![found]
+            }
+            None => Vec::new(),
+        },
+        None => Vec::new(),
+    }
+}
+
+/// Snapshot database path for a source (filename from the source record).
+fn archive_db_path(
+    source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+) -> Result<std::path::PathBuf, String> {
+    let file_name = source
+        .sqlite_dbs
+        .first()
+        .ok_or("Amazon Q source has no captured database")?;
+    Ok(snapshot.data_path.join(file_name))
+}
+
+/// Scan projects from the snapshot database.
+pub(crate) fn archive_scan(
+    source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+) -> Result<Vec<ClaudeProject>, String> {
+    scan_projects_in(&archive_db_path(source, snapshot)?)
+}
+
+/// Sessions for a stable project URI, read from the snapshot database.
+pub(crate) fn archive_load_sessions(
+    source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+    stable_project: &str,
+) -> Result<Vec<ClaudeSession>, String> {
+    load_sessions_in(&archive_db_path(source, snapshot)?, stable_project, false)
+}
+
+/// Messages for a stable conversation URI, read from the snapshot database.
+pub(crate) fn archive_load_messages(
+    source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+    stable_session: &str,
+) -> Result<Vec<ClaudeMessage>, String> {
+    load_messages_in(&archive_db_path(source, snapshot)?, stable_session)
+}
+
+/// Search confined to one snapshot database.
+pub(crate) fn archive_search(
+    source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<ClaudeMessage>, String> {
+    search_in(&archive_db_path(source, snapshot)?, query, limit)
+}
+
 /// Search across all Amazon Q conversations.
 pub fn search(query: &str, limit: usize) -> Result<Vec<ClaudeMessage>, String> {
+    let db = get_db_path().ok_or("Amazon Q CLI not found")?;
+    search_in(&db, query, limit)
+}
+
+/// [`search`] against an explicit database path (snapshot or live).
+pub fn search_in(
+    db_path: &std::path::Path,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<ClaudeMessage>, String> {
     if query.is_empty() || limit == 0 {
         return Ok(Vec::new());
     }
-    let conn = open_db()?;
+    let conn = open_db_at(db_path)?;
     let pattern = format!("%{query}%");
     let query_lower = query.to_lowercase();
 

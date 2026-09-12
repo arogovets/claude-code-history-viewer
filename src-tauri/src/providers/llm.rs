@@ -59,7 +59,13 @@ pub fn get_base_path() -> Option<String> {
 
 fn open_db() -> Result<Connection, String> {
     let path = get_db_path().ok_or("llm logs DB not found")?;
-    let conn = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+    open_db_at(&path)
+}
+
+/// Open an `llm` logs database at an explicit path (snapshot copy or live
+/// file), read-only.
+fn open_db_at(path: &std::path::Path) -> Result<Connection, String> {
+    let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(|e| format!("Failed to open llm DB: {e}"))?;
     conn.busy_timeout(std::time::Duration::from_secs(5))
         .map_err(|e| format!("Failed to set busy timeout: {e}"))?;
@@ -88,7 +94,7 @@ pub fn scan_projects() -> Result<Vec<ClaudeProject>, String> {
     scan_in_conn(&open_db()?)
 }
 
-fn scan_in_conn(conn: &Connection) -> Result<Vec<ClaudeProject>, String> {
+pub(crate) fn scan_in_conn(conn: &Connection) -> Result<Vec<ClaudeProject>, String> {
     let (session_count, message_count, last) = project_stats(conn)?;
     if message_count == 0 {
         return Ok(Vec::new());
@@ -144,10 +150,99 @@ pub fn load_sessions(
     _project_path: &str,
     _exclude_sidechain: bool,
 ) -> Result<Vec<ClaudeSession>, String> {
-    load_sessions_conn(&open_db()?)
+    let db = get_db_path().ok_or("llm logs DB not found")?;
+    load_sessions_in(&db)
 }
 
-fn load_sessions_conn(conn: &Connection) -> Result<Vec<ClaudeSession>, String> {
+/// [`load_sessions`] against an explicit database path (snapshot or live).
+pub fn load_sessions_in(db_path: &std::path::Path) -> Result<Vec<ClaudeSession>, String> {
+    load_sessions_conn(&open_db_at(db_path)?)
+}
+
+// ============================================================================
+// Archive glue (snapshot-backed reads; the `*_conn` seams above are reused
+// against the snapshotted database copy, never the live one).
+// ============================================================================
+
+use crate::storage::registry::DiscoveredSource as ArchiveDiscoveredSource;
+use crate::storage::{SnapshotInfo as ArchiveSnapshotInfo, Source as ArchiveSource};
+
+/// Physical `llm` logs dir on this machine, if the database exists.
+pub(crate) fn archive_discover() -> Vec<ArchiveDiscoveredSource> {
+    let machine = crate::storage::registry::discovery_machine_id();
+    match get_db_path() {
+        Some(db) => match db.parent() {
+            Some(base) => match db.file_name().and_then(|n| n.to_str()) {
+                Some(file_name) => {
+                    let mut found = ArchiveDiscoveredSource::local(
+                        crate::storage::ROLE_PRIMARY,
+                        base.to_path_buf(),
+                        &machine,
+                    );
+                    found.sqlite_dbs = vec![file_name.to_string()];
+                    vec![found]
+                }
+                None => Vec::new(),
+            },
+            None => Vec::new(),
+        },
+        None => Vec::new(),
+    }
+}
+
+/// Open the snapshotted database copy for a source (filename from the source
+/// record, never the live filesystem).
+fn archive_conn(
+    source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+) -> Result<Connection, String> {
+    let file_name = source
+        .sqlite_dbs
+        .first()
+        .ok_or("llm source has no captured database")?;
+    open_db_at(&snapshot.data_path.join(file_name))
+}
+
+/// Scan projects from the snapshot database.
+pub(crate) fn archive_scan(
+    source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+) -> Result<Vec<ClaudeProject>, String> {
+    scan_in_conn(&archive_conn(source, snapshot)?)
+}
+
+/// Sessions for the synthetic project, read from the snapshot database.
+pub(crate) fn archive_load_sessions(
+    source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+    _stable_project: &str,
+) -> Result<Vec<ClaudeSession>, String> {
+    load_sessions_conn(&archive_conn(source, snapshot)?)
+}
+
+/// Messages for a stable conversation URI, read from the snapshot database.
+pub(crate) fn archive_load_messages(
+    source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+    stable_session: &str,
+) -> Result<Vec<ClaudeMessage>, String> {
+    let conv_id = stable_session
+        .strip_prefix(SCHEME)
+        .unwrap_or(stable_session);
+    load_messages_conn(&archive_conn(source, snapshot)?, conv_id)
+}
+
+/// Search confined to one snapshot database.
+pub(crate) fn archive_search(
+    source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<ClaudeMessage>, String> {
+    search_conn(&archive_conn(source, snapshot)?, query, limit)
+}
+
+pub(crate) fn load_sessions_conn(conn: &Connection) -> Result<Vec<ClaudeSession>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT r.conversation_id, c.name, MIN(r.datetime_utc) AS first, \
@@ -205,11 +300,23 @@ fn load_sessions_conn(conn: &Connection) -> Result<Vec<ClaudeSession>, String> {
 
 /// Load messages for one `llm` conversation (`llm://<conversation_id>`).
 pub fn load_messages(session_path: &str) -> Result<Vec<ClaudeMessage>, String> {
-    let conv_id = session_path.strip_prefix(SCHEME).unwrap_or(session_path);
-    load_messages_conn(&open_db()?, conv_id)
+    let db = get_db_path().ok_or("llm logs DB not found")?;
+    load_messages_in(&db, session_path)
 }
 
-fn load_messages_conn(conn: &Connection, conv_id: &str) -> Result<Vec<ClaudeMessage>, String> {
+/// [`load_messages`] against an explicit database path (snapshot or live).
+pub fn load_messages_in(
+    db_path: &std::path::Path,
+    session_path: &str,
+) -> Result<Vec<ClaudeMessage>, String> {
+    let conv_id = session_path.strip_prefix(SCHEME).unwrap_or(session_path);
+    load_messages_conn(&open_db_at(db_path)?, conv_id)
+}
+
+pub(crate) fn load_messages_conn(
+    conn: &Connection,
+    conv_id: &str,
+) -> Result<Vec<ClaudeMessage>, String> {
     // The orphan bucket selects rows with a NULL conversation_id; named
     // conversations select by id.
     let sql = if conv_id == NO_CONVERSATION {
@@ -285,13 +392,27 @@ fn load_messages_conn(conn: &Connection, conv_id: &str) -> Result<Vec<ClaudeMess
 
 /// Search across all `llm` responses (prompts + responses).
 pub fn search(query: &str, limit: usize) -> Result<Vec<ClaudeMessage>, String> {
+    let db = get_db_path().ok_or("llm logs DB not found")?;
+    search_in(&db, query, limit)
+}
+
+/// [`search`] against an explicit database path (snapshot or live).
+pub fn search_in(
+    db_path: &std::path::Path,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<ClaudeMessage>, String> {
     if query.is_empty() || limit == 0 {
         return Ok(Vec::new());
     }
-    search_conn(&open_db()?, query, limit)
+    search_conn(&open_db_at(db_path)?, query, limit)
 }
 
-fn search_conn(conn: &Connection, query: &str, limit: usize) -> Result<Vec<ClaudeMessage>, String> {
+pub(crate) fn search_conn(
+    conn: &Connection,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<ClaudeMessage>, String> {
     let pattern = format!("%{query}%");
     let query_lower = query.to_lowercase();
 

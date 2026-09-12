@@ -73,16 +73,94 @@ pub fn get_base_path() -> Option<String> {
         .map(|p| p.to_string_lossy().to_string())
 }
 
-fn open_db() -> Result<Connection, String> {
-    let path = get_db_path().ok_or("Zed threads DB not found")?;
+/// Open a Zed threads database at an explicit path (snapshot copy or live
+/// file), read-only.
+fn open_db_at(path: &std::path::Path) -> Result<Connection, String> {
     if !path.is_file() {
         return Err("Zed threads database not found".to_string());
     }
-    let conn = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+    let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(|e| format!("Failed to open Zed DB: {e}"))?;
     conn.busy_timeout(std::time::Duration::from_secs(5))
         .map_err(|e| format!("Failed to set busy timeout: {e}"))?;
     Ok(conn)
+}
+
+// ============================================================================
+// Archive glue (snapshot-backed reads; the explicit-db seams above are reused
+// against the snapshotted database copy, never the live one).
+// ============================================================================
+
+use crate::storage::registry::DiscoveredSource as ArchiveDiscoveredSource;
+use crate::storage::{SnapshotInfo as ArchiveSnapshotInfo, Source as ArchiveSource};
+
+/// Physical Zed threads dir on this machine, if the database exists.
+pub(crate) fn archive_discover() -> Vec<ArchiveDiscoveredSource> {
+    let machine = crate::storage::registry::discovery_machine_id();
+    match get_db_path() {
+        Some(db) => match db.parent().and_then(|base| {
+            db.file_name()
+                .and_then(|n| n.to_str())
+                .map(|file_name| (base.to_path_buf(), file_name.to_string()))
+        }) {
+            Some((base, file_name)) => {
+                let mut found =
+                    ArchiveDiscoveredSource::local(crate::storage::ROLE_PRIMARY, base, &machine);
+                found.sqlite_dbs = vec![file_name];
+                vec![found]
+            }
+            None => Vec::new(),
+        },
+        None => Vec::new(),
+    }
+}
+
+/// Snapshot database path for a source (filename from the source record).
+fn archive_db_path(
+    source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+) -> Result<std::path::PathBuf, String> {
+    let file_name = source
+        .sqlite_dbs
+        .first()
+        .ok_or("Zed source has no captured database")?;
+    Ok(snapshot.data_path.join(file_name))
+}
+
+/// Scan projects from the snapshot database.
+pub(crate) fn archive_scan(
+    source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+) -> Result<Vec<ClaudeProject>, String> {
+    scan_projects_in(&archive_db_path(source, snapshot)?)
+}
+
+/// Sessions for a stable workspace URI, read from the snapshot database.
+pub(crate) fn archive_load_sessions(
+    source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+    stable_project: &str,
+) -> Result<Vec<ClaudeSession>, String> {
+    load_sessions_in(&archive_db_path(source, snapshot)?, stable_project, false)
+}
+
+/// Messages for a stable thread URI, read from the snapshot database.
+pub(crate) fn archive_load_messages(
+    source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+    stable_session: &str,
+) -> Result<Vec<ClaudeMessage>, String> {
+    load_messages_in(&archive_db_path(source, snapshot)?, stable_session)
+}
+
+/// Search confined to one snapshot database.
+pub(crate) fn archive_search(
+    source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<ClaudeMessage>, String> {
+    search_in(&archive_db_path(source, snapshot)?, query, limit)
 }
 
 /// First workspace folder of a thread (from the `folder_paths` JSON array),
@@ -125,10 +203,16 @@ fn optional_col(cols: &HashSet<String>, name: &str) -> String {
 
 /// Scan Zed projects (threads grouped by first workspace folder).
 pub fn scan_projects() -> Result<Vec<ClaudeProject>, String> {
-    scan_projects_conn(&open_db()?)
+    let db = get_db_path().ok_or("Zed threads DB not found")?;
+    scan_projects_in(&db)
 }
 
-fn scan_projects_conn(conn: &Connection) -> Result<Vec<ClaudeProject>, String> {
+/// [`scan_projects`] against an explicit database path (snapshot or live).
+pub fn scan_projects_in(db_path: &std::path::Path) -> Result<Vec<ClaudeProject>, String> {
+    scan_projects_conn(&open_db_at(db_path)?)
+}
+
+pub(crate) fn scan_projects_conn(conn: &Connection) -> Result<Vec<ClaudeProject>, String> {
     let cols = table_columns(conn, "threads");
     let sql = format!(
         "SELECT {}, updated_at FROM threads",
@@ -191,13 +275,26 @@ fn scan_projects_conn(conn: &Connection) -> Result<Vec<ClaudeProject>, String> {
 /// Load the threads (sessions) for one Zed project (workspace folder).
 pub fn load_sessions(
     project_path: &str,
+    exclude_sidechain: bool,
+) -> Result<Vec<ClaudeSession>, String> {
+    let db = get_db_path().ok_or("Zed threads DB not found")?;
+    load_sessions_in(&db, project_path, exclude_sidechain)
+}
+
+/// [`load_sessions`] against an explicit database path (snapshot or live).
+pub fn load_sessions_in(
+    db_path: &std::path::Path,
+    project_path: &str,
     _exclude_sidechain: bool,
 ) -> Result<Vec<ClaudeSession>, String> {
     let target_ws = project_path.strip_prefix(SCHEME).unwrap_or(project_path);
-    load_sessions_conn(&open_db()?, target_ws)
+    load_sessions_conn(&open_db_at(db_path)?, target_ws)
 }
 
-fn load_sessions_conn(conn: &Connection, target_ws: &str) -> Result<Vec<ClaudeSession>, String> {
+pub(crate) fn load_sessions_conn(
+    conn: &Connection,
+    target_ws: &str,
+) -> Result<Vec<ClaudeSession>, String> {
     let cols = table_columns(conn, "threads");
     let sql = format!(
         "SELECT id, summary, {}, {}, updated_at FROM threads ORDER BY updated_at DESC",
@@ -251,8 +348,17 @@ fn load_sessions_conn(conn: &Connection, target_ws: &str) -> Result<Vec<ClaudeSe
 
 /// Load messages for one Zed thread (`zed://<thread_id>`).
 pub fn load_messages(session_path: &str) -> Result<Vec<ClaudeMessage>, String> {
+    let db = get_db_path().ok_or("Zed threads DB not found")?;
+    load_messages_in(&db, session_path)
+}
+
+/// [`load_messages`] against an explicit database path (snapshot or live).
+pub fn load_messages_in(
+    db_path: &std::path::Path,
+    session_path: &str,
+) -> Result<Vec<ClaudeMessage>, String> {
     let id = session_path.strip_prefix(SCHEME).unwrap_or(session_path);
-    let conn = open_db()?;
+    let conn = open_db_at(db_path)?;
     let (data_type, data, updated_at): (String, Vec<u8>, Option<String>) = conn
         .query_row(
             "SELECT data_type, data, updated_at FROM threads WHERE id = ?1",
@@ -267,10 +373,20 @@ pub fn load_messages(session_path: &str) -> Result<Vec<ClaudeMessage>, String> {
 
 /// Search across all Zed threads.
 pub fn search(query: &str, limit: usize) -> Result<Vec<ClaudeMessage>, String> {
+    let db = get_db_path().ok_or("Zed threads DB not found")?;
+    search_in(&db, query, limit)
+}
+
+/// [`search`] against an explicit database path (snapshot or live).
+pub fn search_in(
+    db_path: &std::path::Path,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<ClaudeMessage>, String> {
     if query.is_empty() || limit == 0 {
         return Ok(Vec::new());
     }
-    let conn = open_db()?;
+    let conn = open_db_at(db_path)?;
     let query_lower = query.to_lowercase();
     let mut stmt = conn
         .prepare("SELECT id, data_type, data, updated_at FROM threads")

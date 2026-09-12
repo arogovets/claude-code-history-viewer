@@ -191,16 +191,11 @@ pub async fn scan_all_projects(
 
     type SyncScanner = fn() -> Result<Vec<ClaudeProject>, String>;
     let sync_scanners: &[(&str, SyncScanner)] = &[
-        ("goose", providers::goose::scan_projects),
-        ("zed", providers::zed::scan_projects),
         ("trae", providers::trae::scan_projects),
         ("cline", providers::cline::scan_projects),
         ("cursor", providers::cursor::scan_projects),
         ("crush", providers::crush::scan_projects),
-        ("amazonq", providers::amazon_q::scan_projects),
         ("antigravity", providers::antigravity::scan_projects),
-        ("kiro", providers::kiro::scan_projects),
-        ("llm", providers::llm::scan_projects),
         ("copilot", providers::copilot::scan_projects),
     ];
 
@@ -448,16 +443,11 @@ pub async fn load_provider_sessions(
         // above; their legacy arms were removed. Each new migration deletes
         // its arm here.
         "copilot" => providers::copilot::load_sessions(&project_path, exclude)?,
-        "goose" => providers::goose::load_sessions(&project_path, exclude)?,
 
         "cline" => providers::cline::load_sessions(&project_path, exclude)?,
         "crush" => providers::crush::load_sessions(&project_path, exclude)?,
         "cursor" => providers::cursor::load_sessions(&project_path, exclude)?,
-        "amazonq" => providers::amazon_q::load_sessions(&project_path, exclude)?,
         "antigravity" => providers::antigravity::load_sessions(&project_path, exclude)?,
-        "kiro" => providers::kiro::load_sessions(&project_path, exclude)?,
-        "llm" => providers::llm::load_sessions(&project_path, exclude)?,
-        "zed" => providers::zed::load_sessions(&project_path, exclude)?,
         "trae" => providers::trae::load_sessions(&project_path, exclude)?,
         _ => return Err(format!("Unknown provider: {provider}")),
     };
@@ -491,6 +481,11 @@ fn legacy_load_sessions(
         "aider" => providers::aider::load_sessions(project_path, exclude),
         "codebuddy" => providers::codebuddy::load_sessions(project_path, exclude),
         "cursor-agent" => providers::cursor_agent::load_sessions(project_path, exclude),
+        "goose" => providers::goose::load_sessions(project_path, exclude),
+        "llm" => providers::llm::load_sessions(project_path, exclude),
+        "zed" => providers::zed::load_sessions(project_path, exclude),
+        "amazonq" => providers::amazon_q::load_sessions(project_path, exclude),
+        "kiro" => providers::kiro::load_sessions(project_path, exclude),
         "codex" => providers::codex::load_sessions(project_path, exclude),
         "openinterpreter" => providers::openinterpreter::load_sessions(project_path, exclude),
         "opencode" => providers::opencode::load_sessions(project_path, exclude),
@@ -516,6 +511,11 @@ fn legacy_search(provider: &str, query: &str, limit: usize) -> Result<Vec<Claude
         "aider" => providers::aider::search(query, limit),
         "codebuddy" => providers::codebuddy::search(query, limit),
         "cursor-agent" => providers::cursor_agent::search(query, limit),
+        "goose" => providers::goose::search(query, limit),
+        "llm" => providers::llm::search(query, limit),
+        "zed" => providers::zed::search(query, limit),
+        "amazonq" => providers::amazon_q::search(query, limit),
+        "kiro" => providers::kiro::search(query, limit),
         "opencode" => providers::opencode::search(query, limit),
         "forgecode" => providers::forgecode::search(query, limit),
         // Codex filters are applied globally after fan-out; bootstrap passes
@@ -990,16 +990,6 @@ pub async fn search_all_providers(
         }
     }
 
-    // Goose
-    if providers_to_search.iter().any(|p| p == "goose") {
-        match providers::goose::search(&query, max_results) {
-            Ok(results) => all_results.extend(results),
-            Err(e) => {
-                log::warn!("Goose search failed: {e}");
-            }
-        }
-    }
-
     // Cline
     if providers_to_search.iter().any(|p| p == "cline") {
         match providers::cline::search(&query, max_results) {
@@ -1030,52 +1020,12 @@ pub async fn search_all_providers(
         }
     }
 
-    // Amazon Q Developer CLI
-    if providers_to_search.iter().any(|p| p == "amazonq") {
-        match providers::amazon_q::search(&query, max_results) {
-            Ok(results) => all_results.extend(results),
-            Err(e) => {
-                log::warn!("Amazon Q search failed: {e}");
-            }
-        }
-    }
-
     // Antigravity
     if providers_to_search.iter().any(|p| p == "antigravity") {
         match providers::antigravity::search(&query, max_results) {
             Ok(results) => all_results.extend(results),
             Err(e) => {
                 log::warn!("Antigravity search failed: {e}");
-            }
-        }
-    }
-
-    // Kiro
-    if providers_to_search.iter().any(|p| p == "kiro") {
-        match providers::kiro::search(&query, max_results) {
-            Ok(results) => all_results.extend(results),
-            Err(e) => {
-                log::warn!("Kiro search failed: {e}");
-            }
-        }
-    }
-
-    // llm (Simon Willison)
-    if providers_to_search.iter().any(|p| p == "llm") {
-        match providers::llm::search(&query, max_results) {
-            Ok(results) => all_results.extend(results),
-            Err(e) => {
-                log::warn!("llm search failed: {e}");
-            }
-        }
-    }
-
-    // Zed
-    if providers_to_search.iter().any(|p| p == "zed") {
-        match providers::zed::search(&query, max_results) {
-            Ok(results) => all_results.extend(results),
-            Err(e) => {
-                log::warn!("Zed search failed: {e}");
             }
         }
     }
