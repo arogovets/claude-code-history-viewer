@@ -102,13 +102,23 @@ pub fn scan_projects_from_path(base_path: &str) -> Result<Vec<ClaudeProject>, St
 /// Load `ForgeCode` sessions for a virtual workspace path.
 pub fn load_sessions(
     project_path: &str,
-    _exclude_sidechain: bool,
+    exclude_sidechain: bool,
 ) -> Result<Vec<ClaudeSession>, String> {
     let base_path = get_base_path().ok_or_else(|| "ForgeCode not found".to_string())?;
+    load_sessions_in(Path::new(&base_path), project_path, exclude_sidechain)
+}
+
+/// [`load_sessions`] against an explicit base (snapshot or live).
+pub fn load_sessions_in(
+    base: &Path,
+    project_path: &str,
+    _exclude_sidechain: bool,
+) -> Result<Vec<ClaudeSession>, String> {
+    let base_str = base.to_string_lossy();
     let workspace_id = parse_workspace_project_path(project_path)
         .ok_or_else(|| format!("Invalid ForgeCode project path: {project_path}"))?;
 
-    if let Some(sessions) = load_sessions_from_db(&base_path, &workspace_id) {
+    if let Some(sessions) = load_sessions_from_db(&base_str, &workspace_id) {
         return Ok(sessions);
     }
     log::debug!("ForgeCode: no sessions found for workspace {workspace_id}");
@@ -118,10 +128,16 @@ pub fn load_sessions(
 /// Load `ForgeCode` messages for a virtual conversation path.
 pub fn load_messages(session_path: &str) -> Result<Vec<ClaudeMessage>, String> {
     let base_path = get_base_path().ok_or_else(|| "ForgeCode not found".to_string())?;
+    load_messages_in(Path::new(&base_path), session_path)
+}
+
+/// [`load_messages`] against an explicit base (snapshot or live).
+pub fn load_messages_in(base: &Path, session_path: &str) -> Result<Vec<ClaudeMessage>, String> {
+    let base_str = base.to_string_lossy();
     let (workspace_id, conversation_id) = parse_conversation_path(session_path)
         .ok_or_else(|| format!("Invalid ForgeCode session path: {session_path}"))?;
 
-    if let Some(messages) = load_messages_from_db(&base_path, &workspace_id, &conversation_id) {
+    if let Some(messages) = load_messages_from_db(&base_str, &workspace_id, &conversation_id) {
         return Ok(messages);
     }
     log::debug!(
@@ -134,6 +150,75 @@ pub fn load_messages(session_path: &str) -> Result<Vec<ClaudeMessage>, String> {
 pub fn search(query: &str, limit: usize) -> Result<Vec<ClaudeMessage>, String> {
     let base_path = get_base_path().ok_or_else(|| "ForgeCode not found".to_string())?;
     Ok(search_from_path(&base_path, query, limit))
+}
+
+// ============================================================================
+// Archive glue (snapshot-backed reads; the explicit-base seams above are
+// reused). IDs are content-derived opaque URIs, so no output rewriting is
+// needed. The database is captured consistently. Explicit rename/delete
+// operations keep using live paths (user-initiated mutations, never syncs).
+// ============================================================================
+
+use crate::storage::registry::DiscoveredSource as ArchiveDiscoveredSource;
+use crate::storage::{SnapshotInfo as ArchiveSnapshotInfo, Source as ArchiveSource};
+
+/// Physical `ForgeCode` base on this machine, if present.
+pub(crate) fn archive_discover() -> Vec<ArchiveDiscoveredSource> {
+    let machine = crate::storage::registry::discovery_machine_id();
+    match get_base_path() {
+        Some(base) => {
+            let mut found = ArchiveDiscoveredSource::local(
+                crate::storage::ROLE_PRIMARY,
+                std::path::PathBuf::from(base),
+                &machine,
+            );
+            found.sqlite_dbs = vec![".forge.db".to_string()];
+            vec![found]
+        }
+        None => Vec::new(),
+    }
+}
+
+/// Scan projects under an explicit base (snapshot data root at runtime).
+pub(crate) fn archive_scan(
+    _source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+) -> Result<Vec<ClaudeProject>, String> {
+    scan_projects_from_path(&snapshot.data_path.to_string_lossy())
+}
+
+/// Sessions for a stable workspace URI, read from the snapshot.
+pub(crate) fn archive_load_sessions(
+    _source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+    stable_project: &str,
+) -> Result<Vec<ClaudeSession>, String> {
+    load_sessions_in(&snapshot.data_path, stable_project, false)
+}
+
+/// Messages for a stable conversation URI, read from the snapshot.
+pub(crate) fn archive_load_messages(
+    _source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+    stable_session: &str,
+) -> Result<Vec<ClaudeMessage>, String> {
+    load_messages_in(&snapshot.data_path, stable_session)
+}
+
+/// Search confined to one snapshot.
+// Returns Result for registry table uniformity; the search is infallible.
+#[allow(clippy::unnecessary_wraps)]
+pub(crate) fn archive_search(
+    _source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<ClaudeMessage>, String> {
+    Ok(search_from_path(
+        &snapshot.data_path.to_string_lossy(),
+        query,
+        limit,
+    ))
 }
 
 /// Search `ForgeCode` messages from an explicit base path.

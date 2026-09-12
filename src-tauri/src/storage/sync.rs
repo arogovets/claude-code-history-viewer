@@ -597,11 +597,14 @@ fn assemble_candidate(
                 }
                 // New or changed: stage bytes (CAS first), record hash.
                 stage_bytes(data_root, staging_data_dir, &live.rel, &bytes)?;
+                let staged = staging_data_dir.join(native_path(&live.rel));
+                let (final_hash, final_size) =
+                    merge_sqlite_history(&carry, &live.rel, &staged, &hash, size)?;
                 entries.push(ManifestFileEntry {
                     path: live.rel.clone(),
-                    size,
+                    size: final_size,
                     mtime_secs: live.mtime_secs,
-                    sha256: hash,
+                    sha256: final_hash,
                     present: true,
                     last_seen_secs: now_secs,
                 });
@@ -643,6 +646,51 @@ fn assemble_candidate(
         });
     }
     Ok(entries)
+}
+
+/// Merge preserved SQLite rows forward when a staged database changed.
+/// File-level carry-over cannot resurrect rows a newer database image deleted,
+/// so before publishing, rows present in the previous copy but missing from
+/// the staged one are merged back in (generically, by single-column primary
+/// key). Returns the staged file's effective `(hash, size)`.
+///
+/// On merge failure the staged file is replaced by the previous copy
+/// wholesale: history is never published half-merged, and freshness is
+/// sacrificed instead of preservation.
+fn merge_sqlite_history(
+    carry: &BTreeMap<String, (PathBuf, ManifestFileEntry, String)>,
+    rel: &str,
+    staged: &Path,
+    staged_hash: &str,
+    staged_size: u64,
+) -> Result<(String, u64), String> {
+    use crate::storage::sqlite_capture::{is_sqlite_file, merge_missing_rows, quick_check_db};
+    let Some((prev_abs, _, _)) = carry.get(rel) else {
+        return Ok((staged_hash.to_string(), staged_size));
+    };
+    if !(is_sqlite_file(staged) && is_sqlite_file(prev_abs)) {
+        return Ok((staged_hash.to_string(), staged_size));
+    }
+    match merge_missing_rows(prev_abs, staged) {
+        Ok(0) => Ok((staged_hash.to_string(), staged_size)),
+        Ok(resurrected) => {
+            log::info!("SQLite history merge for {rel}: {resurrected} rows carried forward");
+            quick_check_db(staged)?;
+            let merged = std::fs::read(staged)
+                .map_err(|e| format!("Failed to re-read merged SQLite {rel}: {e}"))?;
+            #[allow(clippy::cast_possible_wrap)]
+            let size = merged.len() as u64;
+            Ok((sha256_hex(&merged), size))
+        }
+        Err(e) => {
+            log::warn!("SQLite history merge failed for {rel}, keeping preserved copy: {e}");
+            std::fs::remove_file(staged)
+                .map_err(|e| format!("Failed to clear unmerged SQLite staging {rel}: {e}"))?;
+            link_or_copy(prev_abs, staged)?;
+            let (_, prev_entry, prev_hash) = &carry[rel];
+            Ok((prev_hash.clone(), prev_entry.size))
+        }
+    }
 }
 
 /// Hardlink `src` onto `dest` (creating parents), falling back to a copy, and

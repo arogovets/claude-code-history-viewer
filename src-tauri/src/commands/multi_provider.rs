@@ -192,8 +192,6 @@ pub async fn scan_all_projects(
     type SyncScanner = fn() -> Result<Vec<ClaudeProject>, String>;
     let sync_scanners: &[(&str, SyncScanner)] = &[
         ("goose", providers::goose::scan_projects),
-        ("forgecode", providers::forgecode::scan_projects),
-        ("opencode", providers::opencode::scan_projects),
         ("zed", providers::zed::scan_projects),
         ("trae", providers::trae::scan_projects),
         ("cline", providers::cline::scan_projects),
@@ -451,8 +449,6 @@ pub async fn load_provider_sessions(
         // its arm here.
         "copilot" => providers::copilot::load_sessions(&project_path, exclude)?,
         "goose" => providers::goose::load_sessions(&project_path, exclude)?,
-        "forgecode" => providers::forgecode::load_sessions(&project_path, exclude)?,
-        "opencode" => providers::opencode::load_sessions(&project_path, exclude)?,
 
         "cline" => providers::cline::load_sessions(&project_path, exclude)?,
         "crush" => providers::crush::load_sessions(&project_path, exclude)?,
@@ -497,6 +493,8 @@ fn legacy_load_sessions(
         "cursor-agent" => providers::cursor_agent::load_sessions(project_path, exclude),
         "codex" => providers::codex::load_sessions(project_path, exclude),
         "openinterpreter" => providers::openinterpreter::load_sessions(project_path, exclude),
+        "opencode" => providers::opencode::load_sessions(project_path, exclude),
+        "forgecode" => providers::forgecode::load_sessions(project_path, exclude),
         _ => Err(format!("Unknown provider: {provider}")),
     }
 }
@@ -518,6 +516,8 @@ fn legacy_search(provider: &str, query: &str, limit: usize) -> Result<Vec<Claude
         "aider" => providers::aider::search(query, limit),
         "codebuddy" => providers::codebuddy::search(query, limit),
         "cursor-agent" => providers::cursor_agent::search(query, limit),
+        "opencode" => providers::opencode::search(query, limit),
+        "forgecode" => providers::forgecode::search(query, limit),
         // Codex filters are applied globally after fan-out; bootstrap passes
         // none explicitly.
         "codex" => providers::codex::search(query, limit, &serde_json::json!({})),
@@ -996,26 +996,6 @@ pub async fn search_all_providers(
             Ok(results) => all_results.extend(results),
             Err(e) => {
                 log::warn!("Goose search failed: {e}");
-            }
-        }
-    }
-
-    // ForgeCode
-    if providers_to_search.iter().any(|p| p == "forgecode") {
-        match providers::forgecode::search(&query, max_results) {
-            Ok(results) => all_results.extend(results),
-            Err(e) => {
-                log::warn!("ForgeCode search failed: {e}");
-            }
-        }
-    }
-
-    // OpenCode
-    if providers_to_search.iter().any(|p| p == "opencode") {
-        match providers::opencode::search(&query, max_results) {
-            Ok(results) => all_results.extend(results),
-            Err(e) => {
-                log::warn!("OpenCode search failed: {e}");
             }
         }
     }

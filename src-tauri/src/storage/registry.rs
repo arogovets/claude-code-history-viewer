@@ -276,6 +276,26 @@ fn spec_table() -> Vec<ProviderArchiveSpec> {
             locate: locate_by_subpath_or_single,
             rewrite_outputs: true,
         },
+        ProviderArchiveSpec {
+            provider: "opencode",
+            discover: providers::opencode::archive_discover,
+            scan: providers::opencode::archive_scan,
+            load_sessions: providers::opencode::archive_load_sessions,
+            load_messages: providers::opencode::archive_load_messages,
+            search: Some(providers::opencode::archive_search),
+            locate: locate_by_subpath_or_single,
+            rewrite_outputs: false,
+        },
+        ProviderArchiveSpec {
+            provider: "forgecode",
+            discover: providers::forgecode::archive_discover,
+            scan: providers::forgecode::archive_scan,
+            load_sessions: providers::forgecode::archive_load_sessions,
+            load_messages: providers::forgecode::archive_load_messages,
+            search: Some(providers::forgecode::archive_search),
+            locate: locate_by_subpath_or_single,
+            rewrite_outputs: false,
+        },
     ]
 }
 
@@ -1814,6 +1834,275 @@ mod conformance_tests {
                 .unwrap()
                 .len(),
             2
+        );
+    }
+
+    // -- opencode (sqlite primary) ---------------------------------------------------
+
+    fn opencode_test_db(base: &Path) {
+        let conn = rusqlite::Connection::open(base.join("opencode.db")).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE project (
+                id TEXT PRIMARY KEY, worktree TEXT NOT NULL, name TEXT,
+                time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL
+            );
+            CREATE TABLE session (
+                id TEXT PRIMARY KEY, project_id TEXT NOT NULL, title TEXT NOT NULL,
+                directory TEXT NOT NULL DEFAULT '',
+                time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL
+            );
+            CREATE TABLE message (
+                id TEXT PRIMARY KEY, session_id TEXT NOT NULL,
+                time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL,
+                data TEXT NOT NULL
+            );
+            CREATE TABLE part (
+                id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL,
+                time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL,
+                data TEXT NOT NULL
+            );",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO project (id, worktree, name, time_created, time_updated)
+             VALUES ('oproj1', '/w/oproj', 'oproj', 1700000000000, 1700000100000)",
+            [],
+        )
+        .unwrap();
+    }
+
+    fn opencode_add_session(base: &Path, sid: &str, title: &str, texts: &[&str]) {
+        let conn = rusqlite::Connection::open(base.join("opencode.db")).unwrap();
+        conn.execute(
+            "INSERT INTO session (id, project_id, title, directory, time_created, time_updated)
+             VALUES (?1, 'oproj1', ?2, '/w/oproj', 1700000000000, 1700000050000)",
+            rusqlite::params![sid, title],
+        )
+        .unwrap();
+        for (i, text) in texts.iter().enumerate() {
+            let mid = format!("{sid}-m{i}");
+            conn.execute(
+                "INSERT INTO message (id, session_id, time_created, time_updated, data)
+                 VALUES (?1, ?2, 1700000010000, 1700000010000, ?3)",
+                rusqlite::params![
+                    mid,
+                    sid,
+                    serde_json::json!({"role": "user", "time": {"created": 1700000010000_i64}})
+                        .to_string()
+                ],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO part (id, message_id, session_id, time_created, time_updated, data)
+                 VALUES (?1, ?2, ?3, 1700000010000, 1700000010000, ?4)",
+                rusqlite::params![
+                    format!("{mid}-p"),
+                    mid,
+                    sid,
+                    serde_json::json!({"type": "text", "text": text}).to_string()
+                ],
+            )
+            .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn opencode_archive_conformance() {
+        let sandbox = crate::test_utils::SandboxHome::new();
+        let _env = ClearEnvGuard::clear(PROVIDER_ENVS);
+        // OPENCODE_HOME override keeps the fixture out of any real checkout.
+        let base = sandbox.path().join("oc-home");
+        std::fs::create_dir_all(&base).unwrap();
+        std::env::set_var("OPENCODE_HOME", &base);
+        struct OpenCodeHomeGuard;
+        impl Drop for OpenCodeHomeGuard {
+            fn drop(&mut self) {
+                std::env::remove_var("OPENCODE_HOME");
+            }
+        }
+        let _oc_home = OpenCodeHomeGuard;
+        let marker = "conformance-marker-opencode";
+        opencode_test_db(&base);
+        opencode_add_session(&base, "oses1", "first", &[&format!("hello {marker}")]);
+        opencode_add_session(&base, "oses2", "second", &["second"]);
+
+        let projects = scan_provider("opencode").await.unwrap();
+        assert_eq!(projects.len(), 1, "opencode: {projects:?}");
+        assert_eq!(projects[0].path, "opencode://oproj1");
+        let project = projects[0].path.clone();
+        // The database rode along into the snapshot via backup capture.
+        let sources = read_sources("opencode");
+        assert!(sources[0].snapshot.data_path.join("opencode.db").is_file());
+
+        let sessions = load_provider_sessions("opencode", &project, &sources)
+            .await
+            .unwrap();
+        assert_eq!(sessions.len(), 2);
+        assert!(message_text(
+            &load_provider_messages("opencode", "opencode://oproj1/oses1", &sources)
+                .await
+                .unwrap()
+        )
+        .contains(marker));
+        assert!(!search_provider("opencode", marker, 10, &sources)
+            .await
+            .unwrap()
+            .is_empty());
+
+        // Disappearance: delete oses1, extend oses2, add oses3.
+        {
+            let conn = rusqlite::Connection::open(base.join("opencode.db")).unwrap();
+            conn.execute("DELETE FROM session WHERE id = 'oses1'", [])
+                .unwrap();
+            conn.execute("DELETE FROM message WHERE session_id = 'oses1'", [])
+                .unwrap();
+            conn.execute("DELETE FROM part WHERE session_id = 'oses1'", [])
+                .unwrap();
+        }
+        opencode_add_session(&base, "oses3", "third", &["third"]);
+        let projects_after = scan_provider("opencode").await.unwrap();
+        assert_eq!(projects_after.len(), 1);
+        let sessions_after = load_provider_sessions(
+            "opencode",
+            &projects_after[0].path,
+            &read_sources("opencode"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(sessions_after.len(), 3, "oses1 preserved + oses2 + oses3");
+
+        // The live database can vanish; browsing continues from snapshots.
+        std::fs::remove_dir_all(&base).unwrap();
+        assert_eq!(scan_provider("opencode").await.unwrap().len(), 1);
+        let sources = read_sources("opencode");
+        assert_eq!(
+            load_provider_sessions("opencode", &project, &sources)
+                .await
+                .unwrap()
+                .len(),
+            3
+        );
+        assert!(message_text(
+            &load_provider_messages("opencode", "opencode://oproj1/oses1", &sources)
+                .await
+                .unwrap()
+        )
+        .contains(marker));
+        // A torn copy must never validate: garbage bytes fail quick_check.
+        assert!(crate::storage::sqlite_capture::quick_check_db(
+            &sources[0].snapshot.data_path.join("opencode.db")
+        )
+        .is_ok());
+    }
+
+    // -- forgecode (sqlite primary) ----------------------------------------------------
+
+    fn forgecode_test_db(base: &Path) {
+        let conn = rusqlite::Connection::open(base.join(".forge.db")).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE conversations (
+                id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, title TEXT,
+                context TEXT, metrics TEXT, created_at TEXT, updated_at TEXT
+            );",
+        )
+        .unwrap();
+    }
+
+    fn forgecode_add_session(base: &Path, conv: &str, title: &str, texts: &[&str]) {
+        let messages: Vec<_> = texts
+            .iter()
+            .map(|text| {
+                serde_json::json!({"role": "user", "content": [{"type": "text", "text": text}]})
+            })
+            .collect();
+        let conn = rusqlite::Connection::open(base.join(".forge.db")).unwrap();
+        conn.execute(
+            "INSERT INTO conversations (id, workspace_id, title, context, created_at, updated_at)
+             VALUES (?1, 'ws-alpha', ?2, ?3, '2026-09-01', '2026-09-01')",
+            rusqlite::params![
+                conv,
+                title,
+                serde_json::json!({
+                    "conversation_id": conv, "cwd": "/w/fgproj", "messages": messages,
+                })
+                .to_string()
+            ],
+        )
+        .unwrap();
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn forgecode_archive_conformance() {
+        let sandbox = crate::test_utils::SandboxHome::new();
+        let _env = ClearEnvGuard::clear(PROVIDER_ENVS);
+        let base = sandbox.path().join("forge-home");
+        std::fs::create_dir_all(&base).unwrap();
+        std::env::set_var("FORGE_CONFIG", &base);
+        struct ForgeGuard;
+        impl Drop for ForgeGuard {
+            fn drop(&mut self) {
+                std::env::remove_var("FORGE_CONFIG");
+            }
+        }
+        let _forge = ForgeGuard;
+        let marker = "conformance-marker-forgecode";
+        forgecode_test_db(&base);
+        forgecode_add_session(&base, "conv-001", "first", &[&format!("hello {marker}")]);
+        forgecode_add_session(&base, "conv-002", "second", &["second"]);
+
+        let projects = scan_provider("forgecode").await.unwrap();
+        assert_eq!(projects.len(), 1, "forgecode: {projects:?}");
+        assert_eq!(projects[0].path, "forgecode://workspace/ws-alpha");
+        let project = projects[0].path.clone();
+
+        let sources = read_sources("forgecode");
+        let sessions = load_provider_sessions("forgecode", &project, &sources)
+            .await
+            .unwrap();
+        assert_eq!(sessions.len(), 2);
+        assert!(message_text(
+            &load_provider_messages(
+                "forgecode",
+                "forgecode://workspace/ws-alpha/conversation/conv-001",
+                &sources
+            )
+            .await
+            .unwrap()
+        )
+        .contains(marker));
+        assert!(!search_provider("forgecode", marker, 10, &sources)
+            .await
+            .unwrap()
+            .is_empty());
+
+        {
+            let conn = rusqlite::Connection::open(base.join(".forge.db")).unwrap();
+            conn.execute("DELETE FROM conversations WHERE id = 'conv-001'", [])
+                .unwrap();
+        }
+        forgecode_add_session(&base, "conv-003", "third", &["third"]);
+        let projects_after = scan_provider("forgecode").await.unwrap();
+        assert_eq!(projects_after.len(), 1);
+        let sessions_after = load_provider_sessions(
+            "forgecode",
+            &projects_after[0].path,
+            &read_sources("forgecode"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(sessions_after.len(), 3, "conv-001 preserved + 002 + 003");
+
+        std::fs::remove_dir_all(&base).unwrap();
+        assert_eq!(scan_provider("forgecode").await.unwrap().len(), 1);
+        let sources = read_sources("forgecode");
+        assert_eq!(
+            load_provider_sessions("forgecode", &project, &sources)
+                .await
+                .unwrap()
+                .len(),
+            3
         );
     }
 
