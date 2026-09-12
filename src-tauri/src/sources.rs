@@ -158,11 +158,12 @@ fn validate_handle_path(source: &Source, inner: &str) -> Result<(), String> {
     let embedded_path = match scheme {
         "aider" | "crush" => Some(body.split('#').next().unwrap_or(body)),
         "cline" => Some(body.split(':').next().unwrap_or(body)),
-        "vscode" => Some(body),
+        "vscode" | "kimi-code" => Some(body),
         "cursor" if Path::new(body).is_absolute() => Some(body),
         "codex" | "gemini" | "grok" | "kimi" | "dsh" | "opencode" | "openinterpreter"
         | "openhands" | "goose" | "amazonq" | "kiro" | "llm" | "zed" | "trae" | "vibe" | "qwen"
-        | "cursor" | "forgecode" | "forgecode-db" | "copilot-cli" | "copilot-desktop" => None,
+        | "cursor" | "forgecode" | "forgecode-db" | "copilot-cli" | "copilot-desktop"
+        | "antigravity-cli" | "continue" | "pearai" => None,
         "copilot" => {
             use base64::Engine;
             let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
@@ -326,6 +327,13 @@ mod tests {
         let session = current.join("session.jsonl");
         std::fs::write(&session, "{}\n").unwrap();
         assert_eq!(resolve(session.to_str().unwrap()).unwrap().0.id, "laptop");
+        for scheme in ["antigravity-cli", "continue", "pearai"] {
+            let handle = format!("source:laptop|{scheme}:///origin/workspace");
+            assert_eq!(resolve(&handle).unwrap().0.id, "laptop");
+        }
+        let kimi = format!("source:laptop|kimi-code://{}", current.display());
+        assert_eq!(resolve(&kimi).unwrap().0.id, "laptop");
+        assert!(resolve("source:laptop|kimi-code:///outside").is_err());
         assert!(resolve(temp.path().to_str().unwrap()).is_err());
         assert!(resolve("source:laptop|codex://../outside").is_err());
         assert!(resolve("source:unknown|codex://same").is_err());
