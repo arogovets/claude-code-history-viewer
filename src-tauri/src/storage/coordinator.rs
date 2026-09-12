@@ -11,22 +11,10 @@
 //! browsing never blocks on an offline host: failures are logged and the last
 //! completed snapshot keeps serving.
 //!
-//! Provider coverage is incremental: `claude` (local/custom/remote) is fully
-//! wired. Remaining providers keep their legacy direct-read paths and gain
-//! snapshot coverage by following the same three steps per provider:
-//!
-//! 1. expose `scan_projects_from_root(root)` / `load_*_from_root` seams that
-//!    take a directory instead of reading a hardcoded home path (most already
-//!    have `*_from_path`/`*_in` variants — reuse them, do not fork parsers);
-//! 2. sync the provider root into a snapshot, then call the seam with the
-//!    snapshot data root and rewrite snapshot-interior paths back to the
-//!    stable external contract (see `commands::project` for the worked
-//!    Claude example, including the immutable-snapshot cache guard in
-//!    `commands::session::load`);
-//! 3. for SQLite-backed providers (opencode, trae, …), copy the underlying
-//!    store file into staging first and open the *copy* read-only; a torn
-//!    copy must fall back to the previous snapshot, never to a live partial
-//!    read.
+//! Provider coverage: every registry-migrated provider syncs its local
+//! sources here (discover → sync per source, best-effort); `claude`
+//! (local/custom/remote) is fully wired including remote file sync.
+//! Remaining remote/WSL generalization follows the same per-source pattern.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -121,6 +109,49 @@ pub async fn sync_all_once() -> CoordinatorReport {
         }
     }
 
+    // Registry-migrated providers: discover + sync every local source.
+    // Missing roots simply fail here; preserved snapshots keep serving.
+    // One broken provider never blocks the rest of the pass.
+    for name in crate::storage::registry::migrated_providers() {
+        let Some(spec) = crate::storage::registry::spec_for(name) else {
+            continue;
+        };
+        for found in (spec.discover)() {
+            // Coordinator owns local scheduling; WSL/remote origins sync
+            // through their own paths (WSL live fallback, remote file sync).
+            if !matches!(
+                found.kind,
+                crate::storage::SourceKind::Local | crate::storage::SourceKind::Custom
+            ) {
+                continue;
+            }
+            let source = crate::storage::registry::source_for_discovered(name, &found);
+            let root = found.root.clone();
+            let opts = crate::storage::SyncOptions {
+                extra_sqlite_dbs: found.extra_sqlite_dbs.clone(),
+            };
+            let name = name.to_string();
+            let result = tauri::async_runtime::spawn_blocking(move || {
+                if !root.is_dir() {
+                    return Err(format!("Source root {} is not available", root.display()));
+                }
+                crate::storage::sync_source(&source, &root, &opts).map(|_| ())
+            })
+            .await;
+            match result {
+                Ok(Ok(())) => report.local_synced += 1,
+                Ok(Err(e)) => {
+                    log::warn!("Coordinator {name} sync skipped: {e}");
+                    report.local_failed += 1;
+                }
+                Err(e) => {
+                    log::warn!("Coordinator {name} sync task failed: {e}");
+                    report.local_failed += 1;
+                }
+            }
+        }
+    }
+
     // Remote hosts (reachable ones produce new snapshots; offline ones keep
     // serving their latest completed snapshot).
     for host in crate::remote::get_remote_hosts()
@@ -204,8 +235,10 @@ mod tests {
         // without hanging on network timeouts.
         let _no_remote = NoRemoteGuard::set();
         let report = sync_all_once().await;
-        // Local default missing → failed, but the pass completed.
-        assert_eq!(report.local_synced, 0);
+        // Local default missing → failed, but the pass completed. (The aider
+        // home source syncs vacuously even with no history files, so synced
+        // is 1, not 0.)
+        assert_eq!(report.local_synced, 1);
         assert!(report.local_failed >= 1);
     }
 
@@ -219,7 +252,8 @@ mod tests {
         std::fs::create_dir_all(claude.join("projects/p")).unwrap();
         std::fs::write(claude.join("projects/p/s.jsonl"), b"{\"a\":1}\n").unwrap();
         let report = sync_all_once().await;
-        assert_eq!(report.local_synced, 1);
+        // Claude seed + vacuous aider home source.
+        assert_eq!(report.local_synced, 2);
         let machine_id = crate::storage::machine::local_machine_id().unwrap();
         let expected = crate::commands::project::claude_source_for_base(&machine_id, &claude, None);
         assert!(crate::storage::resolve_snapshot_data_root(&expected.id).is_some());

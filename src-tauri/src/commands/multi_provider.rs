@@ -190,11 +190,10 @@ pub async fn scan_all_projects(
     }
 
     type SyncScanner = fn() -> Result<Vec<ClaudeProject>, String>;
-    let sync_scanners: &[(&str, SyncScanner)] = &[
-        ("cline", providers::cline::scan_projects),
-        ("antigravity", providers::antigravity::scan_projects),
-        ("copilot", providers::copilot::scan_projects),
-    ];
+    // All file-tree, SQLite, and aggregated providers are archive-migrated;
+    // the registry table above is the single source of truth. This list
+    // retains only providers with no snapshot coverage (none at present).
+    let sync_scanners: &[(&str, SyncScanner)] = &[];
 
     // Spawn every enabled scanner up front so they run concurrently on the
     // blocking pool; awaiting the handles afterwards collects them in spawn

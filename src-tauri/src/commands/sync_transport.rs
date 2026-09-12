@@ -134,17 +134,66 @@ pub async fn list_sync_sources(
             });
         }
     }
+    // Registry-migrated providers expose their discovered physical roots
+    // (one row per source; the client replicates each root independently).
+    for name in crate::storage::registry::migrated_providers() {
+        if name == "claude" {
+            continue;
+        }
+        if !wanted(name) {
+            continue;
+        }
+        let Some(spec) = crate::storage::registry::spec_for(name) else {
+            continue;
+        };
+        for found in (spec.discover)() {
+            // Local origins only: WSL/remote roots are not servable paths.
+            if !matches!(
+                found.kind,
+                crate::storage::SourceKind::Local | crate::storage::SourceKind::Custom
+            ) {
+                continue;
+            }
+            sources.push(SyncSourceInfo {
+                provider: name.to_string(),
+                root: found.root.to_string_lossy().to_string(),
+                label: found.label.clone(),
+            });
+        }
+    }
     Ok(sources)
 }
 
 /// Resolve and authorize a sync root for a provider. The root must be one of
 /// the listed sources so callers cannot point the reader at arbitrary paths.
 fn resolve_sync_root(provider: &str, root_param: Option<&str>) -> Result<PathBuf, String> {
-    if provider != "claude" {
+    if provider == "claude" {
+        return resolve_claude_sync_root(root_param);
+    }
+    // Registry-migrated providers: the discovered physical roots are the
+    // allowlist (same set `list_sync_sources` advertises).
+    let Some(spec) = crate::storage::registry::spec_for(provider) else {
         return Err(format!(
             "File sync not yet supported for provider: {provider}"
         ));
+    };
+    let candidates: Vec<PathBuf> = (spec.discover)()
+        .into_iter()
+        .filter(|found| {
+            matches!(
+                found.kind,
+                crate::storage::SourceKind::Local | crate::storage::SourceKind::Custom
+            )
+        })
+        .map(|found| found.root)
+        .collect();
+    if candidates.is_empty() {
+        return Err(format!("No {provider} data directory found on this host"));
     }
+    resolve_root_in_candidates(&candidates, root_param)
+}
+
+fn resolve_claude_sync_root(root_param: Option<&str>) -> Result<PathBuf, String> {
     let mut candidates: Vec<PathBuf> = Vec::new();
     if let Some(root) = default_claude_root() {
         candidates.push(root);
@@ -155,10 +204,17 @@ fn resolve_sync_root(provider: &str, root_param: Option<&str>) -> Result<PathBuf
     if candidates.is_empty() {
         return Err("No Claude data directory found on this host".to_string());
     }
+    resolve_root_in_candidates(&candidates, root_param)
+}
+
+fn resolve_root_in_candidates(
+    candidates: &[PathBuf],
+    root_param: Option<&str>,
+) -> Result<PathBuf, String> {
     let Some(raw) = root_param.filter(|r| !r.trim().is_empty()) else {
         return candidates
-            .into_iter()
-            .next()
+            .first()
+            .cloned()
             .ok_or_else(|| "No sync root".to_string());
     };
     let requested = PathBuf::from(raw);
@@ -168,7 +224,7 @@ fn resolve_sync_root(provider: &str, root_param: Option<&str>) -> Result<PathBuf
     // Compare canonical forms so symlinked spellings of the same root match.
     let canonical_requested = std::fs::canonicalize(&requested)
         .map_err(|_| "Unknown sync root for this host".to_string())?;
-    for candidate in &candidates {
+    for candidate in candidates {
         let canonical_candidate =
             std::fs::canonicalize(candidate).unwrap_or_else(|_| candidate.clone());
         if canonical_requested == canonical_candidate {

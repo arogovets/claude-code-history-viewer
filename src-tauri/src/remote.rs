@@ -342,50 +342,31 @@ fn remote_file_sync_throttled(endpoint: &str) -> bool {
 /// root: any required file that cannot be transferred aborts that root's
 /// sync and the previous completed snapshot stays current.
 pub async fn sync_remote_host_files(host: &RemoteHostConfig) -> Result<usize, String> {
-    let sources = fetch_remote_sync_sources(host, Some(&["claude".to_string()])).await?;
+    // Replicate every migrated provider's file roots (plus legacy claude):
+    // each root syncs all-or-nothing into its own remote-source snapshot
+    // lineage, which normal provider scans then pick up automatically via
+    // the registered-sources fallback (no host needed after sync).
+    let mut providers = vec!["claude".to_string()];
+    for name in crate::storage::registry::migrated_providers() {
+        if name != "claude" && !providers.iter().any(|p| p == name) {
+            providers.push(name.to_string());
+        }
+    }
+    let sources = fetch_remote_sync_sources(host, Some(&providers)).await?;
     let mut synced = 0usize;
-    for source in sources.iter().filter(|s| s.provider == "claude") {
-        let manifest = fetch_remote_sync_manifest(host, "claude", &source.root).await?;
-        let expected: Vec<(String, String)> = manifest
-            .files
-            .iter()
-            .map(|entry| (entry.path.clone(), String::new()))
-            .collect();
-        let mut files = Vec::with_capacity(manifest.files.len());
-        for entry in &manifest.files {
-            match fetch_remote_sync_file(host, "claude", &source.root, &entry.path).await {
-                Ok((bytes, mtime)) => files.push(crate::storage::RemoteSyncedFile {
-                    path: entry.path.clone(),
-                    bytes,
-                    mtime_secs: mtime,
-                }),
-                // A single failed transfer aborts this root (all-or-nothing):
-                // a partial candidate must never become current.
-                Err(e) => {
-                    return Err(format!(
-                        "Remote file sync for {} aborted on {}: {e}",
-                        source.root, entry.path
-                    ));
-                }
-            }
+    for source in &sources {
+        if let Err(e) = sync_one_remote_root(host, &source.provider, &source.root).await {
+            // One failed root aborts only itself (previous behavior for the
+            // single-provider case); other roots still replicate. Log and
+            // continue so a huge/broken root cannot starve the rest.
+            log::warn!(
+                "Remote file sync for {}:{} skipped: {e}",
+                source.provider,
+                source.root
+            );
+            continue;
         }
-        let storage_source = crate::storage::Source::remote_with_root(
-            "claude",
-            &host.endpoint,
-            &manifest.root,
-            Some(&host.name),
-        );
-        // Sync in a blocking task: staging does filesystem I/O.
-        let outcome = tauri::async_runtime::spawn_blocking(move || {
-            crate::storage::sync_remote_snapshot(&storage_source, &manifest.root, &expected, files)
-        })
-        .await
-        .map_err(|e| format!("Task join error: {e}"))??;
-        match outcome {
-            crate::storage::SyncOutcome::Created(_) | crate::storage::SyncOutcome::Unchanged(_) => {
-                synced += 1;
-            }
-        }
+        synced += 1;
     }
     // Fold newly synced snapshots into the derived index (idempotent).
     if synced > 0 {
@@ -393,6 +374,54 @@ pub async fn sync_remote_host_files(host: &RemoteHostConfig) -> Result<usize, St
             .await;
     }
     Ok(synced)
+}
+
+/// Replicate one remote `(provider, root)` file tree all-or-nothing: any
+/// single failed transfer aborts this root so a partial candidate never
+/// becomes current.
+async fn sync_one_remote_root(
+    host: &RemoteHostConfig,
+    provider: &str,
+    root: &str,
+) -> Result<(), String> {
+    let manifest = fetch_remote_sync_manifest(host, provider, root).await?;
+    let expected: Vec<(String, String)> = manifest
+        .files
+        .iter()
+        .map(|entry| (entry.path.clone(), String::new()))
+        .collect();
+    let mut files = Vec::with_capacity(manifest.files.len());
+    for entry in &manifest.files {
+        match fetch_remote_sync_file(host, provider, root, &entry.path).await {
+            Ok((bytes, mtime)) => files.push(crate::storage::RemoteSyncedFile {
+                path: entry.path.clone(),
+                bytes,
+                mtime_secs: mtime,
+            }),
+            Err(e) => {
+                return Err(format!(
+                    "Remote file sync for {root} aborted on {}: {e}",
+                    entry.path
+                ));
+            }
+        }
+    }
+    let storage_source = crate::storage::Source::remote_with_root(
+        provider,
+        &host.endpoint,
+        &manifest.root,
+        Some(&host.name),
+    );
+    // Sync in a blocking task: staging does filesystem I/O.
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
+        crate::storage::sync_remote_snapshot(&storage_source, &manifest.root, &expected, files)
+    })
+    .await
+    .map_err(|e| format!("Task join error: {e}"))??;
+    match outcome {
+        crate::storage::SyncOutcome::Created(_)
+        | crate::storage::SyncOutcome::Unchanged(_) => Ok(()),
+    }
 }
 
 /// Parse the latest completed local snapshots for a remote endpoint into
