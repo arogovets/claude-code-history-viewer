@@ -419,8 +419,9 @@ async fn sync_one_remote_root(
     .await
     .map_err(|e| format!("Task join error: {e}"))??;
     match outcome {
-        crate::storage::SyncOutcome::Created(_)
-        | crate::storage::SyncOutcome::Unchanged(_) => Ok(()),
+        crate::storage::SyncOutcome::Created(_) | crate::storage::SyncOutcome::Unchanged(_) => {
+            Ok(())
+        }
     }
 }
 

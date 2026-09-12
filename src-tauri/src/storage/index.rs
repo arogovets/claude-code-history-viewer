@@ -55,6 +55,14 @@ pub enum IndexSupport {
     Unsupported,
 }
 
+/// A provider's snapshot indexer: fold one completed snapshot into the
+/// derived SQLite index.
+pub type SnapshotIndexer = fn(
+    &rusqlite::Connection,
+    &crate::storage::Source,
+    &crate::storage::SnapshotInfo,
+) -> Result<IndexSupport, String>;
+
 /// Index one snapshot's projects + sessions into the derived SQLite index.
 ///
 /// Paths stored in the index use the *original* locations (not the snapshot

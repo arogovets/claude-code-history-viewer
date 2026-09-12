@@ -194,6 +194,9 @@ pub struct Source {
     /// root (used to bound large roots like a VS Code `User` dir).
     #[serde(default)]
     pub includes: Vec<String>,
+    /// Maximum capture depth below the root (`None` = unbounded).
+    #[serde(default)]
+    pub max_depth: Option<usize>,
 }
 
 fn normalize_endpoint(endpoint: &str) -> String {
@@ -225,6 +228,7 @@ impl Source {
             label: None,
             sqlite_dbs: Vec::new(),
             includes: Vec::new(),
+            max_depth: None,
         }
     }
 
@@ -760,6 +764,7 @@ mod tests {
             label: None,
             sqlite_dbs: Vec::new(),
             includes: Vec::new(),
+            max_depth: None,
         };
         write_source_json(&root.join("sources").join("local-claude"), &legacy).unwrap();
         std::fs::create_dir_all(root.join("sources").join("local-claude").join("snapshots"))
