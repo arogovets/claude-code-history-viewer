@@ -467,6 +467,7 @@ pub async fn search_messages(
     filters: serde_json::Value,
     limit: Option<usize>,
 ) -> Result<Vec<ClaudeMessage>, String> {
+    crate::sources::require_history_path(&claude_path)?;
     tauri::async_runtime::spawn_blocking(move || {
         search_messages_blocking(claude_path, query, filters, limit)
     })

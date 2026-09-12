@@ -29,20 +29,20 @@ fn candidate_db_paths() -> Vec<PathBuf> {
     let mut paths = Vec::new();
 
     // GOOSE_PATH_ROOT override → <root>/data/sessions/sessions.db
-    if let Ok(root) = std::env::var("GOOSE_PATH_ROOT") {
+    if let Ok(root) = crate::sources::env_var("GOOSE_PATH_ROOT") {
         let root = root.trim();
         if !root.is_empty() {
             paths.push(PathBuf::from(root).join("data/sessions/sessions.db"));
         }
     }
     // $XDG_DATA_HOME/goose/sessions/sessions.db
-    if let Ok(xdg) = std::env::var("XDG_DATA_HOME") {
+    if let Ok(xdg) = crate::sources::env_var("XDG_DATA_HOME") {
         let xdg = xdg.trim();
         if !xdg.is_empty() {
             paths.push(PathBuf::from(xdg).join("goose/sessions/sessions.db"));
         }
     }
-    if let Some(home) = crate::utils::home_dir() {
+    if let Some(home) = crate::sources::home_dir() {
         // XDG default (Linux, and macOS under Goose's etcetera strategy).
         paths.push(home.join(".local/share/goose/sessions/sessions.db"));
         // macOS Apple-strategy fallback.
@@ -51,7 +51,7 @@ fn candidate_db_paths() -> Vec<PathBuf> {
     }
     // Windows: %APPDATA%\Block\goose\data\sessions\sessions.db
     #[cfg(target_os = "windows")]
-    if let Some(data) = dirs::data_dir() {
+    if let Some(data) = crate::sources::data_dir() {
         paths.push(data.join("Block/goose/data/sessions/sessions.db"));
     }
 
@@ -83,13 +83,7 @@ pub fn get_base_path() -> Option<String> {
 
 fn open_db() -> Result<Connection, String> {
     let path = get_db_path().ok_or("Goose sessions DB not found")?;
-    open_db_at(&path)
-}
-
-/// Open a Goose sessions database at an explicit path (snapshot copy or live
-/// file), read-only. Snapshot copies are validated at capture time.
-fn open_db_at(path: &std::path::Path) -> Result<Connection, String> {
-    let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+    let conn = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(|e| format!("Failed to open Goose DB: {e}"))?;
     conn.busy_timeout(std::time::Duration::from_secs(5))
         .map_err(|e| format!("Failed to set busy timeout: {e}"))?;
@@ -101,96 +95,7 @@ pub fn scan_projects() -> Result<Vec<ClaudeProject>, String> {
     scan_in_conn(&open_db()?)
 }
 
-// ============================================================================
-// Archive glue (snapshot-backed reads; the `*_conn` seams above are reused
-// against the snapshotted database copy, never the live one).
-// ============================================================================
-
-use crate::storage::registry::DiscoveredSource as ArchiveDiscoveredSource;
-use crate::storage::{SnapshotInfo as ArchiveSnapshotInfo, Source as ArchiveSource};
-
-/// Database filename (identical across all candidate locations).
-fn db_file_name(db: &std::path::Path) -> Option<String> {
-    db.file_name().and_then(|n| n.to_str()).map(str::to_string)
-}
-
-/// Physical Goose sessions dir on this machine, if the database exists.
-pub(crate) fn archive_discover() -> Vec<ArchiveDiscoveredSource> {
-    let machine = crate::storage::registry::discovery_machine_id();
-    match get_db_path() {
-        Some(db) => match (db.parent(), db_file_name(&db)) {
-            (Some(base), Some(file_name)) => {
-                let mut found = ArchiveDiscoveredSource::local(
-                    crate::storage::ROLE_PRIMARY,
-                    base.to_path_buf(),
-                    &machine,
-                );
-                found.sqlite_dbs = vec![file_name];
-                vec![found]
-            }
-            _ => Vec::new(),
-        },
-        None => Vec::new(),
-    }
-}
-
-/// Open the snapshotted database copy for a source. The filename comes from
-/// the source record (written at discovery), never the live filesystem, so
-/// reads keep working after the live database is gone.
-fn archive_conn(
-    source: &ArchiveSource,
-    snapshot: &ArchiveSnapshotInfo,
-) -> Result<Connection, String> {
-    let file_name = source
-        .sqlite_dbs
-        .first()
-        .ok_or("Goose source has no captured database")?;
-    open_db_at(&snapshot.data_path.join(file_name))
-}
-
-/// Scan projects from the snapshot database.
-pub(crate) fn archive_scan(
-    source: &ArchiveSource,
-    snapshot: &ArchiveSnapshotInfo,
-) -> Result<Vec<ClaudeProject>, String> {
-    scan_in_conn(&archive_conn(source, snapshot)?)
-}
-
-/// Sessions for a stable project URI, read from the snapshot database.
-pub(crate) fn archive_load_sessions(
-    source: &ArchiveSource,
-    snapshot: &ArchiveSnapshotInfo,
-    stable_project: &str,
-) -> Result<Vec<ClaudeSession>, String> {
-    let working_dir = stable_project
-        .strip_prefix(SCHEME)
-        .unwrap_or(stable_project);
-    load_sessions_conn(&archive_conn(source, snapshot)?, working_dir)
-}
-
-/// Messages for a stable session URI, read from the snapshot database.
-pub(crate) fn archive_load_messages(
-    source: &ArchiveSource,
-    snapshot: &ArchiveSnapshotInfo,
-    stable_session: &str,
-) -> Result<Vec<ClaudeMessage>, String> {
-    let session_id = stable_session
-        .strip_prefix(SCHEME)
-        .unwrap_or(stable_session);
-    load_messages_conn(&archive_conn(source, snapshot)?, session_id)
-}
-
-/// Search confined to one snapshot database.
-pub(crate) fn archive_search(
-    source: &ArchiveSource,
-    snapshot: &ArchiveSnapshotInfo,
-    query: &str,
-    limit: usize,
-) -> Result<Vec<ClaudeMessage>, String> {
-    search_conn(&archive_conn(source, snapshot)?, query, limit)
-}
-
-pub(crate) fn scan_in_conn(conn: &Connection) -> Result<Vec<ClaudeProject>, String> {
+fn scan_in_conn(conn: &Connection) -> Result<Vec<ClaudeProject>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT COALESCE(NULLIF(s.working_dir, ''), 'unknown') AS working_dir, \
@@ -247,10 +152,7 @@ pub fn load_sessions(
     load_sessions_conn(&open_db()?, working_dir)
 }
 
-pub(crate) fn load_sessions_conn(
-    conn: &Connection,
-    working_dir: &str,
-) -> Result<Vec<ClaudeSession>, String> {
+fn load_sessions_conn(conn: &Connection, working_dir: &str) -> Result<Vec<ClaudeSession>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT s.id, s.name, s.description, s.created_at, s.updated_at, \
@@ -314,10 +216,7 @@ pub fn load_messages(session_path: &str) -> Result<Vec<ClaudeMessage>, String> {
     load_messages_conn(&open_db()?, session_id)
 }
 
-pub(crate) fn load_messages_conn(
-    conn: &Connection,
-    session_id: &str,
-) -> Result<Vec<ClaudeMessage>, String> {
+fn load_messages_conn(conn: &Connection, session_id: &str) -> Result<Vec<ClaudeMessage>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT id, role, content_json, created_timestamp, message_id \
@@ -361,11 +260,7 @@ pub fn search(query: &str, limit: usize) -> Result<Vec<ClaudeMessage>, String> {
     search_conn(&open_db()?, query, limit)
 }
 
-pub(crate) fn search_conn(
-    conn: &Connection,
-    query: &str,
-    limit: usize,
-) -> Result<Vec<ClaudeMessage>, String> {
+fn search_conn(conn: &Connection, query: &str, limit: usize) -> Result<Vec<ClaudeMessage>, String> {
     let pattern = format!("%{query}%");
     let query_lower = query.to_lowercase();
 

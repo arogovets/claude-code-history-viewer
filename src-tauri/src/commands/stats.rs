@@ -620,7 +620,7 @@ fn is_antigravity_path(path: &str) -> bool {
 /// Whether `path` lies under `~/.codebuddy/projects/`. Anchored detection avoids
 /// false positives from arbitrary substrings (e.g. `/work/foo.codebuddy-test`).
 fn is_codebuddy_path(path: &str) -> bool {
-    let Some(home) = crate::utils::home_dir() else {
+    let Some(home) = crate::sources::home_dir() else {
         return false;
     };
     is_codebuddy_path_under(path, &home)
@@ -649,7 +649,7 @@ fn is_kimi_path(path: &str) -> bool {
 /// (`~/.omp/agent/sessions/`). Anchored detection avoids false positives
 /// from arbitrary substrings (e.g. `/work/foo.omp-agent-test`).
 fn is_ompi_path(path: &str) -> bool {
-    let Some(home) = crate::utils::home_dir() else {
+    let Some(home) = crate::sources::home_dir() else {
         return false;
     };
     is_ompi_path_under(path, &home)
@@ -665,7 +665,7 @@ fn is_ompi_path_under(path: &str, home: &Path) -> bool {
 /// Whether `path` lies under the Pi sessions store root
 /// (`~/.pi/agent/sessions/`).
 fn is_pi_path(path: &str) -> bool {
-    let Some(home) = crate::utils::home_dir() else {
+    let Some(home) = crate::sources::home_dir() else {
         return false;
     };
     is_pi_path_under(path, &home)
@@ -1599,7 +1599,7 @@ fn load_stats_messages(
 }
 
 /// Collect global stats rows for a non-Claude provider.
-fn collect_provider_global_file_stats(
+fn collect_provider_global_file_stats_in_source(
     provider: StatsProvider,
     mode: StatsMode,
     s_limit: Option<&DateTime<Utc>>,
@@ -3969,9 +3969,9 @@ fn get_provider_session_comparison(
     })
 }
 
-#[tauri::command]
 /// Return token stats for a single session.
-pub async fn get_session_token_stats(
+#[allow(clippy::unused_async)]
+async fn get_session_token_stats_in_source(
     session_path: String,
     start_date: Option<String>,
     end_date: Option<String>,
@@ -4288,9 +4288,9 @@ fn scan_session_token_stats(
     })
 }
 
-#[tauri::command]
 /// Return paginated token stats for a project.
-pub async fn get_project_token_stats(
+#[allow(clippy::unused_async)]
+async fn get_project_token_stats_in_source(
     project_path: String,
     offset: Option<usize>,
     limit: Option<usize>,
@@ -4383,9 +4383,9 @@ pub async fn get_project_token_stats(
     })
 }
 
-#[tauri::command]
 /// Return an aggregate stats summary for a project.
-pub async fn get_project_stats_summary(
+#[allow(clippy::unused_async)]
+async fn get_project_stats_summary_in_source(
     project_path: String,
     start_date: Option<String>,
     end_date: Option<String>,
@@ -4730,9 +4730,9 @@ fn scan_session_file_for_comparison(
     })
 }
 
-#[tauri::command]
 /// Compare a session against the rest of its project.
-pub async fn get_session_comparison(
+#[allow(clippy::unused_async)]
+async fn get_session_comparison_in_source(
     session_id: String,
     project_path: String,
     start_date: Option<String>,
@@ -4920,6 +4920,34 @@ pub async fn get_global_stats_summary(
     end_date: Option<String>,
     custom_claude_paths: Option<Vec<crate::commands::multi_provider::CustomClaudePathParam>>,
 ) -> Result<GlobalStatsSummary, String> {
+    #[cfg(not(test))]
+    let (claude_path, custom_claude_paths) = {
+        let _ = (claude_path, custom_claude_paths);
+        let mut paths = crate::sources::list()?
+            .into_iter()
+            .map(
+                |source| crate::commands::multi_provider::CustomClaudePathParam {
+                    path: source
+                        .current
+                        .join(".claude")
+                        .to_string_lossy()
+                        .into_owned(),
+                    label: Some(source.label),
+                },
+            )
+            .collect::<Vec<_>>();
+        let first = if paths.is_empty() {
+            crate::sources::root()
+                .ok_or("No mirror root")?
+                .join("_uncollected/.claude")
+                .to_string_lossy()
+                .into_owned()
+        } else {
+            paths.remove(0).path
+        };
+        (first, Some(paths))
+    };
+
     let mode = parse_stats_mode(stats_mode);
     let providers_to_include = parse_active_stats_providers(active_providers);
     let s_limit = parse_date_limit(start_date, "global start_date");
@@ -5004,7 +5032,13 @@ pub async fn get_global_stats_summary(
     let e_ref = e_limit.as_ref();
     let mut file_stats: Vec<SessionFileStats> = session_files
         .par_iter()
-        .filter_map(|path| process_session_file_for_global_stats(path, mode, s_ref, e_ref))
+        .filter_map(|path| {
+            let mut stats = process_session_file_for_global_stats(path, mode, s_ref, e_ref)?;
+            if let Some(source) = crate::sources::for_path(path) {
+                stats.project_name = format!("{}: {}", source.id, stats.project_name);
+            }
+            Some(stats)
+        })
         .collect();
 
     if providers_to_include.contains(&StatsProvider::Codebuddy) {
@@ -6474,7 +6508,7 @@ mod tests {
 
         assert_eq!(detect_project_provider(&project_path), StatsProvider::Grok);
 
-        let summary = get_project_stats_summary(project_path.clone(), None, None, None)
+        let summary = get_project_stats_summary_in_source(project_path.clone(), None, None, None)
             .await
             .expect("grok virtual project path should load stats");
         assert_eq!(summary.project_name, "demo");
@@ -6620,7 +6654,7 @@ mod tests {
             StatsProvider::Cursor
         );
 
-        let summary = get_project_stats_summary(project_path.clone(), None, None, None)
+        let summary = get_project_stats_summary_in_source(project_path.clone(), None, None, None)
             .await
             .expect("cursor virtual project path should load stats");
         assert_eq!(summary.project_name, "demo");
@@ -7000,7 +7034,7 @@ mod tests {
 
         let project_path_str = project_dir.to_string_lossy().to_string();
 
-        let project_summary = get_project_stats_summary(
+        let project_summary = get_project_stats_summary_in_source(
             project_path_str.clone(),
             None,
             None,
@@ -7009,7 +7043,7 @@ mod tests {
         .await
         .expect("failed to get project summary");
 
-        let token_list = get_project_token_stats(
+        let token_list = get_project_token_stats_in_source(
             project_path_str.clone(),
             Some(0),
             Some(20),
@@ -7078,7 +7112,7 @@ mod tests {
         assert_eq!(global_billing.total_tokens, 330);
         assert_eq!(global_conversation.total_tokens, 110);
 
-        let project_billing = get_project_stats_summary(
+        let project_billing = get_project_stats_summary_in_source(
             project_path_str.clone(),
             None,
             None,
@@ -7086,7 +7120,7 @@ mod tests {
         )
         .await
         .expect("failed to get project billing stats");
-        let project_conversation = get_project_stats_summary(
+        let project_conversation = get_project_stats_summary_in_source(
             project_path_str.clone(),
             None,
             None,
@@ -7101,7 +7135,7 @@ mod tests {
             global_conversation.total_tokens
         );
 
-        let project_token_billing = get_project_token_stats(
+        let project_token_billing = get_project_token_stats_in_source(
             project_path_str.clone(),
             Some(0),
             Some(20),
@@ -7111,7 +7145,7 @@ mod tests {
         )
         .await
         .expect("failed to get project token billing stats");
-        let project_token_conversation = get_project_token_stats(
+        let project_token_conversation = get_project_token_stats_in_source(
             project_path_str,
             Some(0),
             Some(20),
@@ -7138,7 +7172,7 @@ mod tests {
             global_conversation.total_tokens
         );
 
-        let session_billing = get_session_token_stats(
+        let session_billing = get_session_token_stats_in_source(
             session_path_str.clone(),
             None,
             None,
@@ -7146,7 +7180,7 @@ mod tests {
         )
         .await
         .expect("failed to get session billing stats");
-        let session_conversation = get_session_token_stats(
+        let session_conversation = get_session_token_stats_in_source(
             session_path_str,
             None,
             None,
@@ -7183,7 +7217,7 @@ mod tests {
         writeln!(file, "{day2}").expect("failed to write day2");
 
         // Per-message filtering: only day2 (Jan 2) is in range.
-        let stats = get_session_token_stats(
+        let stats = get_session_token_stats_in_source(
             session_path.to_string_lossy().to_string(),
             Some("2025-01-02T00:00:00Z".to_string()),
             Some("2025-01-02T23:59:59.999Z".to_string()),
@@ -7198,7 +7232,7 @@ mod tests {
         assert_eq!(stats.total_tokens, 22);
 
         // Per-message filtering: only day1 (Jan 1) is in range.
-        let day1_stats = get_session_token_stats(
+        let day1_stats = get_session_token_stats_in_source(
             session_path.to_string_lossy().to_string(),
             Some("2025-01-01T00:00:00Z".to_string()),
             Some("2025-01-01T23:59:59.999Z".to_string()),
@@ -7213,7 +7247,7 @@ mod tests {
         assert_eq!(day1_stats.total_tokens, 11);
 
         // No messages in range → error.
-        let filtered_out = get_session_token_stats(
+        let filtered_out = get_session_token_stats_in_source(
             session_path.to_string_lossy().to_string(),
             Some("2024-12-01T00:00:00Z".to_string()),
             Some("2024-12-31T23:59:59.999Z".to_string()),
@@ -7249,7 +7283,7 @@ mod tests {
 
         let project_path = project_dir.to_string_lossy().to_string();
 
-        let comparison = get_session_comparison(
+        let comparison = get_session_comparison_in_source(
             "s-b".to_string(),
             project_path.clone(),
             Some("2025-01-02T00:00:00Z".to_string()),
@@ -7261,7 +7295,7 @@ mod tests {
         assert_eq!(comparison.session_id, "s-b");
         assert_eq!(comparison.rank_by_tokens, 1);
 
-        let filtered_out = get_session_comparison(
+        let filtered_out = get_session_comparison_in_source(
             "s-a".to_string(),
             project_path,
             Some("2025-01-02T00:00:00Z".to_string()),
@@ -7296,7 +7330,7 @@ mod tests {
         let line_b = r#"{"uuid":"ub","sessionId":"s-b","timestamp":"2025-01-01T20:00:00Z","type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"b"}],"id":"mb","model":"claude-sonnet-4","usage":{"input_tokens":20,"output_tokens":2}},"isSidechain":false}"#;
         writeln!(file_b, "{line_b}").expect("failed to write session b");
 
-        let summary = get_project_stats_summary(
+        let summary = get_project_stats_summary_in_source(
             project_dir.to_string_lossy().to_string(),
             None,
             None,
@@ -7681,7 +7715,7 @@ mod tests {
         // it cannot race with other HOME-touching tests.
         let original_home = std::env::var("HOME").ok();
         std::env::set_var("HOME", home);
-        // `HOME` is inert on Windows; this is what `crate::utils::home_dir()`
+        // `HOME` is inert on Windows; this is what `crate::sources::home_dir()`
         // reads under `cfg(test)` (#540).
         std::env::set_var("CCHV_TEST_HOME", home);
 
@@ -7827,7 +7861,7 @@ mod tests {
         let session_path =
             "forgecode-db://workspace/workspace-alpha/conversation/conv-001".to_string();
 
-        let session_stats = get_session_token_stats(
+        let session_stats = get_session_token_stats_in_source(
             session_path.clone(),
             None,
             None,
@@ -7840,7 +7874,7 @@ mod tests {
         assert_eq!(session_stats.total_tokens, 165);
         assert_eq!(session_stats.message_count, 2);
 
-        let project_stats = get_project_token_stats(
+        let project_stats = get_project_token_stats_in_source(
             project_path.clone(),
             Some(0),
             Some(20),
@@ -7857,7 +7891,7 @@ mod tests {
         );
         assert_eq!(project_stats.items[0].total_tokens, 165);
 
-        let summary = get_project_stats_summary(
+        let summary = get_project_stats_summary_in_source(
             project_path.clone(),
             None,
             None,
@@ -8570,4 +8604,109 @@ mod tests {
         assert_eq!(usage.cache_creation_input_tokens_1h, Some(5));
         assert_eq!(usage.service_tier.as_deref(), Some("standard"));
     }
+}
+
+#[tauri::command]
+pub async fn get_session_token_stats(
+    session_path: String,
+    start_date: Option<String>,
+    end_date: Option<String>,
+    stats_mode: Option<String>,
+) -> Result<SessionTokenStats, String> {
+    let (source, session_path) = crate::sources::resolve(&session_path)?;
+    crate::sources::scope(
+        source.current,
+        get_session_token_stats_in_source(session_path, start_date, end_date, stats_mode),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn get_project_token_stats(
+    project_path: String,
+    offset: Option<usize>,
+    limit: Option<usize>,
+    start_date: Option<String>,
+    end_date: Option<String>,
+    stats_mode: Option<String>,
+) -> Result<PaginatedTokenStats, String> {
+    let (source, project_path) = crate::sources::resolve(&project_path)?;
+    crate::sources::scope(
+        source.current,
+        get_project_token_stats_in_source(
+            project_path,
+            offset,
+            limit,
+            start_date,
+            end_date,
+            stats_mode,
+        ),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn get_project_stats_summary(
+    project_path: String,
+    start_date: Option<String>,
+    end_date: Option<String>,
+    stats_mode: Option<String>,
+) -> Result<ProjectStatsSummary, String> {
+    let (source, project_path) = crate::sources::resolve(&project_path)?;
+    crate::sources::scope(
+        source.current,
+        get_project_stats_summary_in_source(project_path, start_date, end_date, stats_mode),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn get_session_comparison(
+    session_id: String,
+    project_path: String,
+    start_date: Option<String>,
+    end_date: Option<String>,
+    stats_mode: Option<String>,
+) -> Result<SessionComparison, String> {
+    let (source, project_path) = crate::sources::resolve(&project_path)?;
+    let session_id = session_id
+        .strip_prefix(&format!("source:{}|", source.id))
+        .unwrap_or(&session_id)
+        .to_owned();
+    crate::sources::scope(
+        source.current,
+        get_session_comparison_in_source(
+            session_id,
+            project_path,
+            start_date,
+            end_date,
+            stats_mode,
+        ),
+    )
+    .await
+}
+
+fn collect_provider_global_file_stats(
+    provider: StatsProvider,
+    mode: StatsMode,
+    s_limit: Option<&DateTime<Utc>>,
+    e_limit: Option<&DateTime<Utc>>,
+) -> (Vec<SessionFileStats>, HashSet<String>) {
+    #[cfg(test)]
+    if crate::sources::list().unwrap_or_default().is_empty() {
+        return collect_provider_global_file_stats_in_source(provider, mode, s_limit, e_limit);
+    }
+    let mut stats = Vec::new();
+    let mut projects = HashSet::new();
+    for source in crate::sources::list().unwrap_or_default() {
+        let (mut found, keys) = crate::sources::sync_scope(source.current, || {
+            collect_provider_global_file_stats_in_source(provider, mode, s_limit, e_limit)
+        });
+        for item in &mut found {
+            item.project_name = format!("{}: {}", source.id, item.project_name);
+        }
+        stats.extend(found);
+        projects.extend(keys.into_iter().map(|key| format!("{}:{key}", source.id)));
+    }
+    (stats, projects)
 }

@@ -34,6 +34,8 @@ export interface SessionMetadata {
 
 /** Metadata for individual projects */
 export interface ProjectMetadata {
+  description?: string;
+  links?: string[];
   /** Whether the project is hidden from the sidebar */
   hidden?: boolean;
   /** Custom alias/display name for the project */

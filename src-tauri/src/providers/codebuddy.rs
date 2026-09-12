@@ -29,7 +29,7 @@ pub fn detect() -> Option<ProviderInfo> {
 
 /// Get the `CodeBuddy` projects base path (`~/.codebuddy/projects`)
 pub fn get_base_path() -> Option<String> {
-    let home = crate::utils::home_dir()?;
+    let home = crate::sources::home_dir()?;
     let projects_path = home.join(".codebuddy").join("projects");
     if projects_path.exists() && projects_path.is_dir() {
         Some(projects_path.to_string_lossy().to_string())
@@ -41,7 +41,7 @@ pub fn get_base_path() -> Option<String> {
 /// Scan `CodeBuddy` projects under the user's `~/.codebuddy/projects` root.
 ///
 /// Thin wrapper over [`scan_projects_in`] that resolves the production root
-/// from `crate::utils::home_dir()`. Tests should call `scan_projects_in` directly with
+/// from `crate::sources::home_dir()`. Tests should call `scan_projects_in` directly with
 /// a tempdir so the assertion runs against the real production code path
 /// instead of a copy of the loop logic.
 pub fn scan_projects() -> Result<Vec<ClaudeProject>, String> {
@@ -214,19 +214,6 @@ fn read_cwd_from_jsonls(candidates: &[std::path::PathBuf]) -> Option<String> {
 /// Load sessions for a `CodeBuddy` project
 pub fn load_sessions(
     project_path: &str,
-    exclude_sidechain: bool,
-) -> Result<Vec<ClaudeSession>, String> {
-    if project_path.trim().is_empty() {
-        return Err("project_path is required".to_string());
-    }
-    let base_path = get_base_path().ok_or("CodeBuddy projects path not found")?;
-    load_sessions_in(Path::new(&base_path), project_path, exclude_sidechain)
-}
-
-/// [`load_sessions`] against an explicit projects root (snapshot or live).
-pub fn load_sessions_in(
-    base: &Path,
-    project_path: &str,
     _exclude_sidechain: bool,
 ) -> Result<Vec<ClaudeSession>, String> {
     if project_path.trim().is_empty() {
@@ -238,10 +225,10 @@ pub fn load_sessions_in(
         return Ok(vec![]);
     }
 
-    // Defense-in-depth: confine traversal to the projects root.
+    // Defense-in-depth: confine traversal to ~/.codebuddy/projects/<project>.
     // Reject paths outside this root (path traversal) and reject the project
     // dir itself if it is a symlink (potential symlink attack).
-    validate_session_path_at(project_dir, base)?;
+    validate_session_path(project_dir)?;
     if std::fs::symlink_metadata(project_dir)
         .map(|m| m.file_type().is_symlink())
         .unwrap_or(false)
@@ -282,19 +269,12 @@ pub fn load_sessions_in(
 /// Load messages from a `CodeBuddy` session file
 #[allow(unsafe_code)]
 pub fn load_messages(session_path: &str) -> Result<Vec<ClaudeMessage>, String> {
-    let base_path = get_base_path().ok_or("CodeBuddy projects path not found")?;
-    load_messages_in(Path::new(&base_path), session_path)
-}
-
-/// [`load_messages`] against an explicit projects root (snapshot or live).
-#[allow(unsafe_code)]
-pub fn load_messages_in(base: &Path, session_path: &str) -> Result<Vec<ClaudeMessage>, String> {
     let path = Path::new(session_path);
     if !path.exists() {
         return Err(format!("Session file not found: {session_path}"));
     }
 
-    validate_session_path_at(path, base)?;
+    validate_session_path(path)?;
 
     let file = File::open(path).map_err(|e| e.to_string())?;
     // SAFETY: File is read-only and we only read from the mapping
@@ -355,11 +335,7 @@ pub fn load_messages_in(base: &Path, session_path: &str) -> Result<Vec<ClaudeMes
 /// Search `CodeBuddy` sessions for a query string
 pub fn search(query: &str, limit: usize) -> Result<Vec<ClaudeMessage>, String> {
     let base_path = get_base_path().ok_or("CodeBuddy not found")?;
-    search_in(Path::new(&base_path), query, limit)
-}
-
-/// [`search`] against an explicit projects root (snapshot or live).
-pub fn search_in(base: &Path, query: &str, limit: usize) -> Result<Vec<ClaudeMessage>, String> {
+    let base = Path::new(&base_path);
     let query_lower = query.to_lowercase();
     let mut results = Vec::new();
 
@@ -372,7 +348,7 @@ pub fn search_in(base: &Path, query: &str, limit: usize) -> Result<Vec<ClaudeMes
             break;
         }
 
-        if let Ok(messages) = load_messages_in(base, &entry.path().to_string_lossy()) {
+        if let Ok(messages) = load_messages(&entry.path().to_string_lossy()) {
             for msg in messages {
                 if results.len() >= limit {
                     return Ok(results);
@@ -394,8 +370,10 @@ pub fn search_in(base: &Path, query: &str, limit: usize) -> Result<Vec<ClaudeMes
 // ============================================================================
 
 /// Validate that a session path is within `~/.codebuddy/projects`
-/// Confine `path` to an explicit projects root (snapshot or live).
-fn validate_session_path_at(path: &Path, allowed: &Path) -> Result<(), String> {
+fn validate_session_path(path: &Path) -> Result<(), String> {
+    let home = crate::sources::home_dir().ok_or("Could not find home directory")?;
+    let allowed = home.join(".codebuddy").join("projects");
+
     let canonical = if path.exists() {
         path.canonicalize()
             .map_err(|e| format!("Path canonicalization error: {e}"))?
@@ -408,7 +386,7 @@ fn validate_session_path_at(path: &Path, allowed: &Path) -> Result<(), String> {
             .canonicalize()
             .map_err(|e| format!("Path canonicalization error: {e}"))?
     } else {
-        allowed.to_path_buf()
+        allowed
     };
 
     if canonical.starts_with(&canonical_allowed) {
@@ -419,73 +397,6 @@ fn validate_session_path_at(path: &Path, allowed: &Path) -> Result<(), String> {
             path.display()
         ))
     }
-}
-
-// ============================================================================
-// Archive glue (snapshot-backed reads; the explicit-root seams above are reused).
-// ============================================================================
-
-use crate::storage::registry::DiscoveredSource as ArchiveDiscoveredSource;
-use crate::storage::{SnapshotInfo as ArchiveSnapshotInfo, Source as ArchiveSource};
-
-/// Physical `CodeBuddy` projects root on this machine, if present.
-pub(crate) fn archive_discover() -> Vec<ArchiveDiscoveredSource> {
-    let machine = crate::storage::registry::discovery_machine_id();
-    match get_base_path() {
-        Some(base) => vec![ArchiveDiscoveredSource::local(
-            crate::storage::ROLE_PRIMARY,
-            std::path::PathBuf::from(base),
-            &machine,
-        )],
-        None => Vec::new(),
-    }
-}
-
-/// Scan projects under an explicit root (snapshot data root at runtime).
-pub(crate) fn archive_scan(
-    _source: &ArchiveSource,
-    snapshot: &ArchiveSnapshotInfo,
-) -> Result<Vec<ClaudeProject>, String> {
-    scan_projects_in(&snapshot.data_path)
-}
-
-fn archive_mapped(
-    source: &ArchiveSource,
-    snapshot: &ArchiveSnapshotInfo,
-    stable: &str,
-) -> Result<String, String> {
-    crate::storage::registry::map_absolute_to_snapshot(source, snapshot, stable)
-        .ok_or_else(|| format!("No preserved snapshot covers {stable}"))
-}
-
-/// Sessions for a stable project, read from the snapshot.
-pub(crate) fn archive_load_sessions(
-    source: &ArchiveSource,
-    snapshot: &ArchiveSnapshotInfo,
-    stable_project: &str,
-) -> Result<Vec<ClaudeSession>, String> {
-    let mapped = archive_mapped(source, snapshot, stable_project)?;
-    load_sessions_in(&snapshot.data_path, &mapped, false)
-}
-
-/// Messages for a stable session, read from the snapshot.
-pub(crate) fn archive_load_messages(
-    source: &ArchiveSource,
-    snapshot: &ArchiveSnapshotInfo,
-    stable_session: &str,
-) -> Result<Vec<ClaudeMessage>, String> {
-    let mapped = archive_mapped(source, snapshot, stable_session)?;
-    load_messages_in(&snapshot.data_path, &mapped)
-}
-
-/// Search confined to one snapshot.
-pub(crate) fn archive_search(
-    _source: &ArchiveSource,
-    snapshot: &ArchiveSnapshotInfo,
-    query: &str,
-    limit: usize,
-) -> Result<Vec<ClaudeMessage>, String> {
-    search_in(&snapshot.data_path, query, limit)
 }
 
 /// Convert a numeric or string timestamp to ISO 8601 string.

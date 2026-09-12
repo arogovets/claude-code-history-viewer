@@ -326,8 +326,6 @@ pub struct ScanAllProjectsParams {
     pub wsl_enabled: Option<bool>,
     #[serde(default)]
     pub wsl_excluded_distros: Option<Vec<String>>,
-    #[serde(default)]
-    pub include_remote: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -349,19 +347,6 @@ pub struct ProviderSessionsPageParams {
     #[serde(default)]
     pub offset: Option<usize>,
     #[serde(default)]
-    pub limit: Option<usize>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LocateSessionParams {
-    pub session_id: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SearchSessionsByIdParams {
-    pub query: String,
     pub limit: Option<usize>,
 }
 
@@ -415,8 +400,6 @@ pub struct SearchAllProvidersParams {
     pub wsl_enabled: Option<bool>,
     #[serde(default)]
     pub wsl_excluded_distros: Option<Vec<String>>,
-    #[serde(default)]
-    pub include_remote: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -909,7 +892,6 @@ handler_json!(
             p.custom_claude_paths,
             p.wsl_enabled,
             p.wsl_excluded_distros,
-            p.include_remote,
         )
         .await
     }
@@ -940,20 +922,6 @@ handler_json!(
             p.limit,
         )
         .await
-    }
-);
-
-handler_json!(
-    locate_session,
-    LocateSessionParams,
-    |p: LocateSessionParams| async move { commands::session::locate_session(p.session_id).await }
-);
-
-handler_json!(
-    search_sessions_by_id,
-    SearchSessionsByIdParams,
-    |p: SearchSessionsByIdParams| async move {
-        commands::session::search_sessions_by_id(p.query, p.limit).await
     }
 );
 
@@ -1008,57 +976,10 @@ handler_json!(
             p.custom_claude_paths,
             p.wsl_enabled,
             p.wsl_excluded_distros,
-            p.include_remote,
         )
         .await
     }
 );
-
-// ─── Handlers: FILE SYNC (raw provider files → caller-owned snapshots) ───────
-// Read-only: they expose the same conversation bytes the parsed endpoints
-// already serve, in file form so the aggregator can preserve history.
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SyncSourcesParams {
-    #[serde(default)]
-    pub providers: Option<Vec<String>>,
-}
-
-handler_json!(
-    sync_sources,
-    SyncSourcesParams,
-    |p: SyncSourcesParams| async move { commands::sync_transport::list_sync_sources(p.providers).await }
-);
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SyncManifestParams {
-    pub provider: String,
-    #[serde(default)]
-    pub root: Option<String>,
-}
-
-handler_json!(
-    sync_manifest,
-    SyncManifestParams,
-    |p: SyncManifestParams| async move {
-        commands::sync_transport::sync_manifest(p.provider, p.root).await
-    }
-);
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SyncFileParams {
-    pub provider: String,
-    #[serde(default)]
-    pub root: Option<String>,
-    pub path: String,
-}
-
-handler_json!(sync_file, SyncFileParams, |p: SyncFileParams| async move {
-    commands::sync_transport::read_sync_file(p.provider, p.root, p.path).await
-});
 
 // ─── Handlers: STATE PARAMS (MetadataState) ───────────────────────────────────
 
@@ -1404,14 +1325,25 @@ handler_json!(
     }
 );
 
-// Project Kanban uses the same persistence and validation in desktop and WebUI.
-handler_no_params!(load_kanban, commands::kanban::load_kanban);
+pub async fn load_kanban() -> Result<Json<Value>, ApiError> {
+    Ok(Json(
+        serde_json::to_value(commands::kanban::load_kanban().await.map_err(ApiError)?)
+            .map_err(|error| ApiError(error.to_string()))?,
+    ))
+}
+
 #[derive(Deserialize)]
 pub struct SaveKanbanParams {
     pub data: commands::kanban::KanbanData,
 }
-handler_json!(
-    save_kanban,
-    SaveKanbanParams,
-    |p: SaveKanbanParams| async move { commands::kanban::save_kanban(p.data).await }
-);
+
+pub async fn save_kanban(Json(params): Json<SaveKanbanParams>) -> Result<Json<Value>, ApiError> {
+    Ok(Json(
+        serde_json::to_value(
+            commands::kanban::save_kanban(params.data)
+                .await
+                .map_err(ApiError)?,
+        )
+        .map_err(|error| ApiError(error.to_string()))?,
+    ))
+}

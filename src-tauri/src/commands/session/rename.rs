@@ -99,6 +99,7 @@ pub async fn rename_session_native(
     file_path: String,
     new_title: String,
 ) -> Result<NativeRenameResult, String> {
+    crate::sources::require_mutable_history(&file_path)?;
     if file_path.starts_with("forgecode://") || file_path.starts_with("forgecode-db://") {
         return crate::providers::forgecode::rename_session_title(&file_path, &new_title);
     }
@@ -898,6 +899,7 @@ fn find_first_user_message_index(lines: &[String]) -> Result<usize, String> {
 /// Resets session name to original (removes title prefix)
 #[command]
 pub async fn reset_session_native_name(file_path: String) -> Result<NativeRenameResult, String> {
+    crate::sources::require_mutable_history(&file_path)?;
     rename_session_native(file_path, String::new()).await
 }
 
@@ -907,6 +909,7 @@ pub async fn rename_opencode_session_title(
     session_path: String,
     new_title: String,
 ) -> Result<NativeRenameResult, String> {
+    crate::sources::require_mutable_history(&session_path)?;
     let (project_id, session_id) = parse_opencode_session_path(&session_path)?;
 
     let base_path = crate::providers::opencode::get_base_path().ok_or_else(|| {

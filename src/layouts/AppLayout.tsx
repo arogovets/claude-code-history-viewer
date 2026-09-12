@@ -1,4 +1,8 @@
 import React from "react";
+import { toast } from "sonner";
+import { writeWebUIDeepLink } from "@/utils/webuiDeepLink";
+import { ProjectKanban } from "@/components/ProjectKanban/ProjectKanban";
+import { ProjectDetails } from "@/components/ProjectKanban/ProjectDetails";
 import { OverlayScrollbarsComponent } from "overlayscrollbars-react";
 import { useTranslation } from "react-i18next";
 import {
@@ -248,6 +252,26 @@ export const AppLayout: React.FC<AppLayoutProps> = (props) => {
     setAnalyticsCurrentView("recentEdits");
   };
 
+  const isKanbanView = analyticsState.currentView === "kanban";
+  const isProjectDetailsView = analyticsState.currentView === "projectDetails";
+  const openKanbanProject = async (project: ClaudeProject) => {
+    try {
+      setIsViewingGlobalStats(false);
+      if (
+        selectedProject?.path !== project.path ||
+        selectedProject?.provider !== project.provider
+      ) {
+        analyticsActions.clearAll();
+        setDateFilter({ start: null, end: null });
+        await useAppStore.getState().selectProject(project);
+      }
+      writeWebUIDeepLink({ sessionId: null, messageId: null });
+      setAnalyticsCurrentView("projectDetails");
+    } catch (error) {
+      toast.error(String(error));
+    }
+  };
+
   // Error State
   if (error && error.type !== AppErrorType.CLAUDE_FOLDER_NOT_FOUND) {
     return (
@@ -263,7 +287,7 @@ export const AppLayout: React.FC<AppLayoutProps> = (props) => {
           <div className="flex items-center justify-center gap-3">
             <button
               onClick={() => {
-                setError(null);
+                useAppStore.getState().setError(null);
                 window.history.replaceState({}, "", window.location.pathname);
               }}
               className="action-btn secondary"
@@ -308,6 +332,8 @@ export const AppLayout: React.FC<AppLayoutProps> = (props) => {
     its own rather than through `currentView`.
   */
   const isTranscriptView = !(
+    isKanbanView ||
+    isProjectDetailsView ||
     computed.isArchiveView ||
     computed.isSettingsView ||
     computed.isBoardView ||
@@ -554,7 +580,7 @@ export const AppLayout: React.FC<AppLayoutProps> = (props) => {
             className="flex-1 flex flex-col min-w-0 bg-background pb-14 md:pb-0"
           >
             {/* Content Header for non-message views */}
-            {(computed.isTokenStatsView ||
+            {!isKanbanView && !isProjectDetailsView && (computed.isTokenStatsView ||
               computed.isAnalyticsView ||
               computed.isRecentEditsView ||
               computed.isSettingsView ||
@@ -670,7 +696,13 @@ export const AppLayout: React.FC<AppLayoutProps> = (props) => {
 
             {/* Content */}
             <div className="flex-1 overflow-hidden">
-              {computed.isArchiveView ? (
+              {isKanbanView ? (
+                <ProjectKanban
+                  onOpenProject={(project) => void openKanbanProject(project)}
+                />
+              ) : isProjectDetailsView && selectedProject ? (
+                <ProjectDetails project={selectedProject} onSessionSelect={handleSessionSelect} />
+              ) : computed.isArchiveView ? (
                 <div className="h-full flex flex-col p-3 md:p-6">
                   <ArchiveManager
                     className="flex-1 min-h-0"
@@ -788,6 +820,13 @@ export const AppLayout: React.FC<AppLayoutProps> = (props) => {
                     it belongs against the transcript it indexes; the dock is a
                     separate surface about the project and sits outside it.
                   */}
+                  {recentEditsDock}
+                </div>
+              ) : selectedProject ? (
+                <div className="flex h-full">
+                  <div className="min-w-0 flex-1">
+                    <ProjectDetails project={selectedProject} onSessionSelect={handleSessionSelect} />
+                  </div>
                   {recentEditsDock}
                 </div>
               ) : (

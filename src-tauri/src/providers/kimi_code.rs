@@ -61,7 +61,7 @@ const PROVIDER_ID: &str = "kimi";
 /// Scheme prefix distinguishing kimi-code workspace paths from the old
 /// CLI's `kimi://<dir>` paths inside the shared `kimi` provider.
 pub(crate) const SCHEME: &str = "kimi-code://";
-pub(crate) const SESSIONS_DIR: &str = "sessions";
+const SESSIONS_DIR: &str = "sessions";
 const AGENTS_DIR: &str = "agents";
 /// The primary agent of a session; subagent wires are sidechains and are
 /// not surfaced (same policy as the old CLI reader).
@@ -79,7 +79,7 @@ const SUMMARY_MAX_CHARS: usize = 200;
 /// Default kimi-code home. Mirrors the agent core's bootstrap: the
 /// `KIMI_CODE_HOME` env var overrides `~/.kimi-code`.
 pub(crate) fn default_root() -> Option<PathBuf> {
-    if let Ok(env_val) = std::env::var("KIMI_CODE_HOME") {
+    if let Ok(env_val) = crate::sources::env_var("KIMI_CODE_HOME") {
         let path = PathBuf::from(&env_val);
         let absolute = if path.is_absolute() {
             path
@@ -91,7 +91,7 @@ pub(crate) fn default_root() -> Option<PathBuf> {
         }
         return None;
     }
-    let default = crate::utils::home_dir()?.join(".kimi-code");
+    let default = crate::sources::home_dir()?.join(".kimi-code");
     default
         .exists()
         .then(|| default.canonicalize().unwrap_or(default))
@@ -135,15 +135,7 @@ pub fn load_sessions(workspace_dir: &str) -> Result<Vec<ClaudeSession>, String> 
     let Some(root) = default_root() else {
         return Ok(Vec::new());
     };
-    load_sessions_in(&root, workspace_dir)
-}
-
-/// [`load_sessions`] against an explicit store root (snapshot or live).
-pub(crate) fn load_sessions_in(
-    root: &Path,
-    workspace_dir: &str,
-) -> Result<Vec<ClaudeSession>, String> {
-    let workspace = resolve_workspace_dir(root, workspace_dir)?;
+    let workspace = resolve_workspace_dir(&root, workspace_dir)?;
     Ok(load_sessions_from_dir(&workspace))
 }
 

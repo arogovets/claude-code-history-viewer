@@ -47,6 +47,7 @@ export function writeWebUIDeepLink(
   const messageId = sessionId ? normalizedParam(deepLink.messageId) : null;
 
   if (sessionId) {
+    for (const key of ["view", "project", "board"]) url.searchParams.delete(key);
     url.searchParams.set(WEBUI_SESSION_PARAM, sessionId);
   } else {
     url.searchParams.delete(WEBUI_SESSION_PARAM);

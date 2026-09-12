@@ -70,7 +70,7 @@ impl PiStore {
     /// Store root: `~/<dot_dir>/agent/sessions`.
     fn sessions_root(&self) -> Option<PathBuf> {
         Some(
-            crate::utils::home_dir()?
+            crate::sources::home_dir()?
                 .join(self.dot_dir)
                 .join("agent")
                 .join("sessions"),
@@ -112,77 +112,6 @@ pub fn search(query: &str, max_results: usize) -> Result<Vec<ClaudeMessage>, Str
 }
 
 // ============================================================================
-// Archive glue (snapshot-backed reads; parsers above are reused unchanged).
-// ============================================================================
-
-use crate::storage::registry::DiscoveredSource as ArchiveDiscoveredSource;
-use crate::storage::{SnapshotInfo as ArchiveSnapshotInfo, Source as ArchiveSource};
-
-/// Physical Pi store root on this machine, if present.
-pub(crate) fn archive_discover() -> Vec<ArchiveDiscoveredSource> {
-    let machine = crate::storage::registry::discovery_machine_id();
-    match base_path_of(&PI_STORE) {
-        Some(base) => vec![ArchiveDiscoveredSource::local(
-            crate::storage::ROLE_PRIMARY,
-            PathBuf::from(base),
-            &machine,
-        )],
-        None => Vec::new(),
-    }
-}
-
-/// Scan projects under an explicit root (snapshot data root at runtime).
-// Returns Result for registry table uniformity; the scan itself is infallible.
-#[allow(clippy::unnecessary_wraps)]
-pub(crate) fn archive_scan(
-    _source: &ArchiveSource,
-    snapshot: &ArchiveSnapshotInfo,
-) -> Result<Vec<ClaudeProject>, String> {
-    Ok(scan_projects_in(&snapshot.data_path, PI_STORE.id))
-}
-
-fn archive_mapped(
-    source: &ArchiveSource,
-    snapshot: &ArchiveSnapshotInfo,
-    stable: &str,
-) -> Result<String, String> {
-    crate::storage::registry::map_absolute_to_snapshot(source, snapshot, stable)
-        .ok_or_else(|| format!("No preserved snapshot covers {stable}"))
-}
-
-/// Sessions for a stable project directory, read from the snapshot.
-pub(crate) fn archive_load_sessions(
-    source: &ArchiveSource,
-    snapshot: &ArchiveSnapshotInfo,
-    stable_project: &str,
-) -> Result<Vec<ClaudeSession>, String> {
-    let mapped = archive_mapped(source, snapshot, stable_project)?;
-    load_sessions_at(&PI_STORE, Some(&snapshot.data_path), &mapped, false)
-}
-
-/// Messages for a stable session file, read from the snapshot.
-pub(crate) fn archive_load_messages(
-    source: &ArchiveSource,
-    snapshot: &ArchiveSnapshotInfo,
-    stable_session: &str,
-) -> Result<Vec<ClaudeMessage>, String> {
-    let mapped = archive_mapped(source, snapshot, stable_session)?;
-    load_messages_at(&PI_STORE, Some(&snapshot.data_path), &mapped)
-}
-
-/// Search confined to one snapshot.
-// Returns Result for registry table uniformity; the search is infallible.
-#[allow(clippy::unnecessary_wraps)]
-pub(crate) fn archive_search(
-    _source: &ArchiveSource,
-    snapshot: &ArchiveSnapshotInfo,
-    query: &str,
-    limit: usize,
-) -> Result<Vec<ClaudeMessage>, String> {
-    Ok(search_at(&PI_STORE, &snapshot.data_path, query, limit))
-}
-
-// ============================================================================
 // Store-parameterized core (shared with `ompi.rs`)
 // ============================================================================
 
@@ -215,26 +144,13 @@ pub(crate) fn scan_store(store: &PiStore) -> Vec<ClaudeProject> {
 pub(crate) fn load_sessions_of(
     store: &PiStore,
     project_path: &str,
-    exclude_sidechain: bool, // Pi has no sidechains
-) -> Result<Vec<ClaudeSession>, String> {
-    load_sessions_at(store, None, project_path, exclude_sidechain)
-}
-
-/// [`load_sessions_of`] against an explicit store root (snapshot or live).
-pub(crate) fn load_sessions_at(
-    store: &PiStore,
-    root_override: Option<&Path>,
-    project_path: &str,
     _exclude_sidechain: bool, // Pi has no sidechains
 ) -> Result<Vec<ClaudeSession>, String> {
     let dir = Path::new(project_path);
     if !dir.is_dir() {
         return Ok(vec![]);
     }
-    match root_override {
-        Some(root) => validate_under_root_at(store, root, dir)?,
-        None => validate_under_root(store, dir)?,
-    }
+    validate_under_root(store, dir)?;
 
     let mut sessions = Vec::new();
     for file in session_files(dir) {
@@ -281,23 +197,11 @@ pub(crate) fn load_messages_of(
     store: &PiStore,
     session_path: &str,
 ) -> Result<Vec<ClaudeMessage>, String> {
-    load_messages_at(store, None, session_path)
-}
-
-/// [`load_messages_of`] against an explicit store root (snapshot or live).
-pub(crate) fn load_messages_at(
-    store: &PiStore,
-    root_override: Option<&Path>,
-    session_path: &str,
-) -> Result<Vec<ClaudeMessage>, String> {
     let path = Path::new(session_path);
     if !path.exists() {
         return Err(format!("Session file not found: {session_path}"));
     }
-    match root_override {
-        Some(root) => validate_under_root_at(store, root, path)?,
-        None => validate_under_root(store, path)?,
-    }
+    validate_under_root(store, path)?;
     let data = fs::read_to_string(path).map_err(|e| format!("Failed to read session file: {e}"))?;
     Ok(parse_messages(&data, store.id))
 }
@@ -306,23 +210,13 @@ pub(crate) fn search_store(store: &PiStore, query: &str, max_results: usize) -> 
     let Some(root) = store.sessions_root() else {
         return vec![];
     };
-    search_at(store, Path::new(&root), query, max_results)
-}
-
-/// [`search_store`] against an explicit store root (snapshot or live).
-pub(crate) fn search_at(
-    store: &PiStore,
-    root: &Path,
-    query: &str,
-    max_results: usize,
-) -> Vec<ClaudeMessage> {
     if !root.is_dir() {
         return vec![];
     }
     let query_lower = query.to_lowercase();
     let mut results = Vec::new();
 
-    for dir in project_dirs(root) {
+    for dir in project_dirs(&root) {
         for file in session_files(&dir) {
             let Ok(data) = fs::read_to_string(&file) else {
                 continue;
@@ -787,17 +681,12 @@ fn summarize(text: &str) -> String {
 /// parse arbitrary directories/files on disk just by passing a path outside
 /// `~/.pi/agent/sessions`.
 fn validate_under_root(store: &PiStore, path: &Path) -> Result<(), String> {
-    let root = store
-        .sessions_root()
-        .ok_or_else(|| format!("{} sessions path not found", store.display_name))?;
-    validate_under_root_at(store, Path::new(&root), path)
-}
-
-/// [`validate_under_root`] against an explicit store root (snapshot or live).
-fn validate_under_root_at(store: &PiStore, root: &Path, path: &Path) -> Result<(), String> {
     if is_symlink(path) {
         return Err("Path must not be a symlink".to_string());
     }
+    let root = store
+        .sessions_root()
+        .ok_or_else(|| format!("{} sessions path not found", store.display_name))?;
     let canon_root = root.canonicalize().map_err(|e| {
         format!(
             "Failed to resolve {} sessions root: {e}",

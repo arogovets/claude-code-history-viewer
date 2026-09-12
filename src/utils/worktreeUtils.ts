@@ -103,7 +103,7 @@ export function detectWorktreeGroupsByGit(
   for (const project of projects) {
     if (project.git_info?.worktree_type === "main") {
       // Use actual_path from backend (correctly decoded via filesystem checks)
-      mainReposByPath.set(project.actual_path, project);
+      mainReposByPath.set(JSON.stringify([project.source_id ?? "", project.actual_path]), project);
     }
   }
 
@@ -115,7 +115,7 @@ export function detectWorktreeGroupsByGit(
     if (project.git_info?.worktree_type === "linked") {
       const mainPath = project.git_info.main_project_path;
       if (mainPath) {
-        const parent = mainReposByPath.get(mainPath);
+        const parent = mainReposByPath.get(JSON.stringify([project.source_id ?? "", mainPath]));
         if (parent) {
           if (!groups.has(parent.path)) {
             groups.set(parent.path, { parent, children: [] });
@@ -266,35 +266,50 @@ function detectHomePath(path: string): string | null {
 export function groupProjectsByDirectory(
   projects: ClaudeProject[]
 ): DirectoryGroupingResult {
-  // Group by parent directory
-  const directoryMap = new Map<string, ClaudeProject[]>();
+  // Group by parent directory and host/custom directory label
+  const directoryMap = new Map<
+    string,
+    { parentDir: string; hostLabel?: string; projects: ClaudeProject[] }
+  >();
 
   for (const project of projects) {
     const parentDir = getParentDirectory(project.actual_path);
+    const hostLabel = project.custom_directory_label;
+    const mapKey = project.source_id ? `${project.source_id}:${parentDir}` : hostLabel ? `${hostLabel}:${parentDir}` : parentDir;
 
-    if (!directoryMap.has(parentDir)) {
-      directoryMap.set(parentDir, []);
+    if (!directoryMap.has(mapKey)) {
+      directoryMap.set(mapKey, { parentDir, hostLabel, projects: [] });
     }
-    directoryMap.get(parentDir)!.push(project);
+    directoryMap.get(mapKey)!.projects.push(project);
   }
 
   // Convert to DirectoryGroup array
   const groups: DirectoryGroup[] = [];
 
-  for (const [dirPath, dirProjects] of directoryMap) {
-    const segments = dirPath.split("/").filter(Boolean);
-    const name = segments[segments.length - 1] || "/";
+  for (const [key, { parentDir, hostLabel, projects: dirProjects }] of directoryMap) {
+    const segments = parentDir.split("/").filter(Boolean);
+    const baseName = segments[segments.length - 1] || "/";
+    const shortHost = hostLabel
+      ? hostLabel.includes("@")
+        ? hostLabel.split("@")[0]
+        : hostLabel
+      : undefined;
+
+    const name = shortHost ? `${baseName} (${shortHost})` : baseName;
+    const displayPath = shortHost
+      ? `${shortHost}: ${toDisplayPath(parentDir)}`
+      : toDisplayPath(parentDir);
 
     groups.push({
       name,
-      path: dirPath,
-      displayPath: toDisplayPath(dirPath),
+      path: key,
+      displayPath,
       projects: dirProjects.sort((a, b) => a.name.localeCompare(b.name)),
     });
   }
 
-  // Sort groups by path for consistent ordering
-  groups.sort((a, b) => a.path.localeCompare(b.path));
+  // Sort groups: local groups first, then alphabetically by displayPath
+  groups.sort((a, b) => a.displayPath.localeCompare(b.displayPath));
 
   return { groups, ungrouped: [] };
 }

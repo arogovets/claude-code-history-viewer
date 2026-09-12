@@ -62,6 +62,8 @@ pub struct ClaudeProject {
 
 #[derive(Serialize)]
 struct ClaudeProjectPayload<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_id: Option<String>,
     name: &'a str,
     path: &'a str,
     actual_path: &'a str,
@@ -85,24 +87,17 @@ impl Serialize for ClaudeProject {
     where
         S: serde::Serializer,
     {
-        let path_status = if self.path.starts_with("remote://") {
-            if self.path.contains("?status=unavailable#") {
-                Some(ProjectPathStatus::Unavailable)
-            } else {
-                None
-            }
-        } else {
-            project_path_status(&self.actual_path)
-        };
-
         ClaudeProjectPayload {
+            source_id: crate::sources::resolve(&self.path)
+                .ok()
+                .map(|(source, _)| source.id),
             name: &self.name,
             path: &self.path,
             actual_path: &self.actual_path,
             session_count: self.session_count,
             message_count: self.message_count,
             last_modified: &self.last_modified,
-            path_status,
+            path_status: project_path_status(&self.actual_path),
             git_info: &self.git_info,
             provider: &self.provider,
             storage_type: &self.storage_type,
@@ -121,7 +116,7 @@ fn project_path_status(actual_path: &str) -> Option<ProjectPathStatus> {
     (!Path::new(path).is_dir()).then_some(ProjectPathStatus::Unavailable)
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct ClaudeSession {
     pub session_id: String,        // Unique ID based on file path
     pub actual_session_id: String, // Actual session ID from the messages
@@ -147,6 +142,66 @@ pub struct ClaudeSession {
     /// `None` for non-Claude providers or sessions predating the entrypoint field.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub entrypoint: Option<String>,
+}
+
+#[derive(Serialize)]
+struct ClaudeSessionPayload<'a> {
+    session_id: &'a str,
+    actual_session_id: &'a str,
+    file_path: &'a str,
+    project_name: &'a str,
+    message_count: usize,
+    first_message_time: &'a str,
+    last_message_time: &'a str,
+    last_modified: &'a str,
+    has_tool_use: bool,
+    has_errors: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    summary: &'a Option<String>,
+    is_renamed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provider: &'a Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    storage_type: &'a Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    entrypoint: &'a Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    is_available: Option<bool>,
+}
+
+impl Serialize for ClaudeSession {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let is_available = session_is_available(&self.file_path, &self.session_id);
+        ClaudeSessionPayload {
+            session_id: &self.session_id,
+            actual_session_id: &self.actual_session_id,
+            file_path: &self.file_path,
+            project_name: &self.project_name,
+            message_count: self.message_count,
+            first_message_time: &self.first_message_time,
+            last_message_time: &self.last_message_time,
+            last_modified: &self.last_modified,
+            has_tool_use: self.has_tool_use,
+            has_errors: self.has_errors,
+            summary: &self.summary,
+            is_renamed: self.is_renamed,
+            provider: &self.provider,
+            storage_type: &self.storage_type,
+            entrypoint: &self.entrypoint,
+            is_available,
+        }
+        .serialize(serializer)
+    }
+}
+
+fn session_is_available(file_path: &str, session_id: &str) -> Option<bool> {
+    if file_path.contains("?status=unavailable#") || session_id.contains("?status=unavailable#") {
+        return Some(false);
+    }
+    None
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -178,6 +233,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn unavailable_project_path_is_exposed_without_hiding_the_project() {
         let project =
             project_with_path(&crate::test_utils::abs("definitely-missing-claude-project"));
@@ -195,6 +251,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn existing_and_virtual_project_paths_are_not_marked_unavailable() {
         let temp_dir = tempfile::tempdir().unwrap();
         let existing = serde_json::to_value(project_with_path(
@@ -209,7 +266,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_claude_session_serialization() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let session = ClaudeSession {
             session_id: "/path/to/file.jsonl".to_string(),
             actual_session_id: "actual-session-id".to_string(),

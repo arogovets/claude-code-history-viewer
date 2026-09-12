@@ -162,6 +162,7 @@ export interface RawClaudeMessage {
 export type MessageCategory = "parallel-task";
 
 export interface BaseClaudeMessage {
+  subtype?: string;
   uuid: string;
   parentUuid?: string;
   sessionId: string;
@@ -267,7 +268,13 @@ export interface ClaudeQueueMessage extends BaseClaudeMessage {
  * Union type for all processed messages in the UI.
  * Use 'type' discriminator to parse specific fields.
  */
+export interface ClaudeCommandMessage extends BaseClaudeMessage {
+  type: "command";
+  subtype?: string;
+}
+
 export type ClaudeMessage =
+  | ClaudeCommandMessage
   | ClaudeUserMessage
   | ClaudeAssistantMessage
   | ClaudeSystemMessage

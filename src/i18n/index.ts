@@ -19,6 +19,7 @@ import enFeedback from './locales/en/feedback.json';
 import enRecentEdits from './locales/en/recentEdits.json';
 import enArchive from './locales/en/archive.json';
 import enWebui from './locales/en/webui.json';
+import enKanban from './locales/en/kanban.json';
 
 // Korean
 import koCommon from './locales/ko/common.json';
@@ -34,6 +35,7 @@ import koFeedback from './locales/ko/feedback.json';
 import koRecentEdits from './locales/ko/recentEdits.json';
 import koArchive from './locales/ko/archive.json';
 import koWebui from './locales/ko/webui.json';
+import koKanban from './locales/ko/kanban.json';
 
 // Japanese
 import jaCommon from './locales/ja/common.json';
@@ -49,6 +51,7 @@ import jaFeedback from './locales/ja/feedback.json';
 import jaRecentEdits from './locales/ja/recentEdits.json';
 import jaArchive from './locales/ja/archive.json';
 import jaWebui from './locales/ja/webui.json';
+import jaKanban from './locales/ja/kanban.json';
 
 // Simplified Chinese
 import zhCNCommon from './locales/zh-CN/common.json';
@@ -64,6 +67,7 @@ import zhCNFeedback from './locales/zh-CN/feedback.json';
 import zhCNRecentEdits from './locales/zh-CN/recentEdits.json';
 import zhCNArchive from './locales/zh-CN/archive.json';
 import zhCNWebui from './locales/zh-CN/webui.json';
+import zhCNKanban from './locales/zh-CN/kanban.json';
 
 // Traditional Chinese
 import zhTWCommon from './locales/zh-TW/common.json';
@@ -79,6 +83,7 @@ import zhTWFeedback from './locales/zh-TW/feedback.json';
 import zhTWRecentEdits from './locales/zh-TW/recentEdits.json';
 import zhTWArchive from './locales/zh-TW/archive.json';
 import zhTWWebui from './locales/zh-TW/webui.json';
+import zhTWKanban from './locales/zh-TW/kanban.json';
 
 export const supportedLanguages = {
   en: 'English',
@@ -119,6 +124,7 @@ export const namespaces = [
   'recentEdits',
   'archive',
   'webui',
+  'kanban',
 ] as const;
 
 export type Namespace = (typeof namespaces)[number];
@@ -151,7 +157,8 @@ const resources = {
       enFeedback,
       enRecentEdits,
       enArchive,
-      enWebui
+      enWebui,
+      enKanban
     ),
   },
   ko: {
@@ -168,7 +175,8 @@ const resources = {
       koFeedback,
       koRecentEdits,
       koArchive,
-      koWebui
+      koWebui,
+      koKanban
     ),
   },
   ja: {
@@ -185,7 +193,8 @@ const resources = {
       jaFeedback,
       jaRecentEdits,
       jaArchive,
-      jaWebui
+      jaWebui,
+      jaKanban
     ),
   },
   'zh-CN': {
@@ -202,7 +211,8 @@ const resources = {
       zhCNFeedback,
       zhCNRecentEdits,
       zhCNArchive,
-      zhCNWebui
+      zhCNWebui,
+      zhCNKanban
     ),
   },
   'zh-TW': {
@@ -219,7 +229,8 @@ const resources = {
       zhTWFeedback,
       zhTWRecentEdits,
       zhTWArchive,
-      zhTWWebui
+      zhTWWebui,
+      zhTWKanban
     ),
   },
 };

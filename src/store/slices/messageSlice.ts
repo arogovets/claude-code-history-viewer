@@ -1133,11 +1133,8 @@ export const createMessageSlice: StateCreator<
       // 여전히 같은 세션을 보고 있을 때만 피드백 + 상태 초기화.
       // CLAUDE.md 가이드: async 실패는 사용자에게 가시적 피드백 필요.
       if (get().selectedSession?.file_path === sessionPath) {
-        const provider = get().selectedSession?.provider ?? "claude";
-        if (provider === "claude") {
-          const message = error instanceof Error ? error.message : String(error);
-          toast.warning(`Failed to load subagent sessions: ${message}`);
-        }
+        const message = error instanceof Error ? error.message : String(error);
+        toast.warning(`Failed to load subagent sessions: ${message}`);
         set({
           subagentSessions: [],
           toolUseToSubagentMap: EMPTY_SUBAGENT_MAP as Map<string, string>,

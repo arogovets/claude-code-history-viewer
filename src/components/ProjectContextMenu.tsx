@@ -114,9 +114,9 @@ export const ProjectContextMenu: React.FC<ProjectContextMenuProps> = ({
 
   const handleHideClick = () => {
     if (isHidden) {
-      onUnhide(project.actual_path);
+      onUnhide(project.path);
     } else {
-      onHide(project.actual_path);
+      onHide(project.path);
     }
     onClose();
   };

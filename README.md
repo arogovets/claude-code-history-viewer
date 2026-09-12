@@ -132,6 +132,7 @@ Antigravity note: the viewer resolves the Antigravity root as `~/.gemini/antigra
 | **Conversation Browser** | Navigate conversations by project/session with worktree grouping |
 | **Global Search** | Search across all conversations from all providers instantly |
 | **Analytics Dashboard** | Dual-mode token stats (billing vs conversation), cost breakdown, and provider distribution charts |
+| **[Project Boards](docs/project-boards.md)** | Multiple Kanban boards with independent columns, project status and ordering, drag-and-drop, and membership controls in project details |
 | **Session Board** | Multi-session visual analysis with pixel view, attribute brushing, and activity timeline |
 | **Settings Manager** | Scope-aware Claude Code settings editor with MCP server management |
 | **Message Navigator** | Right-side collapsible TOC for quick conversation navigation |

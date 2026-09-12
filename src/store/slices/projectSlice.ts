@@ -37,6 +37,7 @@ import {
 // ============================================================================
 
 export interface ProjectSliceState {
+  sessionsOffline: boolean;
   claudePath: string;
   projects: ClaudeProject[];
   selectedProject: ClaudeProject | null;
@@ -78,6 +79,7 @@ export type ProjectSlice = ProjectSliceState & ProjectSliceActions;
 // ============================================================================
 
 const initialProjectState: ProjectSliceState = {
+  sessionsOffline: false,
   claudePath: "",
   projects: [],
   selectedProject: null,
@@ -255,19 +257,6 @@ export const createProjectSlice: StateCreator<
         );
       }
 
-      // Stale-While-Revalidate: hydrate cached projects immediately so UI is interactive in <10ms
-      try {
-        const cachedRaw = localStorage.getItem("cchv_cached_projects");
-        if (cachedRaw) {
-          const cachedProjects = JSON.parse(cachedRaw) as ClaudeProject[];
-          if (Array.isArray(cachedProjects) && cachedProjects.length > 0) {
-            set({ projects: cachedProjects, isLoading: false });
-          }
-        }
-      } catch {
-        // localStorage not available or invalid
-      }
-
       // Load metadata before resolving the Claude path so an explicit provider
       // discovery choice can restore non-Claude projects on startup without
       // running the broad provider detector again.
@@ -441,16 +430,32 @@ export const createProjectSlice: StateCreator<
       const projectsByProvider = new Map<ProviderId, ClaudeProject[]>();
       const providerErrors: string[] = [];
 
+      const dedupeProjectsByCanonicalPath = (list: ClaudeProject[]): ClaudeProject[] => {
+        const map = new Map<string, ClaudeProject>();
+        for (const p of list) {
+          const canon = p.path.replace("?status=unavailable#", "#");
+          const existing = map.get(canon);
+          if (!existing) {
+            map.set(canon, p);
+          } else if (existing.path_status === "unavailable" && p.path_status !== "unavailable") {
+            map.set(canon, p);
+          }
+        }
+        return Array.from(map.values());
+      };
+
       const publishPartialResults = () => {
         const pendingPreviousProjects = previouslyLoadedProjects.filter(
           (project) => !loadedProviders.has(getProviderId(project.provider))
         );
         const loadedProjects = Array.from(projectsByProvider.values()).flat();
         set({
-          projects: sortProjectsByLastModified([
-            ...pendingPreviousProjects,
-            ...loadedProjects,
-          ]),
+          projects: sortProjectsByLastModified(
+            dedupeProjectsByCanonicalPath([
+              ...pendingPreviousProjects,
+              ...loadedProjects,
+            ])
+          ),
         });
       };
 
@@ -483,7 +488,7 @@ export const createProjectSlice: StateCreator<
 
       const duration = performance.now() - start;
       const projects = sortProjectsByLastModified(
-        Array.from(projectsByProvider.values()).flat()
+        dedupeProjectsByCanonicalPath(Array.from(projectsByProvider.values()).flat())
       );
       if (import.meta.env.DEV) {
         console.log(
@@ -494,13 +499,6 @@ export const createProjectSlice: StateCreator<
         return;
       }
       set({ projects });
-      try {
-        if (projects.length > 0) {
-          localStorage.setItem("cchv_cached_projects", JSON.stringify(projects));
-        }
-      } catch {
-        // localStorage quota or error
-      }
       if (projects.length === 0 && providerErrors.length > 0) {
         set({
           error: {
@@ -665,6 +663,7 @@ export const createProjectSlice: StateCreator<
     // project's rows must not linger under the incoming project's name.
     set({
       selectedSession: null,
+      sessionsOffline: false,
       sessions: [],
       sessionsTotal: project.session_count,
       sessionsOffset: 0,
@@ -722,6 +721,7 @@ export const createProjectSlice: StateCreator<
       }
 
       set({
+        sessionsOffline: page.offline === true,
         sessions: page.sessions,
         sessionsTotal: page.total,
         sessionsOffset: page.nextOffset,
@@ -740,7 +740,7 @@ export const createProjectSlice: StateCreator<
 
       // Update project's session_count to match actual loaded sessions
       // (scan_projects counts files, but load_sessions filters invalid ones)
-      if (page.total !== project.session_count) {
+      if (!page.offline && page.total !== project.session_count) {
         const projects = get().projects.map((p) =>
           p.path === project.path
             ? { ...p, session_count: page.total }
@@ -820,6 +820,7 @@ export const createProjectSlice: StateCreator<
     set({
       selectedProject: null,
       selectedSession: null,
+      sessionsOffline: false,
       sessions: [],
       sessionsTotal: 0,
       sessionsOffset: 0,

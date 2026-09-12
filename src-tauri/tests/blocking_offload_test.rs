@@ -15,6 +15,7 @@
 //! commands before the fix and passes after, and it needs no large fixture:
 //! what is being observed is the yield, not the work.
 
+mod common;
 use std::future::Future;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -42,11 +43,12 @@ where
 /// A path that exists but holds nothing. The commands still take their full
 /// path through `spawn_blocking`; the assertion is about where the work runs,
 /// not how much of it there is.
-fn empty_root() -> tempfile::TempDir {
-    tempfile::TempDir::new().expect("temp dir")
+fn empty_root() -> common::MirrorFixture {
+    common::MirrorFixture::new()
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn get_recent_edits_leaves_the_runtime_free() {
     let root = empty_root();
     let path = root.path().to_string_lossy().to_string();
@@ -61,6 +63,7 @@ async fn get_recent_edits_leaves_the_runtime_free() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn scan_projects_leaves_the_runtime_free() {
     let root = empty_root();
     let path = root.path().to_string_lossy().to_string();
@@ -72,6 +75,7 @@ async fn scan_projects_leaves_the_runtime_free() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn load_project_sessions_page_leaves_the_runtime_free() {
     let root = empty_root();
     let path = root.path().to_string_lossy().to_string();
@@ -86,6 +90,7 @@ async fn load_project_sessions_page_leaves_the_runtime_free() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn load_project_sessions_leaves_the_runtime_free() {
     let root = empty_root();
     let path = root.path().to_string_lossy().to_string();
@@ -97,6 +102,7 @@ async fn load_project_sessions_leaves_the_runtime_free() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn search_messages_leaves_the_runtime_free() {
     let root = empty_root();
     let path = root.path().to_string_lossy().to_string();
@@ -118,6 +124,7 @@ async fn search_messages_leaves_the_runtime_free() {
 /// saves. If someone later wraps it, this test says so rather than letting the
 /// pattern spread by habit.
 #[tokio::test]
+#[serial_test::serial]
 async fn trivial_commands_are_deliberately_not_offloaded() {
     assert!(
         !yielded_during(commands::project::get_claude_folder_path()).await,

@@ -153,7 +153,7 @@ pub fn detect() -> Option<ProviderInfo> {
 /// Get the `OpenCode` base path
 pub fn get_base_path() -> Option<String> {
     // Check $OPENCODE_HOME first
-    if let Ok(home) = std::env::var("OPENCODE_HOME") {
+    if let Ok(home) = crate::sources::env_var("OPENCODE_HOME") {
         let path = PathBuf::from(&home);
         if path.exists() {
             return Some(home);
@@ -161,7 +161,7 @@ pub fn get_base_path() -> Option<String> {
     }
 
     // XDG data directory
-    if let Ok(xdg_data) = std::env::var("XDG_DATA_HOME") {
+    if let Ok(xdg_data) = crate::sources::env_var("XDG_DATA_HOME") {
         let path = PathBuf::from(&xdg_data).join("opencode");
         if path.exists() {
             return Some(path.to_string_lossy().to_string());
@@ -169,7 +169,7 @@ pub fn get_base_path() -> Option<String> {
     }
 
     // Default: ~/.local/share/opencode
-    let home = crate::utils::home_dir()?;
+    let home = crate::sources::home_dir()?;
     let opencode_path = home.join(".local").join("share").join("opencode");
     if opencode_path.exists() {
         Some(opencode_path.to_string_lossy().to_string())
@@ -326,20 +326,10 @@ pub fn scan_projects() -> Result<Vec<ClaudeProject>, String> {
 /// Load sessions for an `OpenCode` project
 pub fn load_sessions(
     project_path: &str,
-    exclude_sidechain: bool,
-) -> Result<Vec<ClaudeSession>, String> {
-    let base_path = get_base_path().ok_or_else(|| "OpenCode not found".to_string())?;
-    load_sessions_in(Path::new(&base_path), project_path, exclude_sidechain)
-}
-
-/// [`load_sessions`] against an explicit base (snapshot or live).
-pub fn load_sessions_in(
-    base: &Path,
-    project_path: &str,
     _exclude_sidechain: bool,
 ) -> Result<Vec<ClaudeSession>, String> {
-    let base_str = base.to_string_lossy();
-    let storage_path = base.join("storage");
+    let base_path = get_base_path().ok_or_else(|| "OpenCode not found".to_string())?;
+    let storage_path = Path::new(&base_path).join("storage");
 
     let project_ref = OpenCodeProjectRef::parse(project_path)?;
     let project_id = project_ref.storage_id().to_string();
@@ -348,7 +338,7 @@ pub fn load_sessions_in(
     let mut seen_ids: HashSet<String> = HashSet::new();
 
     // 1. Read from SQLite
-    if let Some(db_sessions) = load_sessions_from_db(&base_str, &project_ref) {
+    if let Some(db_sessions) = load_sessions_from_db(&base_path, &project_ref) {
         for s in db_sessions {
             seen_ids.insert(s.actual_session_id.clone());
             sessions.push(s);
@@ -512,194 +502,10 @@ pub fn load_child_sessions_from_db(
     rows.filter_map(std::result::Result::ok).collect()
 }
 
-/// Probe `OpenCode` database and storage to locate a session by session ID
-pub fn locate_session_probe(clean_id: &str) -> Option<crate::cache::LocatedSession> {
-    let base_path = get_base_path()?;
-    let id_pattern = format!("%{clean_id}%");
-
-    // 1. Check opencode.db SQLite
-    if let Some(conn) = open_db(&base_path) {
-        let mut stmt = conn
-            .prepare(
-                "SELECT s.id, s.title, s.time_created, s.time_updated, s.directory, s.project_id,
-                        p.worktree, p.name,
-                        (SELECT COUNT(*) FROM message m WHERE m.session_id = s.id) AS message_count
-                 FROM session s
-                 LEFT JOIN project p ON s.project_id = p.id
-                 WHERE s.id = ?1 OR s.id LIKE ?2
-                 LIMIT 1",
-            )
-            .ok()?;
-
-        let found = stmt
-            .query_row(rusqlite::params![clean_id, id_pattern], |row| {
-                let session_id: String = row.get(0)?;
-                let title: String = row.get(1)?;
-                let time_created: u64 = row.get(2)?;
-                let time_updated: u64 = row.get(3)?;
-                let directory: String = row.get(4)?;
-                let project_id: String = row.get(5)?;
-                let worktree: Option<String> = row.get(6)?;
-                let project_name_opt: Option<String> = row.get(7)?;
-                let message_count: usize = row.get(8)?;
-
-                let created_at = epoch_ms_to_rfc3339(time_created);
-                let updated_at = epoch_ms_to_rfc3339(time_updated);
-
-                let display_name = opencode_project_display_name(
-                    project_name_opt.as_deref(),
-                    worktree.as_deref().unwrap_or(&directory),
-                );
-
-                let actual_path = worktree.unwrap_or_else(|| directory.clone());
-                let project_path = format!("opencode://{project_id}");
-                let file_path = format!("opencode://{project_id}/{session_id}");
-
-                let session = ClaudeSession {
-                    session_id: format!("opencode://{session_id}"),
-                    actual_session_id: session_id,
-                    file_path,
-                    project_name: display_name.clone(),
-                    message_count,
-                    first_message_time: created_at.clone(),
-                    last_message_time: updated_at.clone(),
-                    last_modified: updated_at.clone(),
-                    has_tool_use: false,
-                    has_errors: false,
-                    summary: if title.is_empty() { None } else { Some(title) },
-                    is_renamed: false,
-                    provider: Some("opencode".to_string()),
-                    storage_type: Some("sqlite".to_string()),
-                    entrypoint: None,
-                };
-
-                let project = ClaudeProject {
-                    name: display_name,
-                    path: project_path,
-                    actual_path,
-                    session_count: 1,
-                    message_count,
-                    last_modified: updated_at,
-                    git_info: None,
-                    provider: Some("opencode".to_string()),
-                    storage_type: Some("sqlite".to_string()),
-                    custom_directory_label: None,
-                };
-
-                Ok(crate::cache::LocatedSession { project, session })
-            })
-            .ok();
-
-        if let Some(located) = found {
-            crate::cache::cache_sessions(
-                &located.project.path,
-                "opencode",
-                std::slice::from_ref(&located.session),
-            );
-            crate::cache::cache_projects(std::slice::from_ref(&located.project), None);
-            return Some(located);
-        }
-    }
-
-    // 2. Check storage/session JSON files
-    let storage_session_dir = Path::new(&base_path).join("storage").join("session");
-    if storage_session_dir.is_dir() {
-        for entry in walkdir::WalkDir::new(&storage_session_dir)
-            .min_depth(2)
-            .max_depth(2)
-            .into_iter()
-            .filter_map(Result::ok)
-            .filter(|e| e.file_type().is_file())
-        {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("json") {
-                continue;
-            }
-            let stem = path.file_stem().unwrap_or_default().to_string_lossy();
-            if stem == clean_id || stem.contains(clean_id) {
-                if let Ok(content) = fs::read_to_string(path) {
-                    if let Ok(val) = serde_json::from_str::<Value>(&content) {
-                        let session_id = val
-                            .get("id")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or(&stem)
-                            .to_string();
-                        let title = val.get("title").and_then(|v| v.as_str()).map(String::from);
-                        let time_obj = val.get("time");
-                        let created_at = time_obj
-                            .and_then(|t| t.get("created"))
-                            .and_then(Value::as_u64)
-                            .map(epoch_ms_to_rfc3339)
-                            .unwrap_or_default();
-                        let updated_at = time_obj
-                            .and_then(|t| t.get("updated"))
-                            .and_then(Value::as_u64)
-                            .map(epoch_ms_to_rfc3339)
-                            .unwrap_or_else(|| created_at.clone());
-
-                        let project_id = path
-                            .parent()
-                            .and_then(|p| p.file_name())
-                            .map(|n| n.to_string_lossy().to_string())
-                            .unwrap_or_else(|| "default".to_string());
-
-                        let session = ClaudeSession {
-                            session_id: format!("opencode://{session_id}"),
-                            actual_session_id: session_id.clone(),
-                            file_path: format!("opencode://{project_id}/{session_id}"),
-                            project_name: project_id.clone(),
-                            message_count: 0,
-                            first_message_time: created_at.clone(),
-                            last_message_time: updated_at.clone(),
-                            last_modified: updated_at.clone(),
-                            has_tool_use: false,
-                            has_errors: false,
-                            summary: title,
-                            is_renamed: false,
-                            provider: Some("opencode".to_string()),
-                            storage_type: Some("json".to_string()),
-                            entrypoint: None,
-                        };
-
-                        let project = ClaudeProject {
-                            name: project_id.clone(),
-                            path: format!("opencode://{project_id}"),
-                            actual_path: project_id,
-                            session_count: 1,
-                            message_count: 0,
-                            last_modified: updated_at,
-                            git_info: None,
-                            provider: Some("opencode".to_string()),
-                            storage_type: Some("json".to_string()),
-                            custom_directory_label: None,
-                        };
-
-                        crate::cache::cache_sessions(
-                            &project.path,
-                            "opencode",
-                            std::slice::from_ref(&session),
-                        );
-                        crate::cache::cache_projects(std::slice::from_ref(&project), None);
-                        return Some(crate::cache::LocatedSession { project, session });
-                    }
-                }
-            }
-        }
-    }
-
-    None
-}
-
 /// Load messages for an `OpenCode` session
 pub fn load_messages(session_path: &str) -> Result<Vec<ClaudeMessage>, String> {
     let base_path = get_base_path().ok_or_else(|| "OpenCode not found".to_string())?;
-    load_messages_in(Path::new(&base_path), session_path)
-}
-
-/// [`load_messages`] against an explicit base (snapshot or live).
-pub fn load_messages_in(base: &Path, session_path: &str) -> Result<Vec<ClaudeMessage>, String> {
-    let base_str = base.to_string_lossy();
-    let storage_path = base.join("storage");
+    let storage_path = Path::new(&base_path).join("storage");
 
     // Extract session info from virtual path "opencode://{project_id}/{session_id}"
     let path_part = session_path
@@ -719,7 +525,7 @@ pub fn load_messages_in(base: &Path, session_path: &str) -> Result<Vec<ClaudeMes
     }
 
     // Try SQLite first
-    if let Some(db_messages) = load_messages_from_db(&base_str, session_id) {
+    if let Some(db_messages) = load_messages_from_db(&base_path, session_id) {
         if !db_messages.is_empty() {
             return Ok(db_messages);
         }
@@ -864,76 +670,7 @@ pub fn load_messages_in(base: &Path, session_path: &str) -> Result<Vec<ClaudeMes
 /// Search `OpenCode` sessions for a query string
 pub fn search(query: &str, limit: usize) -> Result<Vec<ClaudeMessage>, String> {
     let base_path = get_base_path().ok_or_else(|| "OpenCode not found".to_string())?;
-    search_in(Path::new(&base_path), query, limit)
-}
-
-// ============================================================================
-// Archive glue (snapshot-backed reads; the explicit-base seams above are
-// reused). Session/project IDs are content-derived opaque URIs, so no output
-// rewriting is needed. The database is captured consistently and read from
-// the snapshot copy, never the live one.
-// ============================================================================
-
-use crate::storage::registry::DiscoveredSource as ArchiveDiscoveredSource;
-use crate::storage::{SnapshotInfo as ArchiveSnapshotInfo, Source as ArchiveSource};
-
-/// Physical `OpenCode` base on this machine, if present.
-pub(crate) fn archive_discover() -> Vec<ArchiveDiscoveredSource> {
-    let machine = crate::storage::registry::discovery_machine_id();
-    match get_base_path() {
-        Some(base) => {
-            let mut found = ArchiveDiscoveredSource::local(
-                crate::storage::ROLE_PRIMARY,
-                PathBuf::from(base),
-                &machine,
-            );
-            found.sqlite_dbs = vec!["opencode.db".to_string()];
-            vec![found]
-        }
-        None => Vec::new(),
-    }
-}
-
-/// Scan projects under an explicit base (snapshot data root at runtime).
-pub(crate) fn archive_scan(
-    _source: &ArchiveSource,
-    snapshot: &ArchiveSnapshotInfo,
-) -> Result<Vec<ClaudeProject>, String> {
-    scan_projects_from_path(&snapshot.data_path.to_string_lossy())
-}
-
-/// Sessions for a stable project URI, read from the snapshot.
-pub(crate) fn archive_load_sessions(
-    _source: &ArchiveSource,
-    snapshot: &ArchiveSnapshotInfo,
-    stable_project: &str,
-) -> Result<Vec<ClaudeSession>, String> {
-    load_sessions_in(&snapshot.data_path, stable_project, false)
-}
-
-/// Messages for a stable session URI, read from the snapshot.
-pub(crate) fn archive_load_messages(
-    _source: &ArchiveSource,
-    snapshot: &ArchiveSnapshotInfo,
-    stable_session: &str,
-) -> Result<Vec<ClaudeMessage>, String> {
-    load_messages_in(&snapshot.data_path, stable_session)
-}
-
-/// Search confined to one snapshot.
-pub(crate) fn archive_search(
-    _source: &ArchiveSource,
-    snapshot: &ArchiveSnapshotInfo,
-    query: &str,
-    limit: usize,
-) -> Result<Vec<ClaudeMessage>, String> {
-    search_in(&snapshot.data_path, query, limit)
-}
-
-/// [`search`] against an explicit base (snapshot or live).
-pub fn search_in(base: &Path, query: &str, limit: usize) -> Result<Vec<ClaudeMessage>, String> {
-    let base_str = base.to_string_lossy();
-    let storage_path = base.join("storage");
+    let storage_path = Path::new(&base_path).join("storage");
     let session_root = storage_path.join("session");
 
     let query_lower = query.to_lowercase();
@@ -941,7 +678,7 @@ pub fn search_in(base: &Path, query: &str, limit: usize) -> Result<Vec<ClaudeMes
     let mut searched_sessions: HashSet<String> = HashSet::new();
 
     // 1. Search SQLite
-    if let Some((db_results, db_session_ids)) = search_from_db(&base_str, &query_lower, limit) {
+    if let Some((db_results, db_session_ids)) = search_from_db(&base_path, &query_lower, limit) {
         searched_sessions.extend(db_session_ids);
         results.extend(db_results);
         if results.len() >= limit {

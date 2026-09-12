@@ -1,3 +1,4 @@
+mod common;
 // Integration tests that exercise scan_all_projects end-to-end.
 // Run: cargo test test_scan_all_projects -- --nocapture --test-threads=1
 // Tests gated with #[ignore] require local Antigravity data:
@@ -14,7 +15,9 @@ mod integration_tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_detect_providers() {
+        let _mirror = crate::common::MirrorFixture::new();
         let providers = providers::detect_providers();
         println!("\n=== detect_providers ===");
         println!("Total detected: {}", providers.len());
@@ -31,7 +34,9 @@ mod integration_tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_antigravity_scan_projects() {
+        let _mirror = crate::common::MirrorFixture::new();
         println!("\n=== providers::antigravity::scan_projects ===");
         let projects = providers::antigravity::scan_projects().expect("scan_projects failed");
         println!("Projects returned: {}", projects.len());
@@ -46,7 +51,9 @@ mod integration_tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_scan_all_projects_full() {
+        let _mirror = crate::common::MirrorFixture::new();
         println!("\n=== scan_all_projects (all providers) ===");
 
         // Replicate exactly what the frontend calls
@@ -334,7 +341,9 @@ mod integration_tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_antigravity_global_stats_summary_returns_tools_when_filtered() {
+        let _mirror = crate::common::MirrorFixture::new();
         println!("\n=== antigravity global stats summary tool probe ===");
 
         let claude_path = providers::claude::get_base_path().unwrap_or_else(|| {

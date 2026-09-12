@@ -18,6 +18,7 @@ export const NAMESPACES = [
   'update',
   'feedback',
   'recentEdits',
+  'kanban',
 ];
 
 export const LANGUAGES = ['en', 'ko', 'ja', 'zh-CN', 'zh-TW'];

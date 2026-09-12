@@ -32,6 +32,7 @@ fn remove_path(path: &Path) -> Result<(), String> {
 /// to permanent deletion so the operation does not fail outright.
 #[command]
 pub async fn delete_session(file_path: String) -> Result<(), String> {
+    crate::sources::require_mutable_history(&file_path)?;
     if file_path.starts_with("forgecode://") || file_path.starts_with("forgecode-db://") {
         return crate::providers::forgecode::delete_conversation(&file_path);
     }

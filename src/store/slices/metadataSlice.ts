@@ -220,7 +220,7 @@ export const createMetadataSlice: StateCreator<
     const projects = get().projects ?? [];
 
     const matching = projects.find(
-      (p) => p.actual_path === projectPath || p.path === projectPath
+      (p) => p.path === projectPath || (!p.source_id && p.actual_path === projectPath)
     );
 
     // Check localStorage cache for cross-session browser persistence
@@ -233,7 +233,7 @@ export const createMetadataSlice: StateCreator<
       }
       if (
         matching &&
-        (localHidden.includes(matching.actual_path) ||
+        ((!matching.source_id && localHidden.includes(matching.actual_path)) ||
           localHidden.includes(matching.path))
       ) {
         return true;
@@ -249,7 +249,7 @@ export const createMetadataSlice: StateCreator<
     }
 
     if (matching) {
-      if (matching.actual_path && userMetadata.projects[matching.actual_path]?.hidden) {
+      if (!matching.source_id && matching.actual_path && userMetadata.projects[matching.actual_path]?.hidden) {
         return true;
       }
       if (matching.path && userMetadata.projects[matching.path]?.hidden) {

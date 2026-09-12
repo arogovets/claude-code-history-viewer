@@ -34,14 +34,14 @@ const SUMMARY_MAX_CHARS: usize = 80;
 /// Runtime base dir: `$QWEN_RUNTIME_DIR` / `$QWEN_HOME` / `~/.qwen`.
 fn runtime_base() -> Option<PathBuf> {
     for env in ["QWEN_RUNTIME_DIR", "QWEN_HOME"] {
-        if let Ok(v) = std::env::var(env) {
+        if let Ok(v) = crate::sources::env_var(env) {
             let v = v.trim();
             if !v.is_empty() {
                 return Some(PathBuf::from(v));
             }
         }
     }
-    Some(crate::utils::home_dir()?.join(".qwen"))
+    Some(crate::sources::home_dir()?.join(".qwen"))
 }
 
 fn projects_dir() -> Option<PathBuf> {
@@ -104,11 +104,6 @@ pub fn scan_projects() -> Result<Vec<ClaudeProject>, String> {
     let Some(base) = projects_dir() else {
         return Ok(vec![]);
     };
-    scan_projects_in(&base)
-}
-
-/// [`scan_projects`] against an explicit projects root (snapshot or live).
-pub fn scan_projects_in(base: &Path) -> Result<Vec<ClaudeProject>, String> {
     struct Agg {
         session_count: usize,
         message_count: usize,
@@ -116,7 +111,7 @@ pub fn scan_projects_in(base: &Path) -> Result<Vec<ClaudeProject>, String> {
     }
     let mut by_cwd: HashMap<String, Agg> = HashMap::new();
 
-    for file in session_files(base) {
+    for file in session_files(&base) {
         let Ok(data) = fs::read_to_string(&file) else {
             continue;
         };
@@ -170,24 +165,15 @@ pub fn scan_projects_in(base: &Path) -> Result<Vec<ClaudeProject>, String> {
 /// Load the sessions for one Qwen project (filtered by `cwd`).
 pub fn load_sessions(
     project_path: &str,
-    exclude_sidechain: bool,
+    _exclude_sidechain: bool,
 ) -> Result<Vec<ClaudeSession>, String> {
     let Some(base) = projects_dir() else {
         return Ok(vec![]);
     };
-    load_sessions_in(&base, project_path, exclude_sidechain)
-}
-
-/// [`load_sessions`] against an explicit projects root (snapshot or live).
-pub fn load_sessions_in(
-    base: &Path,
-    project_path: &str,
-    _exclude_sidechain: bool,
-) -> Result<Vec<ClaudeSession>, String> {
     let target_cwd = project_path.strip_prefix(SCHEME).unwrap_or(project_path);
     let mut sessions = Vec::new();
 
-    for file in session_files(base) {
+    for file in session_files(&base) {
         let Ok(data) = fs::read_to_string(&file) else {
             continue;
         };
@@ -231,19 +217,11 @@ pub fn load_sessions_in(
 
 /// Load all messages from one Qwen session file.
 pub fn load_messages(session_path: &str) -> Result<Vec<ClaudeMessage>, String> {
-    let Some(base) = projects_dir() else {
-        return Err(format!("Session file not found: {session_path}"));
-    };
-    load_messages_in(&base, session_path)
-}
-
-/// [`load_messages`] against an explicit projects root (snapshot or live).
-pub fn load_messages_in(base: &Path, session_path: &str) -> Result<Vec<ClaudeMessage>, String> {
     let path = Path::new(session_path);
     if !path.exists() {
         return Err(format!("Session file not found: {session_path}"));
     }
-    validate_under_base_at(path, base)?;
+    validate_under_base(path)?;
     if is_symlink(path) {
         return Err("Session file must not be a symlink".to_string());
     }
@@ -256,72 +234,9 @@ pub fn search(query: &str, limit: usize) -> Result<Vec<ClaudeMessage>, String> {
     let Some(base) = projects_dir() else {
         return Ok(vec![]);
     };
-    search_in(&base, query, limit)
-}
-
-/// Archive glue (snapshot-backed reads; the explicit-root seams above are
-/// reused). Project URIs name the user's cwd (content filter), so session
-/// loading filters snapshot content by URI instead of mapping paths.
-use crate::storage::registry::DiscoveredSource as ArchiveDiscoveredSource;
-use crate::storage::{SnapshotInfo as ArchiveSnapshotInfo, Source as ArchiveSource};
-
-/// Physical Qwen projects root on this machine, if present.
-pub(crate) fn archive_discover() -> Vec<ArchiveDiscoveredSource> {
-    let machine = crate::storage::registry::discovery_machine_id();
-    match get_base_path() {
-        Some(base) => vec![ArchiveDiscoveredSource::local(
-            crate::storage::ROLE_PRIMARY,
-            PathBuf::from(base),
-            &machine,
-        )],
-        None => Vec::new(),
-    }
-}
-
-/// Scan projects under an explicit root (snapshot data root at runtime).
-pub(crate) fn archive_scan(
-    _source: &ArchiveSource,
-    snapshot: &ArchiveSnapshotInfo,
-) -> Result<Vec<ClaudeProject>, String> {
-    scan_projects_in(&snapshot.data_path)
-}
-
-/// Sessions for a stable project URI, filtered from snapshot content.
-pub(crate) fn archive_load_sessions(
-    _source: &ArchiveSource,
-    snapshot: &ArchiveSnapshotInfo,
-    stable_project: &str,
-) -> Result<Vec<ClaudeSession>, String> {
-    load_sessions_in(&snapshot.data_path, stable_project, false)
-}
-
-/// Messages for a stable session file, read from the snapshot.
-pub(crate) fn archive_load_messages(
-    source: &ArchiveSource,
-    snapshot: &ArchiveSnapshotInfo,
-    stable_session: &str,
-) -> Result<Vec<ClaudeMessage>, String> {
-    let mapped =
-        crate::storage::registry::map_absolute_to_snapshot(source, snapshot, stable_session)
-            .ok_or_else(|| format!("No preserved snapshot covers {stable_session}"))?;
-    load_messages_in(&snapshot.data_path, &mapped)
-}
-
-/// Search confined to one snapshot.
-pub(crate) fn archive_search(
-    _source: &ArchiveSource,
-    snapshot: &ArchiveSnapshotInfo,
-    query: &str,
-    limit: usize,
-) -> Result<Vec<ClaudeMessage>, String> {
-    search_in(&snapshot.data_path, query, limit)
-}
-
-/// [`search`] against an explicit projects root (snapshot or live).
-pub fn search_in(base: &Path, query: &str, limit: usize) -> Result<Vec<ClaudeMessage>, String> {
     let query_lower = query.to_lowercase();
     let mut results = Vec::new();
-    for file in session_files(base) {
+    for file in session_files(&base) {
         let Ok(data) = fs::read_to_string(&file) else {
             continue;
         };
@@ -607,8 +522,8 @@ fn is_symlink(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-/// Confine `path` to an explicit projects root (snapshot or live).
-fn validate_under_base_at(path: &Path, base: &Path) -> Result<(), String> {
+fn validate_under_base(path: &Path) -> Result<(), String> {
+    let base = projects_dir().ok_or("Qwen projects path not found")?;
     let canon_base = base
         .canonicalize()
         .map_err(|e| format!("Failed to resolve Qwen base: {e}"))?;

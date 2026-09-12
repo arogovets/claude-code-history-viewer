@@ -333,6 +333,17 @@ export const ArchiveOverview: React.FC = () => {
         </Alert>
       )}
 
+      {/* Permanent Database Retention Guarantee */}
+      <Alert className="border-emerald-500/30 bg-emerald-500/5 text-emerald-600 dark:text-emerald-400">
+        <ShieldCheck className="h-4 w-4 text-emerald-500" />
+        <AlertTitle className="font-semibold text-emerald-600 dark:text-emerald-400">
+          {t('archive.overview.retentionGuarantee.title')}
+        </AlertTitle>
+        <AlertDescription className="text-xs text-muted-foreground mt-1">
+          {t('archive.overview.retentionGuarantee.description')}
+        </AlertDescription>
+      </Alert>
+
       {/* Cleanup Warning + Settings button */}
       <Alert>
         <AlertTriangle className="h-4 w-4" />

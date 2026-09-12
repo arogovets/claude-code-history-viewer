@@ -57,7 +57,7 @@ pub fn detect() -> Option<ProviderInfo> {
 
 /// Base path for Cursor Agent transcripts: `~/.cursor/projects`.
 pub fn get_base_path() -> Option<String> {
-    let home = crate::utils::home_dir()?;
+    let home = crate::sources::home_dir()?;
     let projects = home.join(".cursor").join("projects");
     if projects.is_dir() {
         Some(projects.to_string_lossy().to_string())
@@ -151,16 +151,6 @@ pub fn scan_projects_in(base: &Path) -> Result<Vec<ClaudeProject>, String> {
 /// Load the sessions (transcripts) for a Cursor Agent project.
 pub fn load_sessions(
     project_path: &str,
-    exclude_sidechain: bool,
-) -> Result<Vec<ClaudeSession>, String> {
-    let base = get_base_path().ok_or("Cursor projects path not found")?;
-    load_sessions_in(Path::new(&base), project_path, exclude_sidechain)
-}
-
-/// [`load_sessions`] against an explicit projects root (snapshot or live).
-pub fn load_sessions_in(
-    base: &Path,
-    project_path: &str,
     _exclude_sidechain: bool,
 ) -> Result<Vec<ClaudeSession>, String> {
     if project_path.trim().is_empty() {
@@ -170,7 +160,7 @@ pub fn load_sessions_in(
     if !project_dir.is_dir() {
         return Ok(vec![]);
     }
-    validate_under_base_at(base, project_dir)?;
+    validate_under_base(project_dir)?;
     if is_symlink(project_dir) {
         return Err(format!(
             "Project path must not be a symlink: {}",
@@ -202,17 +192,11 @@ pub fn load_sessions_in(
 
 /// Load all messages from a Cursor Agent transcript file.
 pub fn load_messages(session_path: &str) -> Result<Vec<ClaudeMessage>, String> {
-    let base = get_base_path().ok_or("Cursor projects path not found")?;
-    load_messages_in(Path::new(&base), session_path)
-}
-
-/// [`load_messages`] against an explicit projects root (snapshot or live).
-pub fn load_messages_in(base: &Path, session_path: &str) -> Result<Vec<ClaudeMessage>, String> {
     let path = Path::new(session_path);
     if !path.exists() {
         return Err(format!("Session file not found: {session_path}"));
     }
-    validate_under_base_at(base, path)?;
+    validate_under_base(path)?;
     if is_symlink(path) {
         return Err("Session file must not be a symlink".to_string());
     }
@@ -258,18 +242,10 @@ pub fn search(query: &str, limit: usize) -> Result<Vec<ClaudeMessage>, String> {
     let Some(base) = get_base_path() else {
         return Ok(vec![]);
     };
-    search_in(Path::new(&base), query, limit)
-}
-
-/// [`search`] against an explicit projects root (snapshot or live).
-pub fn search_in(base: &Path, query: &str, limit: usize) -> Result<Vec<ClaudeMessage>, String> {
-    if !base.is_dir() {
-        return Ok(vec![]);
-    }
     let query_lower = query.to_lowercase();
     let mut results = Vec::new();
 
-    for project_dir in project_dirs(base) {
+    for project_dir in project_dirs(Path::new(&base)) {
         if is_symlink(&project_dir) {
             continue;
         }
@@ -665,9 +641,10 @@ fn is_symlink(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-/// Confine `path` to an explicit projects root (snapshot or live).
-fn validate_under_base_at(base: &Path, path: &Path) -> Result<(), String> {
-    let canon_base = base
+/// Confine `path` to the `~/.cursor/projects` root.
+fn validate_under_base(path: &Path) -> Result<(), String> {
+    let base = get_base_path().ok_or("Cursor projects path not found")?;
+    let canon_base = Path::new(&base)
         .canonicalize()
         .map_err(|e| format!("Failed to resolve Cursor base: {e}"))?;
     let canon_path = path
@@ -681,73 +658,6 @@ fn validate_under_base_at(base: &Path, path: &Path) -> Result<(), String> {
             path.display()
         ))
     }
-}
-
-// ============================================================================
-// Archive glue (snapshot-backed reads; the explicit-root seams above are reused).
-// ============================================================================
-
-use crate::storage::registry::DiscoveredSource as ArchiveDiscoveredSource;
-use crate::storage::{SnapshotInfo as ArchiveSnapshotInfo, Source as ArchiveSource};
-
-/// Physical Cursor Agent projects root on this machine, if present.
-pub(crate) fn archive_discover() -> Vec<ArchiveDiscoveredSource> {
-    let machine = crate::storage::registry::discovery_machine_id();
-    match get_base_path() {
-        Some(base) => vec![ArchiveDiscoveredSource::local(
-            crate::storage::ROLE_PRIMARY,
-            std::path::PathBuf::from(base),
-            &machine,
-        )],
-        None => Vec::new(),
-    }
-}
-
-/// Scan projects under an explicit root (snapshot data root at runtime).
-pub(crate) fn archive_scan(
-    _source: &ArchiveSource,
-    snapshot: &ArchiveSnapshotInfo,
-) -> Result<Vec<ClaudeProject>, String> {
-    scan_projects_in(&snapshot.data_path)
-}
-
-fn archive_mapped(
-    source: &ArchiveSource,
-    snapshot: &ArchiveSnapshotInfo,
-    stable: &str,
-) -> Result<String, String> {
-    crate::storage::registry::map_absolute_to_snapshot(source, snapshot, stable)
-        .ok_or_else(|| format!("No preserved snapshot covers {stable}"))
-}
-
-/// Sessions for a stable project, read from the snapshot.
-pub(crate) fn archive_load_sessions(
-    source: &ArchiveSource,
-    snapshot: &ArchiveSnapshotInfo,
-    stable_project: &str,
-) -> Result<Vec<ClaudeSession>, String> {
-    let mapped = archive_mapped(source, snapshot, stable_project)?;
-    load_sessions_in(&snapshot.data_path, &mapped, false)
-}
-
-/// Messages for a stable session, read from the snapshot.
-pub(crate) fn archive_load_messages(
-    source: &ArchiveSource,
-    snapshot: &ArchiveSnapshotInfo,
-    stable_session: &str,
-) -> Result<Vec<ClaudeMessage>, String> {
-    let mapped = archive_mapped(source, snapshot, stable_session)?;
-    load_messages_in(&snapshot.data_path, &mapped)
-}
-
-/// Search confined to one snapshot.
-pub(crate) fn archive_search(
-    _source: &ArchiveSource,
-    snapshot: &ArchiveSnapshotInfo,
-    query: &str,
-    limit: usize,
-) -> Result<Vec<ClaudeMessage>, String> {
-    search_in(&snapshot.data_path, query, limit)
 }
 
 fn file_mtime_rfc3339(path: &Path) -> String {

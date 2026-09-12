@@ -853,6 +853,7 @@ pub async fn get_recent_edits(
     grouping: Option<String>,
 ) -> Result<PaginatedRecentEdits, String> {
     tauri::async_runtime::spawn_blocking(move || {
+        crate::sources::require_history_path(&project_path)?;
         get_recent_edits_blocking(project_path, offset, limit, session_file_path, grouping)
     })
     .await

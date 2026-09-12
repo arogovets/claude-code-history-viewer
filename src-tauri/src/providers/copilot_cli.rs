@@ -113,13 +113,13 @@ pub fn detect_desktop() -> Option<ProviderInfo> {
 /// Honours `$COPILOT_CLI_HOME` if it points to an existing directory,
 /// otherwise falls back to `~/.copilot`.
 pub fn get_base_path() -> Option<String> {
-    if let Ok(env) = std::env::var("COPILOT_CLI_HOME") {
+    if let Ok(env) = crate::sources::env_var("COPILOT_CLI_HOME") {
         let path = PathBuf::from(&env);
         if path.is_dir() {
             return Some(env);
         }
     }
-    let home = crate::utils::home_dir()?;
+    let home = crate::sources::home_dir()?;
     let candidate = home.join(".copilot");
     if candidate.is_dir() {
         Some(candidate.to_string_lossy().to_string())
@@ -214,9 +214,7 @@ fn build_project_path(cwd: &str, base_path: Option<&str>, client: ClientKind) ->
     }
 }
 
-pub(crate) fn parse_project_path(
-    project_path: &str,
-) -> Result<(Option<String>, String, ClientKind), String> {
+fn parse_project_path(project_path: &str) -> Result<(Option<String>, String, ClientKind), String> {
     let (value, client) = if let Some(rest) = project_path.strip_prefix("copilot-desktop://") {
         (rest, ClientKind::Desktop)
     } else if let Some(rest) = project_path.strip_prefix("copilot-cli://") {
@@ -438,61 +436,6 @@ fn scan_projects_filtered(
     Ok(projects)
 }
 
-/// Snapshot-confined variant: list sessions with `cwd` under an explicit
-/// `session-state` root (snapshot or live). No WSL/live-root assumptions.
-// Returns Result for API uniformity with `load_sessions`.
-#[allow(clippy::unnecessary_wraps)]
-pub(crate) fn load_sessions_from_root(
-    session_root: &Path,
-    target_cwd: &str,
-    client: ClientKind,
-) -> Result<Vec<ClaudeSession>, String> {
-    if !session_root.is_dir() {
-        return Ok(Vec::new());
-    }
-
-    let entries: Vec<PathBuf> = WalkDir::new(session_root)
-        .follow_links(false)
-        .min_depth(2)
-        .max_depth(2)
-        .into_iter()
-        .filter_map(Result::ok)
-        .filter(|e| e.file_type().is_file())
-        .filter(|e| is_events_jsonl(e.path()))
-        .map(walkdir::DirEntry::into_path)
-        .collect();
-
-    let mut sessions: Vec<ClaudeSession> = entries
-        .par_iter()
-        .filter_map(|path| extract_session_info_cached(path).ok())
-        .filter(|info| info.message_count > 0 && info.client_kind == client)
-        .filter(|info| info.cwd.as_deref().unwrap_or("unknown") == target_cwd)
-        .map(|info| ClaudeSession {
-            session_id: info.file_path.clone(),
-            actual_session_id: info.session_id,
-            file_path: info.file_path,
-            project_name: Path::new(target_cwd)
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_default(),
-            message_count: info.message_count,
-            first_message_time: info.first_message_time,
-            last_message_time: info.last_message_time,
-            last_modified: info.last_modified,
-            has_tool_use: info.has_tool_use,
-            has_errors: false,
-            summary: info.summary,
-            is_renamed: false,
-            provider: Some(client.provider_id().to_string()),
-            storage_type: None,
-            entrypoint: Some(info.client_kind.entrypoint().to_string()),
-        })
-        .collect();
-
-    sessions.sort_by(|a, b| b.last_modified.cmp(&a.last_modified));
-    Ok(sessions)
-}
-
 /// Load every session whose recorded `cwd` matches `project_path`.
 pub fn load_sessions(
     project_path: &str,
@@ -570,43 +513,9 @@ pub fn load_messages(session_path: &str) -> Result<Vec<ClaudeMessage>, String> {
     let canonical = validate_session_path(path, session_path)
         .or_else(|_| validate_wsl_session_path(path, session_path))?;
 
-    load_messages_from_canonical(&canonical)
-}
+    let client = classify_client(&read_workspace_metadata(&canonical));
 
-/// Snapshot-confined variant: `session_path` must resolve under
-/// `allowed_root` (a snapshot `session-state` dir). No live-root access.
-pub(crate) fn load_messages_in(
-    session_path: &str,
-    allowed_root: &Path,
-) -> Result<Vec<ClaudeMessage>, String> {
-    let path = Path::new(session_path);
-    if !path.exists() {
-        return Err(format!("Session file not found: {session_path}"));
-    }
-    if !is_events_jsonl(path) {
-        return Err(format!(
-            "Copilot CLI session path must end with events.jsonl: {session_path}"
-        ));
-    }
-    let canonical = path
-        .canonicalize()
-        .map_err(|e| format!("Failed to resolve session path: {e}"))?;
-    let root = allowed_root
-        .canonicalize()
-        .unwrap_or_else(|_| allowed_root.to_path_buf());
-    if !canonical.starts_with(&root) {
-        return Err(format!(
-            "Session path is outside the preserved snapshot: {session_path}"
-        ));
-    }
-    load_messages_from_canonical(&canonical)
-}
-
-#[allow(unsafe_code)]
-fn load_messages_from_canonical(canonical: &Path) -> Result<Vec<ClaudeMessage>, String> {
-    let client = classify_client(&read_workspace_metadata(canonical));
-
-    let file = File::open(canonical).map_err(|e| e.to_string())?;
+    let file = File::open(&canonical).map_err(|e| e.to_string())?;
     // SAFETY: file is opened read-only and we only read the mapping.
     let mmap = unsafe { Mmap::map(&file) }.map_err(|e| e.to_string())?;
     let ranges = find_line_ranges(&mmap);

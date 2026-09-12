@@ -64,8 +64,9 @@ pub async fn get_git_log(actual_path: String, limit: usize) -> Result<Vec<GitCom
 
 #[tauri::command]
 pub async fn get_claude_folder_path() -> Result<String, String> {
-    let home_dir = crate::utils::home_dir()
-        .ok_or("HOME_DIRECTORY_NOT_FOUND:Could not determine home directory")?;
+    let home_dir = crate::sources::home_dir().ok_or(
+        "CLAUDE_FOLDER_NOT_FOUND:No collected sources. Run the separate history collector first.",
+    )?;
     let claude_path = home_dir.join(".claude");
 
     if !claude_path.exists() {
@@ -86,6 +87,7 @@ pub async fn get_claude_folder_path() -> Result<String, String> {
 
 #[tauri::command]
 pub async fn validate_claude_folder(path: String) -> Result<bool, String> {
+    crate::sources::require_history_path(&path)?;
     let path_buf = PathBuf::from(&path);
 
     if !path_buf.exists() {
@@ -113,6 +115,7 @@ pub async fn validate_claude_folder(path: String) -> Result<bool, String> {
 /// and applies symlink safety checks.
 #[tauri::command]
 pub async fn validate_custom_claude_dir(path: String) -> Result<bool, String> {
+    crate::sources::require_history_path(&path)?;
     let path_buf = PathBuf::from(&path);
     match crate::utils::validate_custom_claude_path(&path_buf) {
         Ok(_) => Ok(true),
@@ -163,169 +166,13 @@ pub async fn detect_claude_config_dir() -> Result<Option<String>, String> {
 /// synchronously, so it runs on the blocking pool rather than holding the async
 /// runtime for the length of a scan. On a machine with many projects that was a
 /// visible stall, and under `--serve` a remote caller decided when it happened.
-/// Scan only local Claude projects directory without remote hosts or cache merging.
-pub async fn scan_local_projects(claude_path: String) -> Result<Vec<ClaudeProject>, String> {
+#[tauri::command]
+pub async fn scan_projects(claude_path: String) -> Result<Vec<ClaudeProject>, String> {
+    crate::sources::require_history_path(&claude_path)?;
     tauri::async_runtime::spawn_blocking(move || scan_projects_blocking(claude_path))
         .await
         .map(Ok)
         .map_err(|e| format!("Task join error: {e}"))?
-}
-
-/// Explicit from-root seam for the Claude scanner.
-///
-/// `scan_projects()` historically read a caller-supplied base path; this makes
-/// the seam explicit so the snapshot layer can supply its own root without
-/// duplicating parser logic. The convenience wrappers keep the old behavior.
-#[must_use]
-pub fn scan_projects_from_root(root: &Path) -> Vec<ClaudeProject> {
-    scan_projects_blocking(root.to_string_lossy().to_string())
-}
-
-/// Source identity for a Claude base directory: the canonical `~/.claude` is
-/// a `local` source, anything else is a `custom` source. The id is a stable
-/// SHA-256 over machine + kind + provider + role + origin, so restarts,
-/// rebuilds, and toolchain changes agree without a registry write.
-#[must_use]
-pub fn claude_source_for_base(
-    machine_id: &str,
-    base: &Path,
-    label: Option<&str>,
-) -> crate::storage::Source {
-    let is_default = crate::utils::home_dir()
-        .map(|home| home.join(".claude") == base)
-        .unwrap_or(false);
-    if is_default {
-        crate::storage::Source::local("claude", machine_id, base)
-    } else {
-        crate::storage::Source::custom("claude", machine_id, base, label)
-    }
-}
-
-/// Rewrite a snapshot-backed project path to its original location so the
-/// external IPC contract stays stable while parsers read CCHV-owned copies.
-fn rewrite_snapshot_project_path(
-    project: &mut ClaudeProject,
-    snapshot_data_root: &Path,
-    original_base: &Path,
-) {
-    let project_path = Path::new(&project.path);
-    if let Ok(relative) = project_path.strip_prefix(snapshot_data_root) {
-        project.path = original_base.join(relative).to_string_lossy().to_string();
-    }
-}
-
-/// Best-effort filesystem-first scan of one Claude base directory:
-///
-/// ```text
-/// original directory → immutable snapshot → existing parser → caller
-/// ```
-///
-/// Sync failures never fail the scan; browsing falls back to the original
-/// directory and to the latest completed snapshot.
-pub async fn scan_claude_base_with_snapshot(
-    base: String,
-    label: Option<String>,
-) -> Vec<ClaudeProject> {
-    let base_path = PathBuf::from(&base);
-    // Machine identity is best-effort here: scans must never fail just
-    // because the id file is momentarily unavailable.
-    let machine_id = crate::storage::machine::local_machine_id().unwrap_or_default();
-    let source = claude_source_for_base(&machine_id, &base_path, label.as_deref());
-
-    // 1. Filesystem first (best effort, per-source locked inside).
-    let sync_result = tauri::async_runtime::spawn_blocking({
-        let source = source.clone();
-        let base_path = base_path.clone();
-        move || crate::storage::sync_local_directory(&source, &base_path)
-    })
-    .await;
-    match sync_result {
-        Ok(Ok(crate::storage::SyncOutcome::Created(snap))) => {
-            log::info!(
-                "Claude snapshot created for {}: {}",
-                source.id,
-                snap.snapshot_id
-            );
-        }
-        Ok(Ok(crate::storage::SyncOutcome::Unchanged(_))) => {}
-        Ok(Err(e)) => log::warn!("Claude snapshot sync skipped for {}: {e}", source.id),
-        Err(e) => log::warn!("Claude snapshot task failed for {}: {e}", source.id),
-    }
-
-    // 2. Read from the latest completed snapshot when present.
-    if let Some(snapshot_root) = crate::storage::resolve_snapshot_data_root(&source.id) {
-        let snapshot_base = snapshot_root.to_string_lossy().to_string();
-        let mut projects = scan_local_projects(snapshot_base).await.unwrap_or_default();
-        for project in &mut projects {
-            rewrite_snapshot_project_path(project, &snapshot_root, &base_path);
-        }
-        // A valid snapshot is authoritative even when it shows no current
-        // sessions: snapshots are cumulative, so the latest one holds the
-        // entire preserved history (deleted files stay with present=false).
-        // Fall back to the original dir only when no snapshot exists yet.
-        return projects;
-    }
-
-    // 3. No snapshot yet: read the original directory directly.
-    scan_local_projects(base).await.unwrap_or_default()
-}
-
-/// Scan the Claude storage directory for projects, including enabled remote hosts and cached projects.
-#[tauri::command]
-pub async fn scan_projects(claude_path: String) -> Result<Vec<ClaudeProject>, String> {
-    #[cfg(test)]
-    {
-        scan_local_projects(claude_path).await
-    }
-    #[cfg(not(test))]
-    {
-        let mut projects = scan_local_projects(claude_path).await?;
-        for p in &mut projects {
-            if p.provider.is_none() {
-                p.provider = Some("claude".to_string());
-            }
-        }
-
-        // Remote hosts scanning for Claude projects
-        let remote_hosts = crate::remote::get_remote_hosts();
-        if !remote_hosts.is_empty() {
-            let remote_handles: Vec<_> = remote_hosts
-                .into_iter()
-                .filter(|h| h.enabled)
-                .map(|host| {
-                    tauri::async_runtime::spawn(async move {
-                        crate::remote::scan_remote_projects(&host, &["claude".to_string()]).await
-                    })
-                })
-                .collect();
-
-            for handle in remote_handles {
-                match handle.await {
-                    Ok(Ok(remote_projects)) => projects.extend(remote_projects),
-                    Ok(Err(e)) => log::warn!("Remote host scan error in scan_projects: {e}"),
-                    Err(e) => log::warn!("Remote host scan task failed: {e}"),
-                }
-            }
-        }
-
-        projects.retain(|project| project.session_count > 0);
-
-        let mut all_projects =
-            crate::cache::sync_and_save_projects(&projects, None, Some("claude"));
-        all_projects.sort_by(|a, b| {
-            match (
-                crate::utils::parse_rfc3339_utc(&a.last_modified),
-                crate::utils::parse_rfc3339_utc(&b.last_modified),
-            ) {
-                (Some(a_ts), Some(b_ts)) => b_ts.cmp(&a_ts),
-                (Some(_), None) => std::cmp::Ordering::Less,
-                (None, Some(_)) => std::cmp::Ordering::Greater,
-                (None, None) => b.last_modified.cmp(&a.last_modified),
-            }
-        });
-
-        Ok(all_projects)
-    }
 }
 
 /// The scan itself. Separate from the command so the body stays at one indent

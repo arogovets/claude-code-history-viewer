@@ -1,5 +1,5 @@
 import React from "react";
-import { Clock, Hash, Wrench, AlertTriangle } from "lucide-react";
+import { Clock, Hash, Wrench, AlertTriangle, CloudOff } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 import {
@@ -56,6 +56,15 @@ export const SessionMeta: React.FC<SessionMetaProps> = ({
           )}
         >
           {t(`session.item.storageType.${session.storage_type}`)}
+        </span>
+      )}
+      {session.is_available === false && (
+        <span
+          className="shrink-0 whitespace-nowrap px-1 py-0.5 rounded font-medium text-amber-500 bg-amber-500/10 border border-amber-500/20 flex items-center gap-1"
+          title={t("session.item.preservedOffline", "Saved offline in database (source file unavailable)")}
+        >
+          <CloudOff className="w-2.5 h-2.5" />
+          {t("session.item.unavailable", "Offline")}
         </span>
       )}
       {entrypointMeta && (

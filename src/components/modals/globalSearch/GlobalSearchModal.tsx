@@ -1,3 +1,4 @@
+import { getSourceId, sessionMatches } from "@/utils/sourceIdentity";
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { api } from "@/services/api";
 import { useTranslation } from "react-i18next";
@@ -14,8 +15,8 @@ import {
     MessageSquare,
     Lightbulb,
     Server,
-    Laptop,
     EyeOff,
+    Hash,
 } from "lucide-react";
 import {
     Dialog,
@@ -29,7 +30,7 @@ import {
     Badge,
 } from "@/components/ui";
 import { useAppStore } from "@/store/useAppStore";
-import type { ClaudeMessage, ClaudeProject, ClaudeSession, ContentItem } from "@/types";
+import type { ClaudeMessage, ClaudeProject, ClaudeSession, ContentItem, LocatedSession } from "@/types";
 import {
     getProviderLabel,
     getWslSearchableProviderIds,
@@ -73,56 +74,14 @@ type SearchResultGroup = {
     projectName: string;
     provider?: string;
     pathUnavailable: boolean;
-    isRemote: boolean;
-    hostLabel: string;
+    sourceId: string;
+    sourceLabel: string;
     items: GlobalSearchResult[];
 };
 
-const isRemoteProject = (project?: ClaudeProject | null): boolean => {
-    if (!project) return false;
-    return (
-        project.path.startsWith("remote://") ||
-        Boolean(
-            project.custom_directory_label &&
-                (project.custom_directory_label.includes("@") ||
-                    project.custom_directory_label.includes(":"))
-        )
-    );
-};
+const getProjectSourceId = (project?: ClaudeProject | null): string => project?.source_id ?? "";
+const getProjectSourceLabel = (project: ClaudeProject): string => project.custom_directory_label || project.source_id || "Source";
 
-const getProjectHostLabel = (
-    project: ClaudeProject,
-    t: (key: string, fallback?: string) => string,
-    compact = false
-): string => {
-    const isRemote = isRemoteProject(project);
-    if (isRemote) {
-        if (project.custom_directory_label) {
-            if (compact && project.custom_directory_label.includes("@")) {
-                return project.custom_directory_label.split("@")[1] || project.custom_directory_label;
-            }
-            return project.custom_directory_label;
-        }
-        return t("common.remote", "Remote");
-    }
-    if (project.custom_directory_label) {
-        return project.custom_directory_label;
-    }
-    return t("common.local", "Local");
-};
-
-const sessionMatches = (s: ClaudeSession, targetId?: string): boolean => {
-    if (!targetId) return false;
-    if (s.session_id === targetId || s.actual_session_id === targetId) return true;
-    const cleanTarget = (targetId.includes("#") ? targetId.split("#")[1] : targetId) || targetId;
-    const cleanSession = (s.session_id.includes("#") ? s.session_id.split("#")[1] : s.session_id) || s.session_id;
-    return (
-        s.actual_session_id === cleanTarget ||
-        cleanSession === cleanTarget ||
-        s.session_id === cleanTarget ||
-        (cleanSession ? cleanSession.endsWith(cleanTarget) : false)
-    );
-};
 
 export const GlobalSearchModal = ({
     isOpen,
@@ -131,6 +90,7 @@ export const GlobalSearchModal = ({
     const { t } = useTranslation();
     const [query, setQuery] = useState("");
     const [results, setResults] = useState<GlobalSearchResult[]>([]);
+    const [sessionResults, setSessionResults] = useState<LocatedSession[]>([]);
     const [isSearching, setIsSearching] = useState(false);
     const [resolvingResultUuid, setResolvingResultUuid] = useState<string | null>(null);
     const [selectedIndex, setSelectedIndex] = useState(0);
@@ -183,16 +143,12 @@ export const GlobalSearchModal = ({
                 result.projectName || t("globalSearch.unknownProject");
             const resultProvider = result.provider ?? "claude";
 
-            // Correlate with session in store to identify remote vs local accurately
-            const matchingSession = sessions.find((s) => sessionMatches(s, result.sessionId));
-            const isRemote = matchingSession
-                ? matchingSession.session_id.startsWith("remote://") ||
-                  matchingSession.file_path.startsWith("remote://")
-                : false;
+            // Correlate with session in store to identify source identity accurately
+            const sourceId = getSourceId(result.sessionId);
 
             // If an exclude filter is active and this result belongs to the excluded project, skip it
             if (isExcludedFilter && selectedProject) {
-                const isTargetRemote = isRemoteProject(selectedProject);
+                const targetSourceId = getProjectSourceId(selectedProject);
                 const nameMatches =
                     projectName === selectedProject.name ||
                     projectName === selectedProject.actual_path?.split(/[\\/]/).pop() ||
@@ -201,7 +157,7 @@ export const GlobalSearchModal = ({
                     !result.provider ||
                     !selectedProject.provider ||
                     result.provider === selectedProject.provider;
-                if (nameMatches && providerMatches && isRemote === isTargetRemote) {
+                if (nameMatches && providerMatches && sourceId === targetSourceId) {
                     continue;
                 }
             }
@@ -211,8 +167,8 @@ export const GlobalSearchModal = ({
                     const providerMatches = (project.provider ?? "claude") === resultProvider;
                     const nameMatches = project.name === projectName;
                     if (!providerMatches || !nameMatches) return false;
-                    const pRemote = isRemoteProject(project);
-                    return isRemote ? pRemote : !pRemote;
+                    const projectSourceId = getProjectSourceId(project);
+                    return sourceId === projectSourceId;
                 }) ||
                 projects.find(
                     (project) =>
@@ -221,7 +177,7 @@ export const GlobalSearchModal = ({
                 );
 
             // If matching project is marked hidden in user metadata and not explicitly selected, skip it
-            if (matchingProject && isProjectHidden?.(matchingProject.actual_path || matchingProject.path)) {
+            if (matchingProject && isProjectHidden?.(matchingProject.path)) {
                 if (effectiveProjectPath !== matchingProject.path) {
                     continue;
                 }
@@ -231,12 +187,12 @@ export const GlobalSearchModal = ({
                 (key, fallback) => t(key, fallback),
                 result.provider,
             );
-            const hostLabel = matchingProject
-                ? getProjectHostLabel(matchingProject, t, false)
-                : isRemote
-                  ? t("common.remote", "Remote")
-                  : t("common.local", "Local");
-            const groupKey = `${resultProvider}::${isRemote ? "remote" : "local"}::${projectName}`;
+            const sourceLabel = matchingProject
+                ? getProjectSourceLabel(matchingProject)
+                : sourceId
+                  ? "Source"
+                  : "Source";
+            const groupKey = `${resultProvider}::${sourceId}::${projectName}`;
             const groupLabel = `${projectName} (${providerLabel})`;
 
             if (!groups.has(groupKey)) {
@@ -245,8 +201,8 @@ export const GlobalSearchModal = ({
                     projectName,
                     provider: result.provider,
                     pathUnavailable: matchingProject?.path_status === "unavailable",
-                    isRemote,
-                    hostLabel,
+                    sourceId,
+                    sourceLabel,
                     items: [],
                 });
             }
@@ -254,7 +210,7 @@ export const GlobalSearchModal = ({
         }
 
         return groups;
-    }, [projects, results, sessions, isExcludedFilter, selectedProject, effectiveProjectPath, isProjectHidden, t]);
+    }, [projects, results, isExcludedFilter, selectedProject, effectiveProjectPath, isProjectHidden, t]);
 
     // Flatten grouped results for keyboard navigation
     const flattenedResults = useMemo(() => {
@@ -291,12 +247,33 @@ export const GlobalSearchModal = ({
 
             if (trimmedQuery.length < 2 || (!claudePath && !hasAlternativeSource)) {
                 setResults([]);
+                setSessionResults([]);
                 setIsSearching(false);
                 return;
             }
 
             setIsSearching(true);
             try {
+                // Concurrently run session ID search across all providers
+                const sessionSearchPromise = api<LocatedSession[]>("search_sessions_by_id", {
+                    query: trimmedQuery,
+                    limit: 10,
+                })
+                    .catch(() => [] as LocatedSession[])
+                    .then((sessionsFound) => {
+                        let filteredSessions = sessionsFound;
+                        if (isExcludedFilter && selectedProject) {
+                            filteredSessions = filteredSessions.filter(
+                                (s) => s.project.path !== selectedProject.path && s.project.name !== selectedProject.name
+                            );
+                        } else if (effectiveProjectPath !== "all" && selectedProject) {
+                            filteredSessions = filteredSessions.filter(
+                                (s) => s.project.path === selectedProject.path || s.project.name === selectedProject.name
+                            );
+                        }
+                        setSessionResults(filteredSessions);
+                        return filteredSessions;
+                    });
                 const filters: Record<string, unknown> = {};
                 if (!isExcludedFilter && effectiveProjectPath !== "all") {
                     const selected = projects.find((p) => p.path === effectiveProjectPath);
@@ -304,7 +281,7 @@ export const GlobalSearchModal = ({
                         const candidates = new Set<string>();
                         if (selected.name) candidates.add(selected.name);
                         const pathLeaf = selected.path.split(/[\\/]/).pop();
-                        if (pathLeaf && !pathLeaf.startsWith("remote://")) candidates.add(pathLeaf);
+                        if (pathLeaf && !pathLeaf.startsWith("source:")) candidates.add(pathLeaf);
                         if (selected.actual_path) {
                             const actualLeaf = selected.actual_path.split(/[\\/]/).pop();
                             if (actualLeaf) candidates.add(actualLeaf);
@@ -342,7 +319,7 @@ export const GlobalSearchModal = ({
                 );
 
                 if (isExcludedFilter && selectedProject) {
-                    const isSelectedRemote = isRemoteProject(selectedProject);
+                    const selectedSourceId = getProjectSourceId(selectedProject);
                     const filtered = searchResults.filter((res) => {
                         const nameMatches =
                             res.projectName &&
@@ -354,21 +331,17 @@ export const GlobalSearchModal = ({
                             !selectedProject.provider ||
                             res.provider === selectedProject.provider;
 
-                        const matchingSession = sessions.find((s) => sessionMatches(s, res.sessionId));
-                        const isSessionRemote = matchingSession
-                            ? matchingSession.session_id.startsWith("remote://") ||
-                              matchingSession.file_path.startsWith("remote://")
-                            : false;
-                        const remoteMatches = isSessionRemote === isSelectedRemote;
+                        const sessionSourceId = getSourceId(res.sessionId);
+                        const sourceMatches = sessionSourceId === selectedSourceId;
 
-                        if (nameMatches && providerMatches && remoteMatches) {
+                        if (nameMatches && providerMatches && sourceMatches) {
                             return false;
                         }
                         return true;
                     });
                     setResults(filtered);
                 } else if (selectedProject) {
-                    const isSelectedRemote = isRemoteProject(selectedProject);
+                    const selectedSourceId = getProjectSourceId(selectedProject);
                     const filtered = searchResults.filter((res) => {
                         if (
                             res.provider &&
@@ -379,10 +352,9 @@ export const GlobalSearchModal = ({
                         }
                         const matchingSession = sessions.find((s) => sessionMatches(s, res.sessionId));
                         if (matchingSession) {
-                            const isSessionRemote =
-                                matchingSession.session_id.startsWith("remote://") ||
-                                matchingSession.file_path.startsWith("remote://");
-                            if (isSessionRemote !== isSelectedRemote) {
+                            const sessionSourceId =
+                                getSourceId(res.sessionId);
+                            if (sessionSourceId !== selectedSourceId) {
                                 return false;
                             }
                         }
@@ -392,10 +364,12 @@ export const GlobalSearchModal = ({
                 } else {
                     setResults(searchResults);
                 }
+                await sessionSearchPromise;
                 setSelectedIndex(0);
             } catch (error) {
                 console.error("Global search failed:", error);
                 setResults([]);
+                setSessionResults([]);
                 toast.error(t("globalSearch.searchFailed"));
             } finally {
                 setIsSearching(false);
@@ -452,28 +426,6 @@ export const GlobalSearchModal = ({
                 // so a mid-scan toggle does not change half the requests.
                 const { excludeSidechain } = useAppStore.getState();
                 const token = ++resolveTokenRef.current;
-
-                // 1. Fast indexed lookup (<1ms) via locate_session
-                try {
-                    const located = await api<{ project: ClaudeProject; session: ClaudeSession } | null>(
-                        "locate_session",
-                        { sessionId: result.sessionId },
-                    );
-                    if (token !== resolveTokenRef.current) return;
-                    if (located?.project && located?.session) {
-                        setAnalyticsCurrentView("messages");
-                        await selectProject(located.project);
-                        await selectSession(located.session);
-                        if (result.uuid) {
-                            navigateToMessage(result.uuid, { history: "replace" });
-                        }
-                        toast.dismiss(toastId);
-                        onClose();
-                        return;
-                    }
-                } catch {
-                    // Fall back to candidate scanning
-                }
 
                 // The search result carries the project name and provider —
                 // rank matching projects first so the common case resolves in
@@ -556,28 +508,57 @@ export const GlobalSearchModal = ({
         [resolvingResultUuid, projects, sessions, selectProject, selectSession, navigateToMessage, clearTargetMessage, setAnalyticsCurrentView, onClose, t],
     );
 
+    const handleSelectSession = useCallback(
+        async (located: LocatedSession) => {
+            const toastId = toast.loading(t("globalSearch.openingSession", "Opening session..."));
+            try {
+                setAnalyticsCurrentView("messages");
+                await selectProject(located.project);
+                await selectSession(located.session);
+                toast.dismiss(toastId);
+                onClose();
+            } catch (error) {
+                console.error("Failed to navigate to located session:", error);
+                toast.dismiss(toastId);
+                toast.error(t("globalSearch.navigationFailed", "Failed to open session"));
+                onClose();
+            }
+        },
+        [selectProject, selectSession, setAnalyticsCurrentView, onClose, t]
+    );
+
+    const totalSelectable = sessionResults.length + flattenedResults.length;
+
     // Keyboard navigation
     const handleKeyDown = useCallback(
         (e: React.KeyboardEvent) => {
-            if (flattenedResults.length === 0) return;
+            if (totalSelectable === 0) return;
 
             switch (e.key) {
                 case "ArrowDown":
                     e.preventDefault();
                     setSelectedIndex((prev) =>
-                        prev < flattenedResults.length - 1 ? prev + 1 : 0,
+                        prev < totalSelectable - 1 ? prev + 1 : 0,
                     );
                     break;
                 case "ArrowUp":
                     e.preventDefault();
                     setSelectedIndex((prev) =>
-                        prev > 0 ? prev - 1 : flattenedResults.length - 1,
+                        prev > 0 ? prev - 1 : totalSelectable - 1,
                     );
                     break;
                 case "Enter":
                     e.preventDefault();
-                    if (flattenedResults[selectedIndex]) {
-                        handleSelectResult(flattenedResults[selectedIndex]);
+                    if (selectedIndex < sessionResults.length) {
+                        const target = sessionResults[selectedIndex];
+                        if (target) {
+                            void handleSelectSession(target);
+                        }
+                    } else {
+                        const targetMsg = flattenedResults[selectedIndex - sessionResults.length];
+                        if (targetMsg) {
+                            void handleSelectResult(targetMsg);
+                        }
                     }
                     break;
                 case "Escape":
@@ -586,18 +567,18 @@ export const GlobalSearchModal = ({
                     break;
             }
         },
-        [flattenedResults, selectedIndex, handleSelectResult, onClose],
+        [totalSelectable, sessionResults, flattenedResults, selectedIndex, handleSelectSession, handleSelectResult, onClose],
     );
 
     // Scroll selected item into view
     useEffect(() => {
-        if (resultsContainerRef.current && flattenedResults.length > 0) {
+        if (resultsContainerRef.current && totalSelectable > 0) {
             const selectedElement = resultsContainerRef.current.querySelector(
                 `[data-index="${selectedIndex}"]`,
             );
             selectedElement?.scrollIntoView({ block: "nearest" });
         }
-    }, [selectedIndex, flattenedResults.length]);
+    }, [selectedIndex, totalSelectable]);
 
     // Focus input when modal opens
     useEffect(() => {
@@ -609,6 +590,7 @@ export const GlobalSearchModal = ({
             setResolvingResultUuid(null);
             setQuery("");
             setResults([]);
+            setSessionResults([]);
             setSelectedIndex(0);
             setMessageTypeFilter("all");
         }
@@ -716,7 +698,7 @@ export const GlobalSearchModal = ({
         );
     };
 
-    let currentResultIndex = 0;
+    let currentResultIndex = sessionResults.length;
 
     return (
         <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
@@ -818,18 +800,14 @@ export const GlobalSearchModal = ({
                                                 <span
                                                     className={cn(
                                                         "px-1 py-0 text-[10px] leading-tight font-medium rounded flex items-center gap-0.5 shrink-0",
-                                                        isRemoteProject(selectedProject)
+                                                        getProjectSourceId(selectedProject)
                                                             ? "bg-sky-500/15 text-sky-700 dark:text-sky-300 border border-sky-500/30"
                                                             : "bg-muted text-muted-foreground border border-border/50"
                                                     )}
                                                 >
-                                                    {isRemoteProject(selectedProject) ? (
-                                                        <Server className="w-2.5 h-2.5 shrink-0" />
-                                                    ) : (
-                                                        <Laptop className="w-2.5 h-2.5 shrink-0" />
-                                                    )}
+                                                    <Server className="w-2.5 h-2.5 shrink-0" />
                                                     <span className="truncate max-w-[80px]">
-                                                        {getProjectHostLabel(selectedProject, t, true)}
+                                                        {getProjectSourceLabel(selectedProject)}
                                                     </span>
                                                 </span>
                                             </div>
@@ -849,18 +827,14 @@ export const GlobalSearchModal = ({
                                                 <span
                                                     className={cn(
                                                         "px-1 py-0 text-[10px] leading-tight font-medium rounded flex items-center gap-0.5 shrink-0",
-                                                        isRemoteProject(selectedProject)
+                                                        getProjectSourceId(selectedProject)
                                                             ? "bg-sky-500/15 text-sky-700 dark:text-sky-300 border border-sky-500/30"
                                                             : "bg-muted text-muted-foreground border border-border/50"
                                                     )}
                                                 >
-                                                    {isRemoteProject(selectedProject) ? (
-                                                        <Server className="w-2.5 h-2.5 shrink-0" />
-                                                    ) : (
-                                                        <Laptop className="w-2.5 h-2.5 shrink-0" />
-                                                    )}
+                                                    <Server className="w-2.5 h-2.5 shrink-0" />
                                                     <span className="truncate max-w-[80px]">
-                                                        {getProjectHostLabel(selectedProject, t, true)}
+                                                        {getProjectSourceLabel(selectedProject)}
                                                     </span>
                                                 </span>
                                             </div>
@@ -887,14 +861,14 @@ export const GlobalSearchModal = ({
                                         <span>{t("globalSearch.excludeSection", "Exclude project (spam filter)")}</span>
                                     </div>
                                     {projects.map((project) => {
-                                        const isRemote = isRemoteProject(project);
-                                        const hostLabel = getProjectHostLabel(project, t, false);
+                                        const sourceId = getProjectSourceId(project);
+                                        const sourceLabel = getProjectSourceLabel(project);
                                         const providerLabel = getProviderLabel((k, fb) => t(k, fb), project.provider);
                                         return (
                                             <SelectItem
                                                 key={`exclude:${project.path}`}
                                                 value={`exclude:${project.path}`}
-                                                textValue={`${t("globalSearch.excludePrefix", "Exclude:")} ${project.name} ${providerLabel} ${hostLabel}`}
+                                                textValue={`${t("globalSearch.excludePrefix", "Exclude:")} ${project.name} ${providerLabel} ${sourceLabel}`}
                                             >
                                                 <div className="flex items-center justify-between gap-3 w-full min-w-0 py-0.5">
                                                     <div className="flex items-center gap-1.5 min-w-0">
@@ -913,21 +887,17 @@ export const GlobalSearchModal = ({
                                                         <span
                                                             className={cn(
                                                                 "px-1.5 py-0.5 text-2xs font-medium rounded flex items-center gap-1 shrink-0",
-                                                                isRemote
+                                                                sourceId
                                                                     ? "bg-sky-500/15 text-sky-700 dark:text-sky-300 border border-sky-500/30"
                                                                     : "bg-muted/70 text-muted-foreground border border-border/50"
                                                             )}
                                                             title={
                                                                 project.custom_directory_label ||
-                                                                (isRemote ? t("common.remote", "Remote") : t("common.local", "Local"))
+                                                                "Source"
                                                             }
                                                         >
-                                                            {isRemote ? (
-                                                                <Server className="w-2.5 h-2.5 shrink-0" />
-                                                            ) : (
-                                                                <Laptop className="w-2.5 h-2.5 shrink-0" />
-                                                            )}
-                                                            <span className="truncate max-w-[140px]">{hostLabel}</span>
+                                                            <Server className="w-2.5 h-2.5 shrink-0" />
+                                                            <span className="truncate max-w-[140px]">{sourceLabel}</span>
                                                         </span>
                                                         <span
                                                             className={cn(
@@ -948,14 +918,14 @@ export const GlobalSearchModal = ({
                                         {t("globalSearch.includeSection", "Only in project")}
                                     </div>
                                     {projects.map((project) => {
-                                        const isRemote = isRemoteProject(project);
-                                        const hostLabel = getProjectHostLabel(project, t, false);
+                                        const sourceId = getProjectSourceId(project);
+                                        const sourceLabel = getProjectSourceLabel(project);
                                         const providerLabel = getProviderLabel((k, fb) => t(k, fb), project.provider);
                                         return (
                                             <SelectItem
                                                 key={project.path}
                                                 value={project.path}
-                                                textValue={`${project.name} ${providerLabel} ${hostLabel}`}
+                                                textValue={`${project.name} ${providerLabel} ${sourceLabel}`}
                                             >
                                                 <div className="flex items-center justify-between gap-3 w-full min-w-0 py-0.5">
                                                     <span
@@ -965,25 +935,21 @@ export const GlobalSearchModal = ({
                                                         {project.name}
                                                     </span>
                                                     <div className="flex items-center gap-1.5 shrink-0 ml-auto">
-                                                        {/* Remote / Local Badge */}
+                                                        {/* Source label */}
                                                         <span
                                                             className={cn(
                                                                 "px-1.5 py-0.5 text-2xs font-medium rounded flex items-center gap-1 shrink-0",
-                                                                isRemote
+                                                                sourceId
                                                                     ? "bg-sky-500/15 text-sky-700 dark:text-sky-300 border border-sky-500/30"
                                                                     : "bg-muted/70 text-muted-foreground border border-border/50"
                                                             )}
                                                             title={
                                                                 project.custom_directory_label ||
-                                                                (isRemote ? t("common.remote", "Remote") : t("common.local", "Local"))
+                                                                "Source"
                                                             }
                                                         >
-                                                            {isRemote ? (
-                                                                <Server className="w-2.5 h-2.5 shrink-0" />
-                                                            ) : (
-                                                                <Laptop className="w-2.5 h-2.5 shrink-0" />
-                                                            )}
-                                                            <span className="truncate max-w-[140px]">{hostLabel}</span>
+                                                            <Server className="w-2.5 h-2.5 shrink-0" />
+                                                            <span className="truncate max-w-[140px]">{sourceLabel}</span>
                                                         </span>
 
                                                         {/* Provider Badge */}
@@ -1012,7 +978,7 @@ export const GlobalSearchModal = ({
                     className="max-h-100 overflow-y-auto"
                 >
                     {/* Loading skeleton */}
-                    {isSearching && results.length === 0 && (
+                    {isSearching && results.length === 0 && sessionResults.length === 0 && (
                         <div className="py-4 space-y-3 px-4">
                             {Array.from({ length: 4 }).map((_, i) => (
                                 <div key={i} className="animate-pulse">
@@ -1027,7 +993,7 @@ export const GlobalSearchModal = ({
                         </div>
                     )}
 
-                    {!isSearching && query.trim().length >= 2 && results.length === 0 && (
+                    {!isSearching && query.trim().length >= 2 && results.length === 0 && sessionResults.length === 0 && (
                         <div className="px-4 py-8 text-center text-sm text-muted-foreground">
                             {t("globalSearch.noResults")}
                         </div>
@@ -1066,6 +1032,93 @@ export const GlobalSearchModal = ({
                         </div>
                     )}
 
+                    {/* Session Matches */}
+                    {sessionResults.length > 0 && (
+                        <div className="py-2 border-b border-border/40">
+                            <div className="px-4 py-1.5 text-xs font-semibold text-muted-foreground bg-muted sticky top-0 truncate flex items-center justify-between z-10">
+                                <div className="flex items-center gap-1.5 min-w-0">
+                                    <Hash className="w-3.5 h-3.5 text-primary shrink-0" />
+                                    <span className="font-semibold text-foreground">
+                                        {t("globalSearch.matchingSessions", "Matching Sessions")}
+                                    </span>
+                                </div>
+                                <span className="text-2xs text-muted-foreground font-mono shrink-0 ml-2">
+                                    {sessionResults.length}
+                                </span>
+                            </div>
+                            {sessionResults.map((item, sIndex) => {
+                                const isSelected = sIndex === selectedIndex;
+                                const displayName = getSessionDisplayName(item.session.session_id, item.session.summary) ||
+                                    item.session.summary ||
+                                    t("globalSearch.untitledSession", "Untitled Session");
+                                const providerId = item.session.provider || item.project.provider || "claude";
+                                const sourceId = getProjectSourceId(item.project);
+                                const sourceLabel = getProjectSourceLabel(item.project);
+
+                                return (
+                                    <button
+                                        key={item.session.session_id}
+                                        data-index={sIndex}
+                                        onClick={() => handleSelectSession(item)}
+                                        className={cn(
+                                            "w-full text-left px-4 py-2.5 hover:bg-muted/50 transition-colors border-b border-border/20 last:border-0",
+                                            isSelected && "bg-muted"
+                                        )}
+                                    >
+                                        <div className="flex items-start gap-3">
+                                            <div className="flex-1 min-w-0">
+                                                <div className="flex items-center gap-2 mb-1 flex-wrap">
+                                                    <Badge
+                                                        size="sm"
+                                                        className={cn(
+                                                            "rounded px-1.5 py-0.5 text-2xs font-medium",
+                                                            getProviderBadgeStyle(providerId)
+                                                        )}
+                                                    >
+                                                        {getProviderLabel((key, fallback) => t(key, fallback), providerId)}
+                                                    </Badge>
+                                                    <span className="font-medium text-xs text-foreground truncate max-w-[180px]">
+                                                        {item.project.name}
+                                                    </span>
+                                                    <span
+                                                        className={cn(
+                                                            "px-1.5 py-0.5 text-2xs font-medium rounded flex items-center gap-1 shrink-0",
+                                                            sourceId
+                                                                ? "bg-sky-500/15 text-sky-700 dark:text-sky-300 border border-sky-500/30"
+                                                                : "bg-muted/70 text-muted-foreground border border-border/50"
+                                                        )}
+                                                    >
+                                                        <Server className="w-2.5 h-2.5 shrink-0" />
+                                                        <span className="truncate max-w-[120px]">{sourceLabel}</span>
+                                                    </span>
+                                                    {item.session.last_modified && (
+                                                        <span className="text-2xs text-muted-foreground ml-auto shrink-0">
+                                                            {formatTimestamp(item.session.last_modified)}
+                                                        </span>
+                                                    )}
+                                                </div>
+                                                <p className="text-sm font-medium text-foreground truncate mb-1">
+                                                    {displayName}
+                                                </p>
+                                                <div className="flex items-center gap-2 text-2xs text-muted-foreground font-mono truncate">
+                                                    <span className="text-muted-foreground/60 shrink-0">ID:</span>
+                                                    <span className="truncate bg-muted/60 px-1 py-0.5 rounded text-foreground/80">
+                                                        {highlightText(item.session.actual_session_id || item.session.session_id)}
+                                                    </span>
+                                                    {item.session.message_count > 0 && (
+                                                        <span className="shrink-0 text-muted-foreground/70 ml-auto">
+                                                            {item.session.message_count} {t("common.messages", "messages")}
+                                                        </span>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    )}
+
                     {results.length > 0 && (
                         <div className="py-2">
                             {Array.from(groupedResults.entries()).map(
@@ -1091,17 +1144,13 @@ export const GlobalSearchModal = ({
                                                 <span
                                                     className={cn(
                                                         "px-1.5 py-0.5 text-2xs font-medium rounded flex items-center gap-1 shrink-0",
-                                                        group.isRemote
+                                                        group.sourceId
                                                             ? "bg-sky-500/15 text-sky-700 dark:text-sky-300 border border-sky-500/30"
                                                             : "bg-muted/70 text-muted-foreground border border-border/50"
                                                     )}
                                                 >
-                                                    {group.isRemote ? (
-                                                        <Server className="w-2.5 h-2.5 shrink-0" />
-                                                    ) : (
-                                                        <Laptop className="w-2.5 h-2.5 shrink-0" />
-                                                    )}
-                                                    <span className="truncate max-w-[140px]">{group.hostLabel}</span>
+                                                    <Server className="w-2.5 h-2.5 shrink-0" />
+                                                    <span className="truncate max-w-[140px]">{group.sourceLabel}</span>
                                                 </span>
                                                 {group.pathUnavailable && (
                                                     <Badge
@@ -1220,10 +1269,10 @@ export const GlobalSearchModal = ({
                             </span>
                         </div>
                     </div>
-                    {results.length > 0 && (
+                    {(results.length > 0 || sessionResults.length > 0) && (
                         <span>
                             {t("globalSearch.results", {
-                                count: results.length,
+                                count: results.length + sessionResults.length,
                             })}
                         </span>
                     )}

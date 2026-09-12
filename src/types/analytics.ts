@@ -16,7 +16,7 @@ export type RecentEditsPagination = RecentEditsPaginationState;
 /**
  * Analytics 뷰 타입
  */
-export type AnalyticsView = 'messages' | 'tokenStats' | 'analytics' | 'recentEdits' | 'settings' | 'board' | 'archive';
+export type AnalyticsView = 'messages' | 'tokenStats' | 'analytics' | 'recentEdits' | 'settings' | 'board' | 'archive' | 'kanban' | 'projectDetails';
 export type AnalyticsViewType = AnalyticsView;
 
 /**

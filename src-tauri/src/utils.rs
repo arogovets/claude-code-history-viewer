@@ -319,6 +319,9 @@ pub fn decode_project_path(session_storage_path: &str) -> String {
 /// embedded `cwd` is stale — e.g. a session manually moved between project
 /// folders keeps its original `cwd`, but its containing folder is authoritative.
 pub fn decode_project_path_verified(session_storage_path: &str) -> Option<String> {
+    if crate::sources::for_path(Path::new(session_storage_path)).is_some() {
+        return None;
+    }
     // 1. Prefer originalPath from sessions-index.json, but only if it still
     //    points at an existing directory.
     let index_path = Path::new(session_storage_path).join("sessions-index.json");
@@ -505,6 +508,8 @@ fn extract_main_git_dir(gitdir: &str) -> Option<String> {
 /// [`Linked`]: GitWorktreeType::Linked
 /// [`NotGit`]: GitWorktreeType::NotGit
 pub fn detect_git_worktree_info(project_path: &str) -> Option<GitInfo> {
+    #[cfg(not(test))]
+    crate::sources::for_path(Path::new(project_path))?;
     let actual_path = decode_project_path(project_path);
     let git_path = Path::new(&actual_path).join(".git");
 

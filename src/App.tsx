@@ -1,3 +1,4 @@
+import { useOrganizationNavigation } from "@/hooks/useOrganizationNavigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
@@ -95,6 +96,7 @@ function App() {
 
   // Side-effect hooks (no return value)
   useAppKeyboard();
+  useOrganizationNavigation();
   useExternalLinks();
   useAppInitialization({ isMessagesView: computed.isMessagesView });
 
@@ -168,10 +170,6 @@ function App() {
       void preloadSessionFromCli({
         getStartupSessionHint: () => Promise.resolve(hint),
         projects: projectsRef.current,
-        locateSession: (sessionId) =>
-          api<{ project: ClaudeProject; session: ClaudeSession } | null>("locate_session", {
-            sessionId,
-          }),
         selectProject,
         selectSession: (session) =>
           selectSession(session, { history: "none" }),
@@ -265,6 +263,7 @@ function App() {
   useEffect(
     () =>
       listenForWebUIDeepLinks((deepLink) => {
+        if (["kanban", "project"].includes(new URL(window.location.href).searchParams.get("view") ?? "")) return;
         invalidatePreload();
         if (!deepLink.sessionId) {
           pendingHintRef.current = null;

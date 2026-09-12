@@ -234,6 +234,8 @@ export const SessionList: React.FC<SessionListProps> = ({
     setSessionEntrypointFilter,
     getSessionDisplayName,
   } = useAppStore();
+  const sessionsOffline = useAppStore((s) => s.sessionsOffline);
+  const offlineNotice = sessionsOffline ? <p role="status" className="px-2 py-2 text-xs text-muted-foreground">{t("kanban.offlineHistory")}</p> : null;
   const isSelectionMode = useAppStore((s) => s.isSessionSelectionMode);
   const sessionSelectionIds = useAppStore((s) => s.sessionSelectionIds);
   const toggleSessionSelectionMode = useAppStore((s) => s.toggleSessionSelectionMode);
@@ -273,10 +275,16 @@ export const SessionList: React.FC<SessionListProps> = ({
       const query = searchQuery.toLowerCase();
       result = result.filter(session => {
         const displayName = getSessionDisplayName(session.session_id, session.summary);
+        const actualId = session.actual_session_id?.toLowerCase() || '';
+        const sessionId = session.session_id.toLowerCase();
+        const filePath = session.file_path?.toLowerCase() || '';
+        const summary = session.summary?.toLowerCase() || '';
         return (
           displayName?.toLowerCase().includes(query) ||
-          session.summary?.toLowerCase().includes(query) ||
-          session.session_id.toLowerCase().includes(query)
+          summary.includes(query) ||
+          sessionId.includes(query) ||
+          actualId.includes(query) ||
+          filePath.includes(query)
         );
       });
     }
@@ -477,7 +485,7 @@ export const SessionList: React.FC<SessionListProps> = ({
   if (sessions.length === 0 && !hasMoreSessions) {
     return (
       <div className={cn(containerClass, "py-2 text-2xs text-muted-foreground", isWorktree || isMain ? "ml-5" : "ml-7")}>
-        {t("components:session.notFound", "No sessions")}
+        {sessionsOffline ? t("kanban.offlineEmpty") : t("components:session.notFound", "No sessions")}
       </div>
     );
   }
@@ -486,6 +494,7 @@ export const SessionList: React.FC<SessionListProps> = ({
   if (!useVirtualScroll) {
     return (
       <div className={cn(containerClass, borderClass, (isWorktree || isMain) && "py-1.5")}>
+        {offlineNotice}
         {controls}
         {selectionBar}
 
@@ -520,7 +529,8 @@ export const SessionList: React.FC<SessionListProps> = ({
   // 세션 수가 많으면 virtual scroll 적용
   return (
     <div className={cn(containerClass, borderClass, (isWorktree || isMain) && "py-1.5")}>
-      {controls}
+      {offlineNotice}
+        {controls}
       {selectionBar}
 
       {/* Virtual Scroll List */}

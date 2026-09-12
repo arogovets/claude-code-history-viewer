@@ -94,17 +94,12 @@ const READ_ONLY_ALLOWED_API_PATHS: &[&str] = &[
     "/load_unified_presets",
     "/load_kanban",
     "/load_user_metadata",
-    "/locate_session",
     "/open_github_issues",
     "/read_text_file",
     "/scan_all_projects",
     "/scan_projects",
     "/search_all_providers",
     "/search_messages",
-    "/search_sessions_by_id",
-    "/sync_sources",
-    "/sync_manifest",
-    "/sync_file",
     "/validate_claude_folder",
     "/validate_custom_claude_dir",
 ];
@@ -323,11 +318,6 @@ pub fn build_router(
             post(h::get_provider_message_offset),
         )
         .route("/search_all_providers", post(h::search_all_providers))
-        .route("/sync_sources", post(h::sync_sources))
-        .route("/sync_manifest", post(h::sync_manifest))
-        .route("/sync_file", post(h::sync_file))
-        .route("/locate_session", post(h::locate_session))
-        .route("/search_sessions_by_id", post(h::search_sessions_by_id))
         // Archive commands
         .route("/get_archive_base_path", post(h::get_archive_base_path))
         .route("/list_archives", post(h::list_archives))
@@ -353,7 +343,6 @@ pub fn build_router(
         ));
 
     let api = Router::new()
-        .route("/health", get(health_handler))
         .route("/auth/login", post(auth_login_handler))
         .route("/auth/logout", post(auth_logout_handler))
         .merge(protected_api);
@@ -1328,45 +1317,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial_test::serial]
-    async fn test_api_health_check() {
-        let _sandbox = crate::test_utils::SandboxHome::new();
-        let app = build_router(test_state(None), "127.0.0.1", 3727, None, "/");
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .method(Method::GET)
-                    .uri("/api/health")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
-    }
-
-    #[tokio::test]
-    #[serial_test::serial]
-    async fn test_prefixed_router_serves_api_health() {
-        let _sandbox = crate::test_utils::SandboxHome::new();
-        let app = build_router(test_state(None), "127.0.0.1", 3727, None, "/viewer");
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .method(Method::GET)
-                    .uri("/viewer/api/health")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
-    }
-
-    #[tokio::test]
-    #[serial_test::serial]
     async fn test_prefixed_router_does_not_expose_root_api() {
         let _sandbox = crate::test_utils::SandboxHome::new();
         let app = build_router(test_state(None), "127.0.0.1", 3727, None, "/viewer");

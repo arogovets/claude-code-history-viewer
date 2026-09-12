@@ -65,18 +65,25 @@ fn compare_global_search_results(
 /// Detect all available providers
 #[tauri::command]
 pub async fn detect_providers() -> Result<Vec<providers::ProviderInfo>, String> {
-    Ok(providers::detect_providers())
+    let mut infos: std::collections::BTreeMap<String, providers::ProviderInfo> =
+        std::collections::BTreeMap::new();
+    for source in crate::sources::list()? {
+        for info in crate::sources::sync_scope(source.current, providers::detect_providers) {
+            if info.is_available || !infos.contains_key(&info.id) {
+                infos.insert(info.id.clone(), info);
+            }
+        }
+    }
+    Ok(infos.into_values().collect())
 }
 
 /// Scan projects from all (or selected) providers
-#[tauri::command]
-pub async fn scan_all_projects(
+async fn scan_all_projects_in_source(
     claude_path: Option<String>,
     active_providers: Option<Vec<String>>,
     custom_claude_paths: Option<Vec<CustomClaudePathParam>>,
     wsl_enabled: Option<bool>,
     wsl_excluded_distros: Option<Vec<String>>,
-    include_remote: Option<bool>,
 ) -> Result<Vec<ClaudeProject>, String> {
     let providers_to_scan = active_providers.unwrap_or_else(|| {
         vec![
@@ -115,54 +122,47 @@ pub async fn scan_all_projects(
 
     let mut all_projects = Vec::new();
 
-    // Crash recovery first: index any snapshots finalized before a crash but
-    // never folded into SQLite. Best effort and usually a no-op.
-    crate::storage::index::best_effort_reconcile();
-
-    // Claude (default path) — filesystem first: snapshot, then parse the copy.
-    // The default base is derived from the home directory even when the live
-    // dir is gone, so preserved snapshots remain browsable after deletion.
+    // Claude (default path)
     if providers_to_scan.iter().any(|p| p == "claude") {
-        let claude_base = claude_path
-            .or_else(providers::claude::get_base_path)
-            .or_else(|| {
-                crate::utils::home_dir().map(|h| h.join(".claude").to_string_lossy().to_string())
-            });
+        let claude_base = claude_path.or_else(providers::claude::get_base_path);
         if let Some(base) = claude_base {
-            let mut projects =
-                crate::commands::project::scan_claude_base_with_snapshot(base, None).await;
-            for p in &mut projects {
-                if p.provider.is_none() {
-                    p.provider = Some("claude".to_string());
+            match crate::commands::project::scan_projects(base).await {
+                Ok(mut projects) => {
+                    for p in &mut projects {
+                        if p.provider.is_none() {
+                            p.provider = Some("claude".to_string());
+                        }
+                    }
+                    all_projects.extend(projects);
+                }
+                Err(e) => {
+                    log::warn!("Claude scan failed: {e}");
                 }
             }
-            all_projects.extend(projects);
         }
 
-        // Claude (custom paths) — same snapshot model per custom root. An
-        // invalid/gone custom dir must not drop its preserved snapshots, so a
-        // validation failure only skips the *live* read, never the snapshot.
+        // Claude (custom paths)
         if let Some(ref custom_paths) = custom_claude_paths {
             for custom in custom_paths {
                 let custom_base = std::path::PathBuf::from(&custom.path);
                 if let Err(e) = crate::utils::validate_custom_claude_path(&custom_base) {
-                    log::warn!(
-                        "Custom Claude path unavailable, reading preserved snapshot ({}): {e}",
-                        custom.path
-                    );
+                    log::warn!("Skipping invalid custom Claude path: {e}");
+                    continue;
                 }
-                let mut projects = crate::commands::project::scan_claude_base_with_snapshot(
-                    custom.path.clone(),
-                    custom.label.clone(),
-                )
-                .await;
-                for p in &mut projects {
-                    if p.provider.is_none() {
-                        p.provider = Some("claude".to_string());
+                match crate::commands::project::scan_projects(custom.path.clone()).await {
+                    Ok(mut projects) => {
+                        for p in &mut projects {
+                            if p.provider.is_none() {
+                                p.provider = Some("claude".to_string());
+                            }
+                            p.custom_directory_label.clone_from(&custom.label);
+                        }
+                        all_projects.extend(projects);
                     }
-                    p.custom_directory_label.clone_from(&custom.label);
+                    Err(e) => {
+                        log::warn!("Custom Claude path scan failed ({}): {e}", custom.path);
+                    }
                 }
-                all_projects.extend(projects);
             }
         }
     }
@@ -176,24 +176,38 @@ pub async fn scan_all_projects(
     // Running them concurrently on the blocking pool turns that worst case from a
     // sum into a single overlapped wait. The `("name", fn)` label here is the
     // provider id matched against `providers_to_scan`, not the display name.
-    // Archive-migrated providers: discover → sync → parse snapshots.
-    // (Migrated ids are removed from `sync_scanners` below as they land; the
-    // registry table is the single source of truth for membership.)
-    for name in crate::storage::registry::migrated_providers() {
-        if !providers_to_scan.iter().any(|p| p == name) {
-            continue;
-        }
-        match crate::storage::registry::scan_provider(name).await {
-            Ok(projects) => all_projects.extend(projects),
-            Err(e) => log::warn!("{name} archive scan failed: {e}"),
-        }
-    }
-
     type SyncScanner = fn() -> Result<Vec<ClaudeProject>, String>;
-    // All file-tree, SQLite, and aggregated providers are archive-migrated;
-    // the registry table above is the single source of truth. This list
-    // retains only providers with no snapshot coverage (none at present).
-    let sync_scanners: &[(&str, SyncScanner)] = &[];
+    let sync_scanners: &[(&str, SyncScanner)] = &[
+        ("codex", providers::codex::scan_projects),
+        ("continue", providers::continue_dev::scan_projects),
+        ("pearai", providers::pearai::scan_projects),
+        ("gemini", providers::gemini::scan_projects),
+        ("goose", providers::goose::scan_projects),
+        ("grok", providers::grok::scan_projects),
+        ("kimi", providers::kimi::scan_projects),
+        ("forgecode", providers::forgecode::scan_projects),
+        ("opencode", providers::opencode::scan_projects),
+        ("openinterpreter", providers::openinterpreter::scan_projects),
+        ("pi", providers::pi::scan_projects),
+        ("ompi", providers::ompi::scan_projects),
+        ("qwen", providers::qwen::scan_projects),
+        ("zed", providers::zed::scan_projects),
+        ("openhands", providers::openhands::scan_projects),
+        ("trae", providers::trae::scan_projects),
+        ("vibe", providers::vibe::scan_projects),
+        ("cline", providers::cline::scan_projects),
+        ("cursor", providers::cursor::scan_projects),
+        ("crush", providers::crush::scan_projects),
+        ("cursor-agent", providers::cursor_agent::scan_projects),
+        ("aider", providers::aider::scan_projects),
+        ("amazonq", providers::amazon_q::scan_projects),
+        ("antigravity", providers::antigravity::scan_projects),
+        ("deepseek", providers::deepseek::scan_projects),
+        ("codebuddy", providers::codebuddy::scan_projects),
+        ("kiro", providers::kiro::scan_projects),
+        ("llm", providers::llm::scan_projects),
+        ("copilot", providers::copilot::scan_projects),
+    ];
 
     // Spawn every enabled scanner up front so they run concurrently on the
     // blocking pool; awaiting the handles afterwards collects them in spawn
@@ -204,7 +218,16 @@ pub async fn scan_all_projects(
         .map(|(name, scan)| {
             let name = *name;
             let scan = *scan;
-            tauri::async_runtime::spawn_blocking(move || (name, scan()))
+            {
+                let home = crate::sources::home_dir();
+                tauri::async_runtime::spawn_blocking(move || {
+                    let result = match home {
+                        Some(home) => crate::sources::sync_scope(home, scan),
+                        None => Ok(Vec::new()),
+                    };
+                    (name, result)
+                })
+            }
         })
         .collect();
 
@@ -321,39 +344,8 @@ pub async fn scan_all_projects(
         }
     }
 
-    // Remote hosts scanning
-    if include_remote.unwrap_or(true) {
-        let remote_hosts = crate::remote::get_remote_hosts();
-        let remote_handles: Vec<_> = remote_hosts
-            .into_iter()
-            .filter(|h| h.enabled)
-            .map(|host| {
-                let providers = providers_to_scan.clone();
-                tauri::async_runtime::spawn(async move {
-                    crate::remote::scan_remote_projects(&host, &providers).await
-                })
-            })
-            .collect();
-
-        for handle in remote_handles {
-            match handle.await {
-                Ok(Ok(projects)) => all_projects.extend(projects),
-                Ok(Err(e)) => log::warn!("Remote host scan error: {e}"),
-                Err(e) => log::warn!("Remote host scan task failed: {e}"),
-            }
-        }
-    }
-
     // Hide empty containers that have no session files regardless of provider.
     all_projects.retain(|project| project.session_count > 0);
-
-    let provider_scope = if providers_to_scan.len() == 1 {
-        Some(providers_to_scan[0].as_str())
-    } else {
-        None
-    };
-    let mut all_projects =
-        crate::cache::sync_and_save_projects(&all_projects, None, provider_scope);
 
     all_projects.sort_by(|a, b| {
         match (
@@ -370,157 +362,54 @@ pub async fn scan_all_projects(
 }
 
 /// Load sessions for a specific provider's project
-#[tauri::command]
-pub async fn load_provider_sessions(
+async fn load_provider_sessions_in_source(
     provider: String,
     project_path: String,
     exclude_sidechain: Option<bool>,
 ) -> Result<Vec<ClaudeSession>, String> {
-    if crate::remote::is_remote_path(&project_path) {
-        if let Some((endpoint, inner_path)) = crate::remote::parse_remote_path(&project_path) {
-            return crate::remote::load_remote_sessions(
-                endpoint,
-                &provider,
-                inner_path,
-                exclude_sidechain,
-            )
-            .await;
-        }
-    }
-
     let exclude = exclude_sidechain.unwrap_or(false);
 
-    // Archive-migrated providers serve reads from snapshots. When nothing has
-    // ever been preserved (zero snapshots), fall back to one legacy live read
-    // so first-run bootstrapping keeps working; once history exists the
-    // archive is authoritative and live sources are never consulted.
-    if crate::storage::registry::is_migrated(provider.as_str()) {
-        let sources = crate::storage::registry::read_sources(provider.as_str());
-        match crate::storage::registry::load_provider_sessions(
-            provider.as_str(),
-            &project_path,
-            &sources,
-        )
-        .await
-        {
-            Ok(sessions) => {
-                let mut combined_sessions =
-                    crate::cache::sync_and_save_sessions(&project_path, &provider, &sessions);
-                sort_sessions_by_recency(&mut combined_sessions);
-                return Ok(combined_sessions);
-            }
-            Err(e) if sources.is_empty() => {
-                log::info!("No snapshots for {provider} yet, live bootstrap read: {e}");
-                let sessions = legacy_load_sessions(provider.as_str(), &project_path, exclude)?;
-                let mut combined_sessions =
-                    crate::cache::sync_and_save_sessions(&project_path, &provider, &sessions);
-                sort_sessions_by_recency(&mut combined_sessions);
-                return Ok(combined_sessions);
-            }
-            Err(e) => return Err(e),
-        }
-    }
-
-    let sessions = match provider.as_str() {
+    match provider.as_str() {
         "claude" => {
-            let mut sessions = crate::commands::session::load_project_sessions(
-                project_path.clone(),
-                Some(exclude),
-            )
-            .await?;
+            let mut sessions =
+                crate::commands::session::load_project_sessions(project_path, Some(exclude))
+                    .await?;
             for s in &mut sessions {
                 if s.provider.is_none() {
                     s.provider = Some("claude".to_string());
                 }
             }
-            sessions
+            Ok(sessions)
         }
-        // NOTE: archive-migrated providers are served by the registry branch
-        // above; their legacy arms were removed. Each new migration deletes
-        // its arm here.
-        "copilot" => providers::copilot::load_sessions(&project_path, exclude)?,
-
-        "cline" => providers::cline::load_sessions(&project_path, exclude)?,
-        "antigravity" => providers::antigravity::load_sessions(&project_path, exclude)?,
-        _ => return Err(format!("Unknown provider: {provider}")),
-    };
-
-    let mut combined_sessions =
-        crate::cache::sync_and_save_sessions(&project_path, &provider, &sessions);
-    sort_sessions_by_recency(&mut combined_sessions);
-    Ok(combined_sessions)
-}
-
-/// Legacy live read for archive-migrated providers, used only to bootstrap
-/// first runs that have never preserved anything. Every migration moves its
-/// provider's arm here and deletes it from the live match below.
-fn legacy_load_sessions(
-    provider: &str,
-    project_path: &str,
-    exclude: bool,
-) -> Result<Vec<ClaudeSession>, String> {
-    match provider {
-        "continue" => providers::continue_dev::load_sessions(project_path, exclude),
-        "pearai" => providers::pearai::load_sessions(project_path, exclude),
-        "grok" => providers::grok::load_sessions(project_path, exclude),
-        "kimi" => providers::kimi::load_sessions(project_path, exclude),
-        "pi" => providers::pi::load_sessions(project_path, exclude),
-        "ompi" => providers::ompi::load_sessions(project_path, exclude),
-        "vibe" => providers::vibe::load_sessions(project_path, exclude),
-        "gemini" => providers::gemini::load_sessions(project_path, exclude),
-        "qwen" => providers::qwen::load_sessions(project_path, exclude),
-        "deepseek" => providers::deepseek::load_sessions(project_path, exclude),
-        "openhands" => providers::openhands::load_sessions(project_path, exclude),
-        "aider" => providers::aider::load_sessions(project_path, exclude),
-        "codebuddy" => providers::codebuddy::load_sessions(project_path, exclude),
-        "cursor-agent" => providers::cursor_agent::load_sessions(project_path, exclude),
-        "goose" => providers::goose::load_sessions(project_path, exclude),
-        "llm" => providers::llm::load_sessions(project_path, exclude),
-        "zed" => providers::zed::load_sessions(project_path, exclude),
-        "amazonq" => providers::amazon_q::load_sessions(project_path, exclude),
-        "kiro" => providers::kiro::load_sessions(project_path, exclude),
-        "codex" => providers::codex::load_sessions(project_path, exclude),
-        "trae" => providers::trae::load_sessions(project_path, exclude),
-        "cursor" => providers::cursor::load_sessions(project_path, exclude),
-        "crush" => providers::crush::load_sessions(project_path, exclude),
-        "openinterpreter" => providers::openinterpreter::load_sessions(project_path, exclude),
-        "opencode" => providers::opencode::load_sessions(project_path, exclude),
-        "forgecode" => providers::forgecode::load_sessions(project_path, exclude),
-        _ => Err(format!("Unknown provider: {provider}")),
-    }
-}
-
-/// Legacy live search for archive-migrated providers (bootstrap only).
-fn legacy_search(provider: &str, query: &str, limit: usize) -> Result<Vec<ClaudeMessage>, String> {
-    match provider {
-        "continue" => providers::continue_dev::search(query, limit),
-        "pearai" => providers::pearai::search(query, limit),
-        "grok" => providers::grok::search(query, limit),
-        "kimi" => providers::kimi::search(query, limit),
-        "pi" => providers::pi::search(query, limit),
-        "ompi" => providers::ompi::search(query, limit),
-        "vibe" => providers::vibe::search(query, limit),
-        "gemini" => providers::gemini::search(query, limit),
-        "qwen" => providers::qwen::search(query, limit),
-        "deepseek" => Err("DeepSeek has no message search".to_string()),
-        "openhands" => providers::openhands::search(query, limit),
-        "aider" => providers::aider::search(query, limit),
-        "codebuddy" => providers::codebuddy::search(query, limit),
-        "cursor-agent" => providers::cursor_agent::search(query, limit),
-        "goose" => providers::goose::search(query, limit),
-        "llm" => providers::llm::search(query, limit),
-        "zed" => providers::zed::search(query, limit),
-        "amazonq" => providers::amazon_q::search(query, limit),
-        "kiro" => providers::kiro::search(query, limit),
-        "opencode" => providers::opencode::search(query, limit),
-        "forgecode" => providers::forgecode::search(query, limit),
-        // Codex filters are applied globally after fan-out; bootstrap passes
-        // none explicitly.
-        "codex" => providers::codex::search(query, limit, &serde_json::json!({})),
-        "trae" => providers::trae::search(query, limit),
-        "cursor" => providers::cursor::search(query, limit),
-        "crush" => providers::crush::search(query, limit),
-        "openinterpreter" => providers::openinterpreter::search(query, limit),
+        "codex" => providers::codex::load_sessions(&project_path, exclude),
+        "continue" => providers::continue_dev::load_sessions(&project_path, exclude),
+        "pearai" => providers::pearai::load_sessions(&project_path, exclude),
+        "copilot" => providers::copilot::load_sessions(&project_path, exclude),
+        "gemini" => providers::gemini::load_sessions(&project_path, exclude),
+        "goose" => providers::goose::load_sessions(&project_path, exclude),
+        "grok" => providers::grok::load_sessions(&project_path, exclude),
+        "kimi" => providers::kimi::load_sessions(&project_path, exclude),
+        "forgecode" => providers::forgecode::load_sessions(&project_path, exclude),
+        "opencode" => providers::opencode::load_sessions(&project_path, exclude),
+        "openinterpreter" => providers::openinterpreter::load_sessions(&project_path, exclude),
+        "pi" => providers::pi::load_sessions(&project_path, exclude),
+        "ompi" => providers::ompi::load_sessions(&project_path, exclude),
+        "qwen" => providers::qwen::load_sessions(&project_path, exclude),
+        "cline" => providers::cline::load_sessions(&project_path, exclude),
+        "crush" => providers::crush::load_sessions(&project_path, exclude),
+        "cursor" => providers::cursor::load_sessions(&project_path, exclude),
+        "cursor-agent" => providers::cursor_agent::load_sessions(&project_path, exclude),
+        "aider" => providers::aider::load_sessions(&project_path, exclude),
+        "amazonq" => providers::amazon_q::load_sessions(&project_path, exclude),
+        "antigravity" => providers::antigravity::load_sessions(&project_path, exclude),
+        "deepseek" => providers::deepseek::load_sessions(&project_path, exclude),
+        "codebuddy" => providers::codebuddy::load_sessions(&project_path, exclude),
+        "kiro" => providers::kiro::load_sessions(&project_path, exclude),
+        "llm" => providers::llm::load_sessions(&project_path, exclude),
+        "zed" => providers::zed::load_sessions(&project_path, exclude),
+        "openhands" => providers::openhands::load_sessions(&project_path, exclude),
+        "trae" => providers::trae::load_sessions(&project_path, exclude),
+        "vibe" => providers::vibe::load_sessions(&project_path, exclude),
         _ => Err(format!("Unknown provider: {provider}")),
     }
 }
@@ -544,8 +433,7 @@ fn sort_sessions_by_recency(sessions: &mut [ClaudeSession]) {
 /// Claude uses a cache-aware fast path that avoids parsing every JSONL file.
 /// Other providers keep their existing loaders and only paginate the result for
 /// now, preserving behavior while giving the frontend one API shape.
-#[tauri::command]
-pub async fn load_provider_sessions_page(
+async fn load_provider_sessions_page_in_source(
     provider: String,
     project_path: String,
     exclude_sidechain: Option<bool>,
@@ -554,20 +442,6 @@ pub async fn load_provider_sessions_page(
 ) -> Result<crate::commands::session::SessionPage, String> {
     let offset = offset.unwrap_or(0);
     let limit = limit.unwrap_or(250).clamp(1, 500);
-
-    if crate::remote::is_remote_path(&project_path) {
-        if let Some((endpoint, inner_path)) = crate::remote::parse_remote_path(&project_path) {
-            return crate::remote::load_remote_sessions_page(
-                endpoint,
-                &provider,
-                inner_path,
-                exclude_sidechain,
-                offset,
-                limit,
-            )
-            .await;
-        }
-    }
 
     if provider == "claude" {
         let mut page = crate::commands::session::load_project_sessions_page(
@@ -586,7 +460,7 @@ pub async fn load_provider_sessions_page(
     }
 
     let mut sessions =
-        load_provider_sessions(provider.clone(), project_path.clone(), exclude_sidechain).await?;
+        load_provider_sessions_in_source(provider.clone(), project_path, exclude_sidechain).await?;
     for session in &mut sessions {
         if session.provider.is_none() {
             session.provider = Some(provider.clone());
@@ -597,10 +471,8 @@ pub async fn load_provider_sessions_page(
     let total = sessions.len();
     let page_sessions: Vec<ClaudeSession> = sessions.into_iter().skip(offset).take(limit).collect();
     let next_offset = offset.saturating_add(page_sessions.len());
-    crate::cache::cache_sessions(&project_path, &provider, &page_sessions);
 
     Ok(crate::commands::session::SessionPage {
-        offline: None,
         sessions: page_sessions,
         total,
         offset,
@@ -656,36 +528,10 @@ fn load_non_claude_messages(
 }
 
 /// Load messages from a specific provider's session
-#[tauri::command]
-pub async fn load_provider_messages(
+async fn load_provider_messages_in_source(
     provider: String,
     session_path: String,
 ) -> Result<Vec<ClaudeMessage>, String> {
-    if crate::remote::is_remote_path(&session_path) {
-        if let Some((endpoint, inner_path)) = crate::remote::parse_remote_path(&session_path) {
-            return crate::remote::load_remote_messages(endpoint, &provider, inner_path).await;
-        }
-    }
-
-    // Archive-migrated providers serve reads from snapshots (bootstrap
-    // fallback to one legacy live read only when nothing was ever preserved).
-    if provider != "claude" && crate::storage::registry::is_migrated(provider.as_str()) {
-        let sources = crate::storage::registry::read_sources(provider.as_str());
-        match crate::storage::registry::load_provider_messages(
-            provider.as_str(),
-            &session_path,
-            &sources,
-        )
-        .await
-        {
-            Ok(messages) => return Ok(merge_tool_execution_messages(messages)),
-            Err(e) if sources.is_empty() => {
-                log::info!("No snapshots for {provider} yet, live bootstrap read: {e}");
-            }
-            Err(e) => return Err(e),
-        }
-    }
-
     let messages = if provider == "claude" {
         let mut messages = crate::commands::session::load_session_messages(session_path).await?;
         for m in &mut messages {
@@ -734,8 +580,7 @@ fn paginate_messages_chat_style(
 ///   `tool_result` renderers — a boundary-only artifact.
 /// - Other providers materialize the full session server-side (as they always
 ///   have), merge, then slice — bounding the IPC payload and frontend memory.
-#[tauri::command]
-pub async fn load_provider_messages_paginated(
+async fn load_provider_messages_paginated_in_source(
     provider: String,
     session_path: String,
     offset: Option<usize>,
@@ -746,20 +591,6 @@ pub async fn load_provider_messages_paginated(
     let limit = limit
         .unwrap_or(DEFAULT_MESSAGE_PAGE_SIZE)
         .clamp(1, MAX_MESSAGE_PAGE_LIMIT);
-
-    if crate::remote::is_remote_path(&session_path) {
-        if let Some((endpoint, inner_path)) = crate::remote::parse_remote_path(&session_path) {
-            return crate::remote::load_remote_messages_paginated(
-                endpoint,
-                &provider,
-                inner_path,
-                offset,
-                limit,
-                exclude_sidechain,
-            )
-            .await;
-        }
-    }
 
     if provider == "claude" {
         let mut page = crate::commands::session::load_session_messages_paginated(
@@ -794,51 +625,19 @@ pub async fn load_provider_messages_paginated(
 ///
 /// Offsets are in the same index space as `load_provider_messages_paginated`
 /// for the given provider (pre-merge for claude, post-merge otherwise).
-#[tauri::command]
-pub async fn get_provider_message_offset(
+#[allow(clippy::unused_async)]
+async fn get_provider_message_offset_in_source(
     provider: String,
     session_path: String,
     message_uuid: String,
     exclude_sidechain: Option<bool>,
 ) -> Result<Option<usize>, String> {
-    if crate::remote::is_remote_path(&session_path) {
-        if let Some((endpoint, inner_path)) = crate::remote::parse_remote_path(&session_path) {
-            return crate::remote::get_remote_message_offset(
-                endpoint,
-                &provider,
-                inner_path,
-                &message_uuid,
-                exclude_sidechain,
-            )
-            .await;
-        }
-    }
-
     if provider == "claude" {
         return crate::commands::session::get_session_message_offset(
             session_path,
             message_uuid,
             exclude_sidechain,
         );
-    }
-
-    // Migrated providers compute offsets over the same archived messages the
-    // paginated reader serves, so deep links stay consistent offline.
-    if crate::storage::registry::is_migrated(provider.as_str()) {
-        let sources = crate::storage::registry::read_sources(provider.as_str());
-        if !sources.is_empty() {
-            let messages = crate::storage::registry::load_provider_messages(
-                provider.as_str(),
-                &session_path,
-                &sources,
-            )
-            .await?;
-            let mut merged = merge_tool_execution_messages(messages);
-            if exclude_sidechain.unwrap_or(false) {
-                merged.retain(|m| !m.is_sidechain.unwrap_or(false));
-            }
-            return Ok(merged.iter().rev().position(|m| m.uuid == message_uuid));
-        }
     }
 
     let messages = load_non_claude_messages(&provider, &session_path)?;
@@ -850,9 +649,8 @@ pub async fn get_provider_message_offset(
 }
 
 /// Search across all (or selected) providers
-#[tauri::command]
 #[allow(clippy::too_many_arguments)]
-pub async fn search_all_providers(
+async fn search_all_providers_in_source(
     claude_path: Option<String>,
     query: String,
     active_providers: Option<Vec<String>>,
@@ -862,7 +660,6 @@ pub async fn search_all_providers(
     custom_claude_paths: Option<Vec<CustomClaudePathParam>>,
     wsl_enabled: Option<bool>,
     wsl_excluded_distros: Option<Vec<String>>,
-    include_remote: Option<bool>,
 ) -> Result<Vec<ClaudeMessage>, String> {
     let max_results = limit.unwrap_or(100);
     let search_filters =
@@ -969,23 +766,143 @@ pub async fn search_all_providers(
         }
     }
 
-    // Archive-migrated providers search preserved snapshots (bootstrap
-    // fallback to legacy live search only when nothing was ever preserved).
-    for name in crate::storage::registry::migrated_providers() {
-        if !providers_to_search.iter().any(|p| p == name) {
-            continue;
-        }
-        let sources = crate::storage::registry::read_sources(name);
-        match crate::storage::registry::search_provider(name, &query, max_results, &sources).await {
+    // Codex
+    if providers_to_search.iter().any(|p| p == "codex") {
+        match providers::codex::search(&query, max_results, &search_filters) {
             Ok(results) => all_results.extend(results),
-            Err(archive_err) if sources.is_empty() => {
-                log::info!("No snapshots for {name} yet, live bootstrap search: {archive_err}");
-                match legacy_search(name, &query, max_results) {
-                    Ok(results) => all_results.extend(results),
-                    Err(e) => log::warn!("{name} bootstrap search failed: {e}"),
-                }
+            Err(e) => {
+                log::warn!("Codex search failed: {e}");
             }
-            Err(e) => log::warn!("{name} archive search failed: {e}"),
+        }
+    }
+
+    // Continue.dev
+    if providers_to_search.iter().any(|p| p == "continue") {
+        match providers::continue_dev::search(&query, max_results) {
+            Ok(results) => all_results.extend(results),
+            Err(e) => {
+                log::warn!("Continue search failed: {e}");
+            }
+        }
+    }
+
+    // PearAI
+    if providers_to_search.iter().any(|p| p == "pearai") {
+        match providers::pearai::search(&query, max_results) {
+            Ok(results) => all_results.extend(results),
+            Err(e) => {
+                log::warn!("PearAI search failed: {e}");
+            }
+        }
+    }
+
+    // Gemini
+    if providers_to_search.iter().any(|p| p == "gemini") {
+        match providers::gemini::search(&query, max_results) {
+            Ok(results) => all_results.extend(results),
+            Err(e) => {
+                log::warn!("Gemini search failed: {e}");
+            }
+        }
+    }
+
+    // Goose
+    if providers_to_search.iter().any(|p| p == "goose") {
+        match providers::goose::search(&query, max_results) {
+            Ok(results) => all_results.extend(results),
+            Err(e) => {
+                log::warn!("Goose search failed: {e}");
+            }
+        }
+    }
+
+    // Grok
+    if providers_to_search.iter().any(|p| p == "grok") {
+        match providers::grok::search(&query, max_results) {
+            Ok(results) => all_results.extend(results),
+            Err(e) => {
+                log::warn!("Grok search failed: {e}");
+            }
+        }
+    }
+
+    // Kimi
+    if providers_to_search.iter().any(|p| p == "kimi") {
+        match providers::kimi::search(&query, max_results) {
+            Ok(results) => all_results.extend(results),
+            Err(e) => {
+                log::warn!("Kimi search failed: {e}");
+            }
+        }
+    }
+
+    // Mistral Vibe
+    if providers_to_search.iter().any(|p| p == "vibe") {
+        match providers::vibe::search(&query, max_results) {
+            Ok(results) => all_results.extend(results),
+            Err(e) => {
+                log::warn!("Vibe search failed: {e}");
+            }
+        }
+    }
+
+    // ForgeCode
+    if providers_to_search.iter().any(|p| p == "forgecode") {
+        match providers::forgecode::search(&query, max_results) {
+            Ok(results) => all_results.extend(results),
+            Err(e) => {
+                log::warn!("ForgeCode search failed: {e}");
+            }
+        }
+    }
+
+    // OpenCode
+    if providers_to_search.iter().any(|p| p == "opencode") {
+        match providers::opencode::search(&query, max_results) {
+            Ok(results) => all_results.extend(results),
+            Err(e) => {
+                log::warn!("OpenCode search failed: {e}");
+            }
+        }
+    }
+
+    // Open Interpreter
+    if providers_to_search.iter().any(|p| p == "openinterpreter") {
+        match providers::openinterpreter::search(&query, max_results) {
+            Ok(results) => all_results.extend(results),
+            Err(e) => {
+                log::warn!("Open Interpreter search failed: {e}");
+            }
+        }
+    }
+
+    // Pi
+    if providers_to_search.iter().any(|p| p == "pi") {
+        match providers::pi::search(&query, max_results) {
+            Ok(results) => all_results.extend(results),
+            Err(e) => {
+                log::warn!("Pi search failed: {e}");
+            }
+        }
+    }
+
+    // oh-my-pi
+    if providers_to_search.iter().any(|p| p == "ompi") {
+        match providers::ompi::search(&query, max_results) {
+            Ok(results) => all_results.extend(results),
+            Err(e) => {
+                log::warn!("oh-my-pi search failed: {e}");
+            }
+        }
+    }
+
+    // Qwen Code
+    if providers_to_search.iter().any(|p| p == "qwen") {
+        match providers::qwen::search(&query, max_results) {
+            Ok(results) => all_results.extend(results),
+            Err(e) => {
+                log::warn!("Qwen search failed: {e}");
+            }
         }
     }
 
@@ -999,12 +916,143 @@ pub async fn search_all_providers(
         }
     }
 
+    // Crush
+    if providers_to_search.iter().any(|p| p == "crush") {
+        match providers::crush::search(&query, max_results) {
+            Ok(results) => all_results.extend(results),
+            Err(e) => {
+                log::warn!("Crush search failed: {e}");
+            }
+        }
+    }
+
+    // Cursor
+    if providers_to_search.iter().any(|p| p == "cursor") {
+        match providers::cursor::search(&query, max_results) {
+            Ok(results) => all_results.extend(results),
+            Err(e) => {
+                log::warn!("Cursor search failed: {e}");
+            }
+        }
+    }
+
+    // Cursor Agent
+    if providers_to_search.iter().any(|p| p == "cursor-agent") {
+        match providers::cursor_agent::search(&query, max_results) {
+            Ok(results) => all_results.extend(results),
+            Err(e) => {
+                log::warn!("Cursor Agent search failed: {e}");
+            }
+        }
+    }
+
+    if providers_to_search.iter().any(|p| p == "deepseek") {
+        for project in providers::deepseek::scan_projects().unwrap_or_default() {
+            for session in
+                providers::deepseek::load_sessions(&project.path, false).unwrap_or_default()
+            {
+                for mut message in
+                    providers::deepseek::load_messages(&session.file_path).unwrap_or_default()
+                {
+                    if message.content.as_ref().is_some_and(|content| {
+                        crate::utils::search_json_value_case_insensitive(
+                            content,
+                            &query.to_lowercase(),
+                        )
+                    }) {
+                        message.project_name = Some(project.name.clone());
+                        all_results.push(message);
+                    }
+                }
+            }
+        }
+    }
+
+    // Aider
+    if providers_to_search.iter().any(|p| p == "aider") {
+        match providers::aider::search(&query, max_results) {
+            Ok(results) => all_results.extend(results),
+            Err(e) => {
+                log::warn!("Aider search failed: {e}");
+            }
+        }
+    }
+
+    // Amazon Q Developer CLI
+    if providers_to_search.iter().any(|p| p == "amazonq") {
+        match providers::amazon_q::search(&query, max_results) {
+            Ok(results) => all_results.extend(results),
+            Err(e) => {
+                log::warn!("Amazon Q search failed: {e}");
+            }
+        }
+    }
+
     // Antigravity
     if providers_to_search.iter().any(|p| p == "antigravity") {
         match providers::antigravity::search(&query, max_results) {
             Ok(results) => all_results.extend(results),
             Err(e) => {
                 log::warn!("Antigravity search failed: {e}");
+            }
+        }
+    }
+
+    // CodeBuddy
+    if providers_to_search.iter().any(|p| p == "codebuddy") {
+        match providers::codebuddy::search(&query, max_results) {
+            Ok(results) => all_results.extend(results),
+            Err(e) => {
+                log::warn!("CodeBuddy search failed: {e}");
+            }
+        }
+    }
+    // Kiro
+    if providers_to_search.iter().any(|p| p == "kiro") {
+        match providers::kiro::search(&query, max_results) {
+            Ok(results) => all_results.extend(results),
+            Err(e) => {
+                log::warn!("Kiro search failed: {e}");
+            }
+        }
+    }
+
+    // llm (Simon Willison)
+    if providers_to_search.iter().any(|p| p == "llm") {
+        match providers::llm::search(&query, max_results) {
+            Ok(results) => all_results.extend(results),
+            Err(e) => {
+                log::warn!("llm search failed: {e}");
+            }
+        }
+    }
+
+    // Zed
+    if providers_to_search.iter().any(|p| p == "zed") {
+        match providers::zed::search(&query, max_results) {
+            Ok(results) => all_results.extend(results),
+            Err(e) => {
+                log::warn!("Zed search failed: {e}");
+            }
+        }
+    }
+
+    // OpenHands
+    if providers_to_search.iter().any(|p| p == "openhands") {
+        match providers::openhands::search(&query, max_results) {
+            Ok(results) => all_results.extend(results),
+            Err(e) => {
+                log::warn!("OpenHands search failed: {e}");
+            }
+        }
+    }
+
+    // Trae IDE
+    if providers_to_search.iter().any(|p| p == "trae") {
+        match providers::trae::search(&query, max_results) {
+            Ok(results) => all_results.extend(results),
+            Err(e) => {
+                log::warn!("Trae search failed: {e}");
             }
         }
     }
@@ -1103,24 +1151,6 @@ pub async fn search_all_providers(
                         }
                     }
                 }
-            }
-        }
-    }
-
-    // Remote hosts search
-    if include_remote.unwrap_or(true) {
-        let remote_hosts = crate::remote::get_remote_hosts();
-        for host in remote_hosts.iter().filter(|h| h.enabled) {
-            match crate::remote::search_remote_providers(
-                host,
-                &query,
-                max_results,
-                &providers_to_search,
-            )
-            .await
-            {
-                Ok(results) => all_results.extend(results),
-                Err(e) => log::warn!("Remote search failed for {}: {e}", host.name),
             }
         }
     }
@@ -1437,8 +1467,16 @@ mod tests {
     #[tokio::test]
     #[serial_test::serial]
     async fn load_provider_messages_paginated_claude_merges_within_window() {
-        let temp_dir = tempfile::TempDir::new().unwrap();
-        let file_path = temp_dir.path().join("session.jsonl");
+        let sandbox = crate::test_utils::SandboxHome::new();
+        let source = sandbox.path().join(".claude-history-viewer/mirrors/test");
+        let current = source.join("current");
+        std::fs::create_dir_all(&current).unwrap();
+        std::fs::write(
+            source.join("source.json"),
+            r#"{"id":"test","label":"Test"}"#,
+        )
+        .unwrap();
+        let file_path = current.join("session.jsonl");
         let content = concat!(
             r#"{"uuid":"uuid-a","sessionId":"s1","timestamp":"2025-06-26T10:00:00Z","type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"call_1","name":"Bash","input":{"command":"pwd"}}]}}"#,
             "\n",
@@ -1486,8 +1524,16 @@ mod tests {
     #[tokio::test]
     #[serial_test::serial]
     async fn get_provider_message_offset_claude_matches_pagination_space() {
-        let temp_dir = tempfile::TempDir::new().unwrap();
-        let file_path = temp_dir.path().join("session.jsonl");
+        let sandbox = crate::test_utils::SandboxHome::new();
+        let source = sandbox.path().join(".claude-history-viewer/mirrors/test");
+        let current = source.join("current");
+        std::fs::create_dir_all(&current).unwrap();
+        std::fs::write(
+            source.join("source.json"),
+            r#"{"id":"test","label":"Test"}"#,
+        )
+        .unwrap();
+        let file_path = current.join("session.jsonl");
         let mut content = String::new();
         for i in 1..=4 {
             content.push_str(&format!(
@@ -1688,4 +1734,192 @@ mod tests {
             Some("text")
         );
     }
+}
+
+/// Discover only successfully collected local mirrors. Legacy path arguments
+/// cannot opt back into live source reads.
+#[tauri::command]
+pub async fn scan_all_projects(
+    claude_path: Option<String>,
+    active_providers: Option<Vec<String>>,
+    custom_claude_paths: Option<Vec<CustomClaudePathParam>>,
+    wsl_enabled: Option<bool>,
+    wsl_excluded_distros: Option<Vec<String>>,
+) -> Result<Vec<ClaudeProject>, String> {
+    let _ = (
+        claude_path,
+        custom_claude_paths,
+        wsl_enabled,
+        wsl_excluded_distros,
+    );
+    let mut projects = Vec::new();
+    for source in crate::sources::list()? {
+        let mut found = crate::sources::scope(
+            source.current.clone(),
+            scan_all_projects_in_source(None, active_providers.clone(), None, Some(false), None),
+        )
+        .await?;
+        for project in &mut found {
+            project.custom_directory_label = Some(source.label.clone());
+            project.path = crate::sources::qualify(&source, &project.path);
+        }
+        projects.extend(found);
+    }
+    Ok(projects)
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn search_all_providers(
+    claude_path: Option<String>,
+    query: String,
+    active_providers: Option<Vec<String>>,
+    wsl_providers: Option<Vec<String>>,
+    filters: Option<Value>,
+    limit: Option<usize>,
+    custom_claude_paths: Option<Vec<CustomClaudePathParam>>,
+    wsl_enabled: Option<bool>,
+    wsl_excluded_distros: Option<Vec<String>>,
+) -> Result<Vec<ClaudeMessage>, String> {
+    let _ = (
+        claude_path,
+        wsl_providers,
+        custom_claude_paths,
+        wsl_enabled,
+        wsl_excluded_distros,
+    );
+    let mut results = Vec::new();
+    for source in crate::sources::list()? {
+        let start = results.len();
+        results.extend(
+            crate::sources::scope(
+                source.current.clone(),
+                search_all_providers_in_source(
+                    None,
+                    query.clone(),
+                    active_providers.clone(),
+                    None,
+                    filters.clone(),
+                    limit,
+                    None,
+                    Some(false),
+                    None,
+                ),
+            )
+            .await?,
+        );
+        for message in &mut results[start..] {
+            message.session_id = format!("source:{}|{}", source.id, message.session_id);
+        }
+    }
+    let query_lower = query.to_lowercase();
+    results.sort_by(|a, b| compare_global_search_results(a, b, &query_lower));
+    results.truncate(limit.unwrap_or(100));
+    Ok(results)
+}
+
+#[tauri::command]
+pub async fn load_provider_sessions(
+    provider: String,
+    project_path: String,
+    exclude_sidechain: Option<bool>,
+) -> Result<Vec<ClaudeSession>, String> {
+    let (source, project_path) = crate::sources::resolve(&project_path)?;
+    let result = crate::sources::scope(
+        source.current.clone(),
+        load_provider_sessions_in_source(provider, project_path, exclude_sidechain),
+    )
+    .await?;
+    let mut result = result;
+    for session in &mut result {
+        session.file_path = crate::sources::qualify(&source, &session.file_path);
+        session.session_id = format!("source:{}|{}", source.id, session.session_id);
+    }
+    Ok(result)
+}
+
+#[tauri::command]
+pub async fn load_provider_sessions_page(
+    provider: String,
+    project_path: String,
+    exclude_sidechain: Option<bool>,
+    offset: Option<usize>,
+    limit: Option<usize>,
+) -> Result<crate::commands::session::SessionPage, String> {
+    let (source, project_path) = crate::sources::resolve(&project_path)?;
+    let result = crate::sources::scope(
+        source.current.clone(),
+        load_provider_sessions_page_in_source(
+            provider,
+            project_path,
+            exclude_sidechain,
+            offset,
+            limit,
+        ),
+    )
+    .await?;
+    let mut result = result;
+    for session in &mut result.sessions {
+        session.file_path = crate::sources::qualify(&source, &session.file_path);
+        session.session_id = format!("source:{}|{}", source.id, session.session_id);
+    }
+    Ok(result)
+}
+
+#[tauri::command]
+pub async fn load_provider_messages(
+    provider: String,
+    session_path: String,
+) -> Result<Vec<ClaudeMessage>, String> {
+    let (source, session_path) = crate::sources::resolve(&session_path)?;
+    let result = crate::sources::scope(
+        source.current.clone(),
+        load_provider_messages_in_source(provider, session_path),
+    )
+    .await?;
+    Ok(result)
+}
+
+#[tauri::command]
+pub async fn load_provider_messages_paginated(
+    provider: String,
+    session_path: String,
+    offset: Option<usize>,
+    limit: Option<usize>,
+    exclude_sidechain: Option<bool>,
+) -> Result<MessagePage, String> {
+    let (source, session_path) = crate::sources::resolve(&session_path)?;
+    let result = crate::sources::scope(
+        source.current.clone(),
+        load_provider_messages_paginated_in_source(
+            provider,
+            session_path,
+            offset,
+            limit,
+            exclude_sidechain,
+        ),
+    )
+    .await?;
+    Ok(result)
+}
+
+#[tauri::command]
+pub async fn get_provider_message_offset(
+    provider: String,
+    session_path: String,
+    message_uuid: String,
+    exclude_sidechain: Option<bool>,
+) -> Result<Option<usize>, String> {
+    let (source, session_path) = crate::sources::resolve(&session_path)?;
+    let result = crate::sources::scope(
+        source.current.clone(),
+        get_provider_message_offset_in_source(
+            provider,
+            session_path,
+            message_uuid,
+            exclude_sidechain,
+        ),
+    )
+    .await?;
+    Ok(result)
 }

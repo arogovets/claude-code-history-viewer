@@ -33,7 +33,7 @@ const SUMMARY_MAX_CHARS: usize = 80;
 
 /// `~/.openhands/sessions` (the classic `file_store_path` default).
 fn sessions_dir() -> Option<PathBuf> {
-    let dir = crate::utils::home_dir()?
+    let dir = crate::sources::home_dir()?
         .join(".openhands")
         .join("sessions");
     if dir.is_dir() {
@@ -79,12 +79,7 @@ pub fn scan_projects() -> Result<Vec<ClaudeProject>, String> {
     let Some(dir) = sessions_dir() else {
         return Ok(vec![]);
     };
-    scan_projects_in(&dir)
-}
-
-/// [`scan_projects`] against an explicit sessions root (snapshot or live).
-pub fn scan_projects_in(dir: &Path) -> Result<Vec<ClaudeProject>, String> {
-    let ids = session_ids(dir);
+    let ids = session_ids(&dir);
     if ids.is_empty() {
         return Ok(vec![]);
     }
@@ -120,13 +115,8 @@ pub fn load_sessions(
     let Some(dir) = sessions_dir() else {
         return Ok(vec![]);
     };
-    load_sessions_in(&dir)
-}
-
-/// [`load_sessions`] against an explicit sessions root (snapshot or live).
-pub fn load_sessions_in(dir: &Path) -> Result<Vec<ClaudeSession>, String> {
     let mut sessions = Vec::new();
-    for sid in session_ids(dir) {
+    for sid in session_ids(&dir) {
         let session_dir = dir.join(&sid);
         let events = session_dir.join("events");
         let files = event_files(&events);
@@ -165,74 +155,8 @@ pub fn load_sessions_in(dir: &Path) -> Result<Vec<ClaudeSession>, String> {
 
 /// Load messages for one `OpenHands` conversation (`openhands://<sid>`).
 pub fn load_messages(session_path: &str) -> Result<Vec<ClaudeMessage>, String> {
-    let Some(dir) = sessions_dir() else {
-        return Ok(vec![]);
-    };
-    load_messages_in(&dir, session_path)
-}
-
-// ============================================================================
-// Archive glue (snapshot-backed reads; the explicit-root seams above are
-// reused). Session IDs are opaque (`openhands://<sid>`) and content-derived,
-// so no output rewriting is needed.
-// ============================================================================
-
-use crate::storage::registry::DiscoveredSource as ArchiveDiscoveredSource;
-use crate::storage::{SnapshotInfo as ArchiveSnapshotInfo, Source as ArchiveSource};
-
-/// Physical `OpenHands` sessions root on this machine, if present.
-pub(crate) fn archive_discover() -> Vec<ArchiveDiscoveredSource> {
-    let machine = crate::storage::registry::discovery_machine_id();
-    match get_base_path() {
-        Some(base) => vec![ArchiveDiscoveredSource::local(
-            crate::storage::ROLE_PRIMARY,
-            std::path::PathBuf::from(base),
-            &machine,
-        )],
-        None => Vec::new(),
-    }
-}
-
-/// Scan projects under an explicit root (snapshot data root at runtime).
-pub(crate) fn archive_scan(
-    _source: &ArchiveSource,
-    snapshot: &ArchiveSnapshotInfo,
-) -> Result<Vec<ClaudeProject>, String> {
-    scan_projects_in(&snapshot.data_path)
-}
-
-/// Sessions for the synthetic project, read from the snapshot.
-pub(crate) fn archive_load_sessions(
-    _source: &ArchiveSource,
-    snapshot: &ArchiveSnapshotInfo,
-    _stable_project: &str,
-) -> Result<Vec<ClaudeSession>, String> {
-    load_sessions_in(&snapshot.data_path)
-}
-
-/// Messages for a stable session ID, read from the snapshot.
-pub(crate) fn archive_load_messages(
-    _source: &ArchiveSource,
-    snapshot: &ArchiveSnapshotInfo,
-    stable_session: &str,
-) -> Result<Vec<ClaudeMessage>, String> {
-    load_messages_in(&snapshot.data_path, stable_session)
-}
-
-/// Search confined to one snapshot.
-pub(crate) fn archive_search(
-    _source: &ArchiveSource,
-    snapshot: &ArchiveSnapshotInfo,
-    query: &str,
-    limit: usize,
-) -> Result<Vec<ClaudeMessage>, String> {
-    search_in(&snapshot.data_path, query, limit)
-}
-
-/// [`load_messages`] against an explicit sessions root (snapshot or live).
-pub fn load_messages_in(dir: &Path, session_path: &str) -> Result<Vec<ClaudeMessage>, String> {
     let sid = session_path.strip_prefix(SCHEME).unwrap_or(session_path);
-    let events = events_dir_for_in(dir, sid)?;
+    let events = events_dir_for(sid)?;
     let mut messages = Vec::new();
     for (idx, path) in event_files(&events).into_iter().enumerate() {
         let Ok(data) = fs::read_to_string(&path) else {
@@ -253,14 +177,9 @@ pub fn search(query: &str, limit: usize) -> Result<Vec<ClaudeMessage>, String> {
     let Some(dir) = sessions_dir() else {
         return Ok(vec![]);
     };
-    search_in(&dir, query, limit)
-}
-
-/// [`search`] against an explicit sessions root (snapshot or live).
-pub fn search_in(dir: &Path, query: &str, limit: usize) -> Result<Vec<ClaudeMessage>, String> {
     let query_lower = query.to_lowercase();
     let mut results = Vec::new();
-    for sid in session_ids(dir) {
+    for sid in session_ids(&dir) {
         let events = dir.join(&sid).join("events");
         for (idx, path) in event_files(&events).into_iter().enumerate() {
             if results.len() >= limit {
@@ -314,13 +233,12 @@ fn event_files(events: &Path) -> Vec<PathBuf> {
     files.into_iter().map(|(_, p)| p).collect()
 }
 
-/// Resolve a session's events dir under an explicit sessions root (snapshot
-/// or live). The sid must be a single safe path component (no traversal).
-fn events_dir_for_in(dir: &Path, sid: &str) -> Result<PathBuf, String> {
+fn events_dir_for(sid: &str) -> Result<PathBuf, String> {
     // sid must be a single safe path component (no traversal).
     if sid.is_empty() || sid.contains('/') || sid.contains('\\') || sid.contains("..") {
         return Err(format!("Invalid OpenHands session id: {sid}"));
     }
+    let dir = sessions_dir().ok_or("OpenHands sessions path not found")?;
     let events = dir.join(sid).join("events");
     if events.is_dir() {
         Ok(events)
@@ -593,9 +511,8 @@ mod tests {
     #[test]
     #[serial_test::serial]
     fn events_dir_rejects_traversal() {
-        let base = std::path::Path::new("/tmp/oh-base");
-        assert!(events_dir_for_in(base, "../../etc").is_err());
-        assert!(events_dir_for_in(base, "a/b").is_err());
-        assert!(events_dir_for_in(base, "").is_err());
+        assert!(events_dir_for("../../etc").is_err());
+        assert!(events_dir_for("a/b").is_err());
+        assert!(events_dir_for("").is_err());
     }
 }

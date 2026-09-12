@@ -117,103 +117,6 @@ pub fn search(query: &str, limit: usize) -> Result<Vec<ClaudeMessage>, String> {
 }
 
 // ============================================================================
-// Archive glue (explicit-root seams for snapshot-backed reads; the family
-// core never touches global roots when a base is supplied).
-// ============================================================================
-
-/// Sessions root override for archive reads (snapshot data root or live base).
-pub(crate) fn load_sessions_in(
-    f: &Family,
-    base: &Path,
-    project_path: &str,
-    exclude_sidechain: bool,
-) -> Result<Vec<ClaudeSession>, String> {
-    load_sessions_for_in(f, Some(base), project_path, exclude_sidechain)
-}
-
-/// Message read confined to an explicit root (snapshot or live).
-pub(crate) fn load_messages_in(
-    f: &Family,
-    base: &Path,
-    session_path: &str,
-) -> Result<Vec<ClaudeMessage>, String> {
-    load_messages_for_in(f, Some(base), session_path)
-}
-
-/// Search confined to an explicit root (snapshot or live).
-pub(crate) fn search_in(
-    f: &Family,
-    base: &Path,
-    query: &str,
-    limit: usize,
-) -> Result<Vec<ClaudeMessage>, String> {
-    search_for_in(f, Some(base), query, limit)
-}
-
-// ============================================================================
-// Archive glue (snapshot-backed reads; the family core is reused unchanged).
-//
-// Project URIs (`continue://{workspace}`) name user directories, not store
-// locations, so session loading filters snapshot content by URI instead of
-// mapping paths. Message reads map absolute session files into the snapshot.
-// ============================================================================
-
-use crate::storage::registry::DiscoveredSource as ArchiveDiscoveredSource;
-use crate::storage::{SnapshotInfo as ArchiveSnapshotInfo, Source as ArchiveSource};
-
-/// Physical Continue store root on this machine, if present.
-pub(crate) fn archive_discover() -> Vec<ArchiveDiscoveredSource> {
-    let machine = crate::storage::registry::discovery_machine_id();
-    match base_path_for(&CONTINUE) {
-        Some(base) => vec![ArchiveDiscoveredSource::local(
-            crate::storage::ROLE_PRIMARY,
-            PathBuf::from(base),
-            &machine,
-        )],
-        None => Vec::new(),
-    }
-}
-
-/// Scan projects under an explicit root (snapshot data root at runtime).
-pub(crate) fn archive_scan(
-    _source: &ArchiveSource,
-    snapshot: &ArchiveSnapshotInfo,
-) -> Result<Vec<ClaudeProject>, String> {
-    scan_in_for(&CONTINUE, &snapshot.data_path)
-}
-
-/// Sessions for a stable project URI, filtered from snapshot content.
-pub(crate) fn archive_load_sessions(
-    _source: &ArchiveSource,
-    snapshot: &ArchiveSnapshotInfo,
-    stable_project: &str,
-) -> Result<Vec<ClaudeSession>, String> {
-    load_sessions_in(&CONTINUE, &snapshot.data_path, stable_project, false)
-}
-
-/// Messages for a stable session file, read from the snapshot.
-pub(crate) fn archive_load_messages(
-    source: &ArchiveSource,
-    snapshot: &ArchiveSnapshotInfo,
-    stable_session: &str,
-) -> Result<Vec<ClaudeMessage>, String> {
-    let mapped =
-        crate::storage::registry::map_absolute_to_snapshot(source, snapshot, stable_session)
-            .ok_or_else(|| format!("No preserved snapshot covers {stable_session}"))?;
-    load_messages_in(&CONTINUE, &snapshot.data_path, &mapped)
-}
-
-/// Search confined to one snapshot.
-pub(crate) fn archive_search(
-    _source: &ArchiveSource,
-    snapshot: &ArchiveSnapshotInfo,
-    query: &str,
-    limit: usize,
-) -> Result<Vec<ClaudeMessage>, String> {
-    search_in(&CONTINUE, &snapshot.data_path, query, limit)
-}
-
-// ============================================================================
 // Family core (shared by Continue and PearAI)
 // ============================================================================
 
@@ -230,14 +133,14 @@ pub(crate) fn detect_for(f: &Family) -> Option<ProviderInfo> {
 /// The family's global directory (env override or `~/<home_subdir>`).
 fn global_dir_for(f: &Family) -> Option<PathBuf> {
     if let Some(env) = f.global_dir_env {
-        if let Ok(dir) = std::env::var(env) {
+        if let Ok(dir) = crate::sources::env_var(env) {
             let dir = dir.trim();
             if !dir.is_empty() {
                 return Some(PathBuf::from(dir));
             }
         }
     }
-    Some(crate::utils::home_dir()?.join(f.home_subdir))
+    Some(crate::sources::home_dir()?.join(f.home_subdir))
 }
 
 /// Base path (`<global-dir>/sessions`); `None` unless the directory exists.
@@ -327,23 +230,10 @@ pub(crate) fn scan_in_for(f: &Family, base: &Path) -> Result<Vec<ClaudeProject>,
 pub(crate) fn load_sessions_for(
     f: &Family,
     project_path: &str,
-    exclude_sidechain: bool,
-) -> Result<Vec<ClaudeSession>, String> {
-    load_sessions_for_in(f, None, project_path, exclude_sidechain)
-}
-
-fn load_sessions_for_in(
-    f: &Family,
-    base_override: Option<&Path>,
-    project_path: &str,
     _exclude_sidechain: bool,
 ) -> Result<Vec<ClaudeSession>, String> {
-    let base = match base_override {
-        Some(base) => base.to_string_lossy().to_string(),
-        None => {
-            base_path_for(f).ok_or_else(|| format!("{} sessions path not found", f.display_name))?
-        }
-    };
+    let base =
+        base_path_for(f).ok_or_else(|| format!("{} sessions path not found", f.display_name))?;
     let target = project_path.strip_prefix(f.scheme).unwrap_or(project_path);
 
     let mut sessions = Vec::new();
@@ -405,19 +295,11 @@ pub(crate) fn load_messages_for(
     f: &Family,
     session_path: &str,
 ) -> Result<Vec<ClaudeMessage>, String> {
-    load_messages_for_in(f, None, session_path)
-}
-
-fn load_messages_for_in(
-    f: &Family,
-    base_override: Option<&Path>,
-    session_path: &str,
-) -> Result<Vec<ClaudeMessage>, String> {
     let path = Path::new(session_path);
     if !path.exists() {
         return Err(format!("Session file not found: {session_path}"));
     }
-    validate_under_base_in(f, base_override, path)?;
+    validate_under_base(f, path)?;
     if is_symlink(path) {
         return Err("Session file must not be a symlink".to_string());
     }
@@ -431,28 +313,15 @@ fn load_messages_for_in(
     )
 }
 
+// Returns Result for parity with the other providers' search API; the body
+// currently cannot fail (a missing base path yields an empty result set).
+#[allow(clippy::unnecessary_wraps)]
 pub(crate) fn search_for(
     f: &Family,
     query: &str,
     limit: usize,
 ) -> Result<Vec<ClaudeMessage>, String> {
-    search_for_in(f, None, query, limit)
-}
-
-// Returns Result for parity with the other providers' search API (and the
-// registry table fn-pointer type); the body currently cannot fail (a missing
-// base path yields an empty result set).
-#[allow(clippy::unnecessary_wraps)]
-fn search_for_in(
-    f: &Family,
-    base_override: Option<&Path>,
-    query: &str,
-    limit: usize,
-) -> Result<Vec<ClaudeMessage>, String> {
-    let Some(base) = base_override
-        .map(|b| b.to_string_lossy().to_string())
-        .or_else(|| base_path_for(f))
-    else {
+    let Some(base) = base_path_for(f) else {
         return Ok(vec![]);
     };
     let query_lower = query.to_lowercase();
@@ -686,21 +555,11 @@ fn is_symlink(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-/// Confine `path` to an explicit sessions root (snapshot or live).
-/// Defense-in-depth against traversal / symlink escapes. Canonicalizes both
-/// sides.
-fn validate_under_base_in(
-    f: &Family,
-    base_override: Option<&Path>,
-    path: &Path,
-) -> Result<(), String> {
-    let base = match base_override {
-        Some(base) => base.to_path_buf(),
-        None => PathBuf::from(
-            base_path_for(f)
-                .ok_or_else(|| format!("{} sessions path not found", f.display_name))?,
-        ),
-    };
+/// Confine `path` to the family's sessions root (defense-in-depth against
+/// traversal / symlink escapes). Canonicalizes both sides.
+fn validate_under_base(f: &Family, path: &Path) -> Result<(), String> {
+    let base =
+        base_path_for(f).ok_or_else(|| format!("{} sessions path not found", f.display_name))?;
     let canon_base = Path::new(&base)
         .canonicalize()
         .map_err(|e| format!("Failed to resolve {} base: {e}", f.display_name))?;

@@ -69,7 +69,7 @@ pub fn get_base_paths() -> Vec<PathBuf> {
 }
 
 fn get_user_data_roots() -> Vec<UserDataRoot> {
-    let Some(home) = crate::utils::home_dir() else {
+    let Some(home) = crate::sources::home_dir() else {
         return Vec::new();
     };
 
@@ -424,7 +424,7 @@ pub fn load_sessions(
     load_sessions_in(project_path, &roots)
 }
 
-pub(crate) fn load_sessions_in(
+fn load_sessions_in(
     project_path: &str,
     workspace_storage_roots: &[PathBuf],
 ) -> Result<Vec<ClaudeSession>, String> {
@@ -488,17 +488,6 @@ pub fn load_messages(session_path: &str) -> Result<Vec<ClaudeMessage>, String> {
     Ok(messages_from_state(&state))
 }
 
-/// Snapshot-confined variant: validates against explicit workspace-storage
-/// roots (snapshot `User/workspaceStorage` dirs) instead of live roots.
-pub(crate) fn load_messages_in(
-    session_path: &str,
-    workspace_storage_roots: &[PathBuf],
-) -> Result<Vec<ClaudeMessage>, String> {
-    let path = validate_session_path_in(session_path, workspace_storage_roots)?;
-    let state = read_session_state(&path)?;
-    Ok(messages_from_state(&state))
-}
-
 /// Naive case-insensitive search across every chat session.
 pub fn search(query: &str, limit: usize) -> Result<Vec<ClaudeMessage>, String> {
     let mut results = Vec::new();
@@ -539,23 +528,9 @@ fn search_workspace_storage(
     limit: usize,
     results: &mut Vec<ClaudeMessage>,
 ) -> Result<(), String> {
-    search_workspace_storage_in(ws_root, ws_root, query_lower, limit, results)
-}
-
-/// Snapshot-confined search: session files under `ws_root` (a snapshot
-/// `workspaceStorage` dir) are validated against `validation_root` instead of
-/// live roots, so archived reads never touch the live filesystem.
-pub(crate) fn search_workspace_storage_in(
-    ws_root: &Path,
-    validation_root: &Path,
-    query_lower: &str,
-    limit: usize,
-    results: &mut Vec<ClaudeMessage>,
-) -> Result<(), String> {
     if !ws_root.is_dir() {
         return Ok(());
     }
-    let roots = [validation_root.to_path_buf()];
 
     for ws_entry in fs::read_dir(ws_root).map_err(|e| e.to_string())?.flatten() {
         let ws_path = ws_entry.path();
@@ -568,7 +543,7 @@ pub(crate) fn search_workspace_storage_in(
         }
 
         for session_path in chat_session_files(&chat_dir)? {
-            if let Ok(messages) = load_messages_in(&session_path.to_string_lossy(), &roots) {
+            if let Ok(messages) = load_messages(&session_path.to_string_lossy()) {
                 for msg in messages {
                     if results.len() >= limit {
                         return Ok(());

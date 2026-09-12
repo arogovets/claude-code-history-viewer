@@ -25,7 +25,7 @@ pub fn detect() -> Option<ProviderInfo> {
 }
 
 pub fn get_base_path() -> Option<String> {
-    if let Ok(env_val) = std::env::var("DSH_HOME") {
+    if let Ok(env_val) = crate::sources::env_var("DSH_HOME") {
         let path = PathBuf::from(&env_val);
         let absolute_path = if path.is_absolute() {
             path
@@ -38,7 +38,7 @@ pub fn get_base_path() -> Option<String> {
         }
     }
 
-    let default = crate::utils::home_dir()?.join(".dsh");
+    let default = crate::sources::home_dir()?.join(".dsh");
     if default.exists() {
         let normalized = default.canonicalize().unwrap_or(default);
         Some(normalized.to_string_lossy().to_string())
@@ -235,20 +235,10 @@ fn inspect_session_file(path: &Path) -> Result<(String, usize, String), String> 
 
 pub fn load_sessions(
     project_path: &str,
-    exclude_sidechain: bool,
-) -> Result<Vec<ClaudeSession>, String> {
-    let base = get_base_path().ok_or_else(|| "DeepSeek Harness directory not found".to_string())?;
-    load_sessions_in(Path::new(&base), project_path, exclude_sidechain)
-}
-
-/// [`load_sessions`] against an explicit base (snapshot or live). Project
-/// URIs name the user's cwd, so sessions filter snapshot content by URI.
-pub fn load_sessions_in(
-    base: &Path,
-    project_path: &str,
     _exclude_sidechain: bool,
 ) -> Result<Vec<ClaudeSession>, String> {
-    let sessions_root = base.join(SESSIONS_DIR);
+    let base = get_base_path().ok_or_else(|| "DeepSeek Harness directory not found".to_string())?;
+    let sessions_root = Path::new(&base).join(SESSIONS_DIR);
 
     let target_cwd = project_path.strip_prefix(SCHEME).unwrap_or(project_path);
 
@@ -434,58 +424,6 @@ fn load_single_session_info(file_path: &Path, target_cwd: &str) -> Option<Claude
         storage_type: None,
         entrypoint: Some("cli".to_string()),
     })
-}
-
-// ============================================================================
-// Archive glue (snapshot-backed reads; loaders above are reused unchanged).
-// Project URIs name the user's cwd (content filter); session paths are plain
-// files mapped into the snapshot. DeepSeek has no message search.
-// ============================================================================
-
-use crate::storage::registry::DiscoveredSource as ArchiveDiscoveredSource;
-use crate::storage::{SnapshotInfo as ArchiveSnapshotInfo, Source as ArchiveSource};
-
-/// Physical `DeepSeek` store root on this machine, if present.
-pub(crate) fn archive_discover() -> Vec<ArchiveDiscoveredSource> {
-    let machine = crate::storage::registry::discovery_machine_id();
-    match get_base_path() {
-        Some(base) => vec![ArchiveDiscoveredSource::local(
-            crate::storage::ROLE_PRIMARY,
-            std::path::PathBuf::from(base),
-            &machine,
-        )],
-        None => Vec::new(),
-    }
-}
-
-/// Scan projects under an explicit root (snapshot data root at runtime).
-pub(crate) fn archive_scan(
-    _source: &ArchiveSource,
-    snapshot: &ArchiveSnapshotInfo,
-) -> Result<Vec<ClaudeProject>, String> {
-    scan_projects_from_path(&snapshot.data_path.to_string_lossy())
-}
-
-/// Sessions for a stable project URI, filtered from snapshot content.
-pub(crate) fn archive_load_sessions(
-    _source: &ArchiveSource,
-    snapshot: &ArchiveSnapshotInfo,
-    stable_project: &str,
-) -> Result<Vec<ClaudeSession>, String> {
-    load_sessions_in(&snapshot.data_path, stable_project, false)
-}
-
-/// Messages for a stable session file, read from the snapshot (the loader
-/// takes plain file paths with no base validation).
-pub(crate) fn archive_load_messages(
-    source: &ArchiveSource,
-    snapshot: &ArchiveSnapshotInfo,
-    stable_session: &str,
-) -> Result<Vec<ClaudeMessage>, String> {
-    let mapped =
-        crate::storage::registry::map_absolute_to_snapshot(source, snapshot, stable_session)
-            .ok_or_else(|| format!("No preserved snapshot covers {stable_session}"))?;
-    load_messages(&mapped)
 }
 
 pub fn load_messages(session_path: &str) -> Result<Vec<ClaudeMessage>, String> {

@@ -6,11 +6,13 @@
 // inflated the project tree's session_count relative to load_project_sessions,
 // which excludes sidechains. Fix: only top-level *.jsonl count as sessions.
 
+mod common;
+
 #[cfg(test)]
 mod session_count_tests {
+    use super::common::MirrorFixture;
     use claude_code_history_viewer_lib::commands;
     use std::fs;
-    use tempfile::TempDir;
 
     fn jsonl_line(session_id: &str) -> String {
         format!(
@@ -22,7 +24,7 @@ mod session_count_tests {
     /// plus `sidechain` sidechain/subagent jsonl nested one level down, then
     /// return the `session_count` that `scan_projects` reports for that project.
     async fn counted_sessions(top_level: usize, sidechain: usize) -> usize {
-        let temp = TempDir::new().expect("temp dir");
+        let temp = MirrorFixture::new();
         let project_dir = temp
             .path()
             .join(".claude")
@@ -62,6 +64,7 @@ mod session_count_tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn sidechain_files_are_not_counted_as_sessions() {
         // Before the fix this returned 2 + 3 = 5 (recursive count).
         // After the fix only the 2 top-level sessions count.
@@ -73,16 +76,18 @@ mod session_count_tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn only_top_level_sessions_are_counted() {
         let count = counted_sessions(4, 10).await;
         assert_eq!(count, 4);
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn project_with_no_top_level_sessions_is_skipped() {
         // A dir containing only sidechain files has no main session and should
         // not appear at all (session_count == 0 -> continue).
-        let temp = TempDir::new().expect("temp dir");
+        let temp = MirrorFixture::new();
         let project_dir = temp
             .path()
             .join(".claude")

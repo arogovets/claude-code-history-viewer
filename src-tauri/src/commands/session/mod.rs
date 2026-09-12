@@ -11,7 +11,6 @@ mod chain;
 mod delete;
 mod edits;
 mod load;
-mod locate;
 mod rename;
 mod resume;
 mod search;
@@ -21,7 +20,6 @@ pub use chain::{resolve_session_chain, superseded_chain_paths};
 pub use delete::*;
 pub use edits::*;
 pub use load::*;
-pub use locate::*;
 pub use rename::*;
 pub use resume::*;
 pub use search::*;
@@ -33,7 +31,7 @@ pub use search::*;
 /// per-module constants across seventeen providers, and a copy kept here would
 /// silently fall behind the next one added — the failure mode being a provider
 /// that works on desktop and is rejected over `--serve`.
-#[cfg(feature = "webui-server")]
+#[cfg(all(feature = "webui-server", test))]
 fn uri_parts(path: &std::path::Path) -> Option<(String, String)> {
     let raw = path.to_string_lossy();
     let (scheme, rest) = raw.split_once("://")?;
@@ -51,7 +49,7 @@ fn uri_parts(path: &std::path::Path) -> Option<(String, String)> {
 ///
 /// Desktop builds do not need this guard — those paths flow from
 /// `scan_projects` / `load_sessions` output, never raw user input.
-#[cfg(feature = "webui-server")]
+#[cfg(all(feature = "webui-server", test))]
 pub(crate) fn is_safe_session_path(path: &std::path::Path) -> Result<(), String> {
     use std::path::PathBuf;
 
@@ -405,4 +403,9 @@ mod tests {
 
         assert!(is_safe_session_path(&session_file).is_ok());
     }
+}
+
+#[cfg(all(feature = "webui-server", not(test)))]
+pub(crate) fn is_safe_session_path(path: &std::path::Path) -> Result<(), String> {
+    crate::sources::require_history_path(&path.to_string_lossy())
 }

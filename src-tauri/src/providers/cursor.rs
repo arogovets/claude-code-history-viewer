@@ -22,14 +22,14 @@ pub fn detect() -> Option<ProviderInfo> {
 
 /// Get Cursor user data path
 pub fn get_base_path() -> Option<PathBuf> {
-    if let Ok(env_val) = std::env::var("CURSOR_USER_DIR") {
+    if let Ok(env_val) = crate::sources::env_var("CURSOR_USER_DIR") {
         let path = PathBuf::from(env_val);
         if path.is_dir() {
             return Some(path.canonicalize().unwrap_or(path));
         }
     }
 
-    let home = crate::utils::home_dir()?;
+    let home = crate::sources::home_dir()?;
 
     #[cfg(target_os = "macos")]
     let base = home.join("Library/Application Support/Cursor/User");
@@ -45,120 +45,6 @@ pub fn get_base_path() -> Option<PathBuf> {
     } else {
         None
     }
-}
-
-// ============================================================================
-// Archive glue (snapshot-backed reads; the explicit-base seams above are
-// reused). Absolute workspace URIs map into the snapshot; opaque
-// `cursor://workspace/{id}` and `cursor://{composerId}` IDs resolve against
-// snapshot databases. No output rewriting: IDs are content-derived.
-// ============================================================================
-
-use crate::storage::registry::DiscoveredSource as ArchiveDiscoveredSource;
-use crate::storage::{SnapshotInfo as ArchiveSnapshotInfo, Source as ArchiveSource};
-
-/// Physical Cursor User dir on this machine, if present. The global database
-/// and every workspace database are captured consistently (workspace set is
-/// re-discovered on every pass).
-pub(crate) fn archive_discover() -> Vec<ArchiveDiscoveredSource> {
-    let machine = crate::storage::registry::discovery_machine_id();
-    match get_base_path() {
-        Some(base) => {
-            let mut found = ArchiveDiscoveredSource::local(
-                crate::storage::ROLE_PRIMARY,
-                base.clone(),
-                &machine,
-            );
-            found.includes = vec![
-                "globalStorage/state.vscdb".to_string(),
-                "workspaceStorage".to_string(),
-            ];
-            let base_path = std::path::PathBuf::from(&base);
-            let storage = base_path.join("workspaceStorage");
-            let mut dbs = Vec::new();
-            if base_path.join("globalStorage/state.vscdb").is_file() {
-                dbs.push("globalStorage/state.vscdb".to_string());
-            }
-            if let Ok(entries) = std::fs::read_dir(&storage) {
-                for entry in entries.flatten() {
-                    if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-                        let name = entry.file_name().to_string_lossy().to_string();
-                        let rel = format!("workspaceStorage/{name}/state.vscdb");
-                        // Only existing databases: a missing file must never
-                        // abort the whole sync (strict capture fails closed).
-                        if !name.is_empty()
-                            && name != "."
-                            && name != ".."
-                            && !name.contains('/')
-                            && base_path.join(&rel).is_file()
-                        {
-                            dbs.push(rel);
-                        }
-                    }
-                }
-            }
-            dbs.sort();
-            found.extra_sqlite_dbs = dbs;
-            vec![found]
-        }
-        None => Vec::new(),
-    }
-}
-
-/// Scan projects under an explicit base (snapshot data root at runtime).
-pub(crate) fn archive_scan(
-    _source: &ArchiveSource,
-    snapshot: &ArchiveSnapshotInfo,
-) -> Result<Vec<ClaudeProject>, String> {
-    let mut projects = scan_projects_from_global(&snapshot.data_path)?;
-    if projects.is_empty() {
-        projects = scan_projects_in(&snapshot.data_path.join("workspaceStorage"))?;
-    }
-    projects.sort_by(|a, b| b.last_modified.cmp(&a.last_modified));
-    Ok(projects)
-}
-
-fn archive_mapped(
-    source: &ArchiveSource,
-    snapshot: &ArchiveSnapshotInfo,
-    stable: &str,
-) -> Result<String, String> {
-    crate::storage::registry::map_absolute_to_snapshot(source, snapshot, stable)
-        .ok_or_else(|| format!("No preserved snapshot covers {stable}"))
-}
-
-/// Sessions for a stable project, read from the snapshot. Absolute workspace
-/// URIs map into snapshot space; opaque `cursor://workspace/{id}` IDs pass
-/// through to the snapshot-backed global lookup.
-pub(crate) fn archive_load_sessions(
-    source: &ArchiveSource,
-    snapshot: &ArchiveSnapshotInfo,
-    stable_project: &str,
-) -> Result<Vec<ClaudeSession>, String> {
-    let mapped = archive_mapped(source, snapshot, stable_project).unwrap_or_else(|_| {
-        // Opaque workspace-bucket IDs carry no filesystem path.
-        stable_project.to_string()
-    });
-    load_sessions_in(&snapshot.data_path, &mapped, false)
-}
-
-/// Messages for a stable composer ID, read from the snapshot databases.
-pub(crate) fn archive_load_messages(
-    _source: &ArchiveSource,
-    snapshot: &ArchiveSnapshotInfo,
-    stable_session: &str,
-) -> Result<Vec<ClaudeMessage>, String> {
-    load_messages_in(&snapshot.data_path, stable_session)
-}
-
-/// Search confined to one snapshot.
-pub(crate) fn archive_search(
-    _source: &ArchiveSource,
-    snapshot: &ArchiveSnapshotInfo,
-    query: &str,
-    limit: usize,
-) -> Result<Vec<ClaudeMessage>, String> {
-    search_in(&snapshot.data_path, query, limit)
 }
 
 /// Scan Cursor projects from migrated global Composer data.
@@ -400,17 +286,6 @@ fn scan_workspace(ws_path: &Path) -> Option<ClaudeProject> {
 /// Load sessions (composers) for a Cursor project
 pub fn load_sessions(
     project_path: &str,
-    exclude_sidechain: bool,
-) -> Result<Vec<ClaudeSession>, String> {
-    let base = get_base_path().ok_or("Cursor not found")?;
-    load_sessions_in(&base, project_path, exclude_sidechain)
-}
-
-/// [`load_sessions`] against an explicit base (snapshot or live). Absolute
-/// workspace URIs resolve within themselves; the base serves global lookups.
-pub fn load_sessions_in(
-    base: &Path,
-    project_path: &str,
     _exclude_sidechain: bool,
 ) -> Result<Vec<ClaudeSession>, String> {
     let ws_path = project_path
@@ -450,7 +325,7 @@ pub fn load_sessions_in(
         };
 
     let composers = if legacy_composers.is_empty() {
-        read_global_composers_for_workspace_in(base, &workspace_id)?
+        read_global_composers_for_workspace(&workspace_id)?
     } else {
         legacy_composers
     };
@@ -646,14 +521,9 @@ fn stats_messages_from_composer(composer_id: &str, composer: &Value) -> Vec<Clau
 
 /// Load messages from a Cursor composer
 pub fn load_messages(session_path: &str) -> Result<Vec<ClaudeMessage>, String> {
+    let (composer_id, composer) = load_composer_value(session_path)?;
+
     let base = get_base_path().ok_or("Cursor not found")?;
-    load_messages_in(&base, session_path)
-}
-
-/// [`load_messages`] against an explicit base (snapshot or live).
-pub fn load_messages_in(base: &Path, session_path: &str) -> Result<Vec<ClaudeMessage>, String> {
-    let (composer_id, composer) = load_composer_value_in(base, session_path)?;
-
     let global_db_path = base.join("globalStorage/state.vscdb");
 
     let conn = Connection::open_with_flags(&global_db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
@@ -775,11 +645,6 @@ fn attach_composer_token_usage(composer: &Value, messages: &mut [ClaudeMessage])
 /// Search across all Cursor conversations
 pub fn search(query: &str, limit: usize) -> Result<Vec<ClaudeMessage>, String> {
     let base = get_base_path().ok_or("Cursor not found")?;
-    search_in(&base, query, limit)
-}
-
-/// [`search`] against an explicit base (snapshot or live).
-pub fn search_in(base: &Path, query: &str, limit: usize) -> Result<Vec<ClaudeMessage>, String> {
     let global_db_path = base.join("globalStorage/state.vscdb");
 
     if !global_db_path.is_file() || query.is_empty() || limit == 0 {
@@ -861,17 +726,12 @@ fn read_workspace_folder(workspace_json_path: &Path) -> Option<String> {
 }
 
 fn load_composer_value(session_path: &str) -> Result<(String, Value), String> {
-    let base = get_base_path().ok_or("Cursor not found")?;
-    load_composer_value_in(&base, session_path)
-}
-
-/// [`load_composer_value`] against an explicit base (snapshot or live).
-fn load_composer_value_in(base: &Path, session_path: &str) -> Result<(String, Value), String> {
     let composer_id = session_path
         .strip_prefix("cursor://")
         .unwrap_or(session_path)
         .to_string();
 
+    let base = get_base_path().ok_or("Cursor not found")?;
     let global_db_path = base.join("globalStorage/state.vscdb");
     let conn = Connection::open_with_flags(&global_db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(|e| format!("Failed to open Cursor DB: {e}"))?;
@@ -921,12 +781,8 @@ fn read_workspace_composers(ws_db_path: &Path) -> Result<Vec<Value>, String> {
     Ok(composers)
 }
 
-/// Global composers for one workspace against an explicit base (snapshot or
-/// live).
-fn read_global_composers_for_workspace_in(
-    base: &Path,
-    workspace_id: &str,
-) -> Result<Vec<Value>, String> {
+fn read_global_composers_for_workspace(workspace_id: &str) -> Result<Vec<Value>, String> {
+    let base = get_base_path().ok_or("Cursor not found")?;
     let global_db = base.join("globalStorage/state.vscdb");
     if !global_db.is_file() {
         return Ok(Vec::new());
