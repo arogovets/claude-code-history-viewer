@@ -48,7 +48,7 @@ def main():
         },
         'RunAtLoad': True,
         'StartInterval': args.interval,
-        'ProcessType': 'Background',
+        'ProcessType': 'Standard',
         'StandardOutPath': str(logs / 'collector.log'),
         'StandardErrorPath': str(logs / 'collector-error.log'),
     }
