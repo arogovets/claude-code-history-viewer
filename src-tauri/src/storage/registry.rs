@@ -358,56 +358,12 @@ fn spec_table() -> Vec<ProviderArchiveSpec> {
             blob_merge: None,
         },
         ProviderArchiveSpec {
-            provider: "forgecode",
-            discover: providers::forgecode::archive_discover,
-            scan: providers::forgecode::archive_scan,
-            load_sessions: providers::forgecode::archive_load_sessions,
-            load_messages: providers::forgecode::archive_load_messages,
-            search: Some(providers::forgecode::archive_search),
-            locate: locate_by_subpath_or_single,
-            rewrite_outputs: false,
-            blob_merge: None,
-        },
-        ProviderArchiveSpec {
-            provider: "goose",
-            discover: providers::goose::archive_discover,
-            scan: providers::goose::archive_scan,
-            load_sessions: providers::goose::archive_load_sessions,
-            load_messages: providers::goose::archive_load_messages,
-            search: Some(providers::goose::archive_search),
-            locate: locate_by_subpath_or_single,
-            rewrite_outputs: false,
-            blob_merge: None,
-        },
-        ProviderArchiveSpec {
-            provider: "llm",
-            discover: providers::llm::archive_discover,
-            scan: providers::llm::archive_scan,
-            load_sessions: providers::llm::archive_load_sessions,
-            load_messages: providers::llm::archive_load_messages,
-            search: Some(providers::llm::archive_search),
-            locate: locate_by_subpath_or_single,
-            rewrite_outputs: false,
-            blob_merge: None,
-        },
-        ProviderArchiveSpec {
             provider: "zed",
             discover: providers::zed::archive_discover,
             scan: providers::zed::archive_scan,
             load_sessions: providers::zed::archive_load_sessions,
             load_messages: providers::zed::archive_load_messages,
             search: Some(providers::zed::archive_search),
-            locate: locate_by_subpath_or_single,
-            rewrite_outputs: false,
-            blob_merge: None,
-        },
-        ProviderArchiveSpec {
-            provider: "amazonq",
-            discover: providers::amazon_q::archive_discover,
-            scan: providers::amazon_q::archive_scan,
-            load_sessions: providers::amazon_q::archive_load_sessions,
-            load_messages: providers::amazon_q::archive_load_messages,
-            search: Some(providers::amazon_q::archive_search),
             locate: locate_by_subpath_or_single,
             rewrite_outputs: false,
             blob_merge: None,
@@ -456,6 +412,17 @@ fn spec_table() -> Vec<ProviderArchiveSpec> {
             search: Some(providers::crush::archive_search),
             locate: providers::crush::archive_locate,
             rewrite_outputs: false,
+            blob_merge: None,
+        },
+        ProviderArchiveSpec {
+            provider: "cline",
+            discover: providers::cline::archive_discover,
+            scan: providers::cline::archive_scan,
+            load_sessions: providers::cline::archive_load_sessions,
+            load_messages: providers::cline::archive_load_messages,
+            search: Some(providers::cline::archive_search),
+            locate: providers::cline::archive_locate,
+            rewrite_outputs: true,
             blob_merge: None,
         },
     ]
@@ -3811,6 +3778,118 @@ mod conformance_tests {
         );
         assert!(
             message_text(&load_provider_messages("vibe", &s1, &sources).await.unwrap())
+                .contains(marker)
+        );
+    }
+
+    // -- cline -----------------------------------------------------------------
+
+    fn cline_task(ext: &Path, id: &str, cwd: &str, task: &str, text: &str) {
+        let history_path = ext.join("state/taskHistory.json");
+        let mut history: Vec<serde_json::Value> = std::fs::read_to_string(&history_path)
+            .ok()
+            .and_then(|d| serde_json::from_str(&d).ok())
+            .unwrap_or_default();
+        if !history.iter().any(|t| t.get("id").and_then(|v| v.as_str()) == Some(id)) {
+            history.push(serde_json::json!({
+                "id": id,
+                "ts": 1_757_000_000_000u64,
+                "task": task,
+                "cwdOnTaskInitialization": cwd,
+                "tokensIn": 10,
+                "tokensOut": 20,
+            }));
+        }
+        write_file(
+            &history_path,
+            serde_json::to_string_pretty(&history).unwrap().as_bytes(),
+        );
+        write_file(
+            &ext.join("tasks").join(id).join("ui_messages.json"),
+            serde_json::to_string_pretty(&serde_json::json!([
+                {"type": "say", "say": "text", "text": text, "ts": 1_757_000_000_000u64},
+            ]))
+            .unwrap()
+            .as_bytes(),
+        );
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn cline_archive_conformance() {
+        let sandbox = crate::test_utils::SandboxHome::new();
+        let _env = ClearEnvGuard::clear(PROVIDER_ENVS);
+        let marker = "conformance-marker-cline";
+        let ext = sandbox
+            .path()
+            .join("Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev");
+        cline_task(&ext, "task-1", "/w/clineproj", "build it", &format!("hello {marker}"));
+        cline_task(&ext, "task-2", "/w/clineproj", "second", "second");
+
+        let projects = scan_provider("cline").await.unwrap();
+        assert_eq!(projects.len(), 1, "cline: {projects:?}");
+        let project = projects[0].path.clone();
+        assert!(project.starts_with("cline://"), "stable scheme: {project}");
+        assert!(!project.contains(".claude-history-viewer/data"));
+
+        let sources = read_sources("cline");
+        let sessions = load_provider_sessions("cline", &project, &sources)
+            .await
+            .unwrap();
+        assert_eq!(sessions.len(), 2);
+        let s1 = sessions
+            .iter()
+            .find(|s| s.actual_session_id == "task-1")
+            .expect("task-1")
+            .file_path
+            .clone();
+        assert!(
+            message_text(&load_provider_messages("cline", &s1, &sources).await.unwrap())
+                .contains(marker)
+        );
+        assert!(!search_provider("cline", marker, 10, &sources)
+            .await
+            .unwrap()
+            .is_empty());
+
+        // Disappearance: delete task-1 upstream, extend task-2, add task-3.
+        let history_path = ext.join("state/taskHistory.json");
+        let history: Vec<serde_json::Value> =
+            serde_json::from_str(&std::fs::read_to_string(&history_path).unwrap()).unwrap();
+        let kept: Vec<_> = history
+            .into_iter()
+            .filter(|t| t.get("id").and_then(|v| v.as_str()) != Some("task-1"))
+            .collect();
+        write_file(
+            &history_path,
+            serde_json::to_string_pretty(&kept).unwrap().as_bytes(),
+        );
+        std::fs::remove_dir_all(ext.join("tasks/task-1")).unwrap();
+        cline_task(&ext, "task-2", "/w/clineproj", "second", &format!("more {marker}"));
+        cline_task(&ext, "task-3", "/w/clineproj", "third", "third");
+        let projects_after = scan_provider("cline").await.unwrap();
+        assert_eq!(projects_after.len(), 1);
+        let sessions_after =
+            load_provider_sessions("cline", &projects_after[0].path, &read_sources("cline"))
+                .await
+                .unwrap();
+        assert_eq!(sessions_after.len(), 3, "task-1 preserved + task-2' + task-3");
+
+        std::fs::remove_dir_all(
+            sandbox.path().join("Library/Application Support/Code"),
+        )
+        .unwrap();
+        assert_eq!(scan_provider("cline").await.unwrap().len(), 1);
+        let sources = read_sources("cline");
+        assert_eq!(
+            load_provider_sessions("cline", &project, &sources)
+                .await
+                .unwrap()
+                .len(),
+            3
+        );
+        assert!(
+            message_text(&load_provider_messages("cline", &s1, &sources).await.unwrap())
                 .contains(marker)
         );
     }

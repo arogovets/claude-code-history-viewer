@@ -113,8 +113,19 @@ pub fn load_sessions(
 ) -> Result<Vec<ClaudeSession>, String> {
     let (base_path, target_cwd) = parse_project_path(project_path)?;
     let task_history = load_task_history(&base_path);
+    Ok(sessions_from_history(
+        &base_path,
+        &target_cwd,
+        &task_history,
+    ))
+}
 
-    let project_name = PathBuf::from(&target_cwd)
+fn sessions_from_history(
+    base_path: &Path,
+    target_cwd: &str,
+    task_history: &[Value],
+) -> Vec<ClaudeSession> {
+    let project_name = PathBuf::from(target_cwd)
         .file_name()
         .unwrap_or_default()
         .to_string_lossy()
@@ -166,7 +177,42 @@ pub fn load_sessions(
         .collect();
 
     sessions.sort_by(|a, b| b.last_modified.cmp(&a.last_modified));
-    Ok(sessions)
+    sessions
+}
+
+/// Union the task index across all completed snapshots for `source`: entries
+/// carry the snapshot-space ext base of `latest_ext`, so older snapshots are
+/// rebased by task id. Latest entries win on id collision.
+fn unioned_task_history(
+    source: &ArchiveSource,
+    latest_snapshot: &ArchiveSnapshotInfo,
+    latest_ext: &Path,
+) -> Vec<Value> {
+    let mut merged: Vec<Value> = load_task_history(latest_ext);
+    let mut seen: std::collections::HashSet<String> = merged
+        .iter()
+        .filter_map(|t| t.get("id").and_then(Value::as_str).map(str::to_string))
+        .collect();
+    // Ext dir name (e.g. `saoudrizwan.claude-dev`) is stable across snapshots.
+    let ext_name = latest_ext.file_name();
+    for snap in crate::storage::snapshot::list_snapshots(&source.id) {
+        if snap.snapshot_id == latest_snapshot.snapshot_id {
+            continue;
+        }
+        let Some(name) = ext_name else { break };
+        let old_ext = snap.data_path.join(name);
+        if !old_ext.is_dir() {
+            continue;
+        }
+        for item in load_task_history(&old_ext) {
+            if let Some(id) = item.get("id").and_then(Value::as_str) {
+                if seen.insert(id.to_string()) {
+                    merged.push(item);
+                }
+            }
+        }
+    }
+    merged
 }
 
 /// Load messages from a Cline task
@@ -257,28 +303,37 @@ pub fn search(query: &str, limit: usize) -> Result<Vec<ClaudeMessage>, String> {
 fn get_all_base_paths() -> Vec<(PathBuf, String)> {
     let mut paths = Vec::new();
 
-    let editors: &[(&str, &str)] = &[
-        ("Code", "VS Code"),
-        ("Cursor", "Cursor"),
-        ("Code - Insiders", "VS Code Insiders"),
-        ("Codium", "VSCodium"),
+    for (global_storage, editor_label, _editor_slug) in get_global_storage_roots() {
+        for (ext_id, ext_name) in EXTENSIONS {
+            let ext_path = global_storage.join(ext_id);
+            if ext_path.is_dir() && !is_symlink(&ext_path) {
+                let label = format!("{ext_name} ({editor_label})");
+                paths.push((ext_path, label));
+            }
+        }
+    }
+
+    paths
+}
+
+/// One `.../User/globalStorage` dir per installed editor, with a stable role
+/// slug for source identity. Shared by live discovery and snapshot scans.
+fn get_global_storage_roots() -> Vec<(PathBuf, &'static str, &'static str)> {
+    let editors: &[(&str, &'static str, &'static str)] = &[
+        ("Code", "VS Code", "vscode"),
+        ("Cursor", "Cursor", "cursor"),
+        ("Code - Insiders", "VS Code Insiders", "vscode-insiders"),
+        ("Codium", "VSCodium", "vscodium"),
     ];
+    let mut roots = Vec::new();
 
     if let Some(home) = crate::utils::home_dir() {
         let app_support = home.join("Library/Application Support");
 
-        for (editor_dir, editor_label) in editors {
+        for (editor_dir, editor_label, editor_slug) in editors {
             let global_storage = app_support.join(editor_dir).join("User/globalStorage");
-            if !global_storage.is_dir() {
-                continue;
-            }
-
-            for (ext_id, ext_name) in EXTENSIONS {
-                let ext_path = global_storage.join(ext_id);
-                if ext_path.is_dir() && !is_symlink(&ext_path) {
-                    let label = format!("{ext_name} ({editor_label})");
-                    paths.push((ext_path, label));
-                }
+            if global_storage.is_dir() {
+                roots.push((global_storage, *editor_label, *editor_slug));
             }
         }
     }
@@ -286,22 +341,15 @@ fn get_all_base_paths() -> Vec<(PathBuf, String)> {
     // Linux: ~/.config/<editor>/User/globalStorage/
     #[cfg(target_os = "linux")]
     if let Some(config) = dirs::config_dir() {
-        for (editor_dir, editor_label) in editors {
+        for (editor_dir, editor_label, editor_slug) in editors {
             let global_storage = config.join(editor_dir).join("User/globalStorage");
-            if !global_storage.is_dir() {
-                continue;
-            }
-            for (ext_id, ext_name) in EXTENSIONS {
-                let ext_path = global_storage.join(ext_id);
-                if ext_path.is_dir() && !is_symlink(&ext_path) {
-                    let label = format!("{ext_name} ({editor_label})");
-                    paths.push((ext_path, label));
-                }
+            if global_storage.is_dir() && !roots.iter().any(|(p, _, _)| p == &global_storage) {
+                roots.push((global_storage, *editor_label, *editor_slug));
             }
         }
     }
 
-    paths
+    roots
 }
 
 /// A task's working directory. Cline names this `cwdOnTaskInitialization`; the
@@ -710,6 +758,198 @@ fn map_cline_tool_name(name: &str) -> &str {
         "webSearch" => "WebSearch",
         _ => name,
     }
+}
+
+// ============================================================================
+// Archive glue (snapshot-backed reads; one source per editor globalStorage).
+// ============================================================================
+
+use crate::storage::registry::DiscoveredSource as ArchiveDiscoveredSource;
+use crate::storage::{SnapshotInfo as ArchiveSnapshotInfo, Source as ArchiveSource};
+
+/// Physical Cline roots: one `.../User/globalStorage` dir per editor. The
+/// shared `state.vscdb` (Kilo/globalState fallback) is captured via the
+/// SQLite backup path so snapshots stay consistent while editors hold locks.
+pub(crate) fn archive_discover() -> Vec<ArchiveDiscoveredSource> {
+    let machine = crate::storage::registry::discovery_machine_id();
+    get_global_storage_roots()
+        .into_iter()
+        .map(|(root, label, slug)| {
+            let mut src = ArchiveDiscoveredSource::local(slug, root, &machine);
+            src.label = Some(label.to_string());
+            src.sqlite_dbs = vec!["state.vscdb".to_string()];
+            src
+        })
+        .collect()
+}
+
+/// Scan all Cline-family extensions under one snapshot (mirrors a
+/// globalStorage dir).
+#[allow(clippy::unnecessary_wraps)]
+pub(crate) fn archive_scan(
+    _source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+) -> Result<Vec<ClaudeProject>, String> {
+    let mut projects = Vec::new();
+    for (ext_id, ext_name) in EXTENSIONS {
+        let ext_path = snapshot.data_path.join(ext_id);
+        if !ext_path.is_dir() {
+            continue;
+        }
+        // Reuse the live per-extension scanner; outputs are rewritten to
+        // stable IDs by the registry (`rewrite_outputs = true`).
+        let label = format!("{ext_name} (snapshot)");
+        projects.extend(scan_base_path(&ext_path, &label));
+    }
+    Ok(projects)
+}
+
+fn archive_mapped_base(
+    source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+    live_base: &str,
+) -> Result<String, String> {
+    crate::storage::registry::map_absolute_to_snapshot(source, snapshot, live_base)
+        .ok_or_else(|| format!("No preserved snapshot covers {live_base}"))
+}
+
+/// Locate the covering source by the live ext base embedded in the stable ID
+/// (`cline://{base}:{…}`), or by the plain file path itself.
+pub(crate) fn archive_locate(
+    sources: &[crate::storage::registry::ResolvedSource],
+    stable: &str,
+) -> Option<usize> {
+    if stable.starts_with("cline://") {
+        let base = stable
+            .strip_prefix("cline://")
+            .unwrap_or(stable)
+            .split_once(':')
+            .map(|(b, _)| b)
+            .unwrap_or(stable);
+        crate::storage::registry::locate_by_subpath_or_single(sources, base)
+    } else {
+        crate::storage::registry::locate_by_subpath_or_single(sources, stable)
+    }
+}
+
+/// Sessions for a stable project, read from the snapshot. `taskHistory.json`
+/// is a blob-collection index: deleting a task upstream rewrites the whole
+/// file, so entries missing from the latest snapshot are unioned back from
+/// older snapshots (their `tasks/<id>/ui_messages.json` payloads are carried
+/// forward by cumulative snapshots).
+pub(crate) fn archive_load_sessions(
+    source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+    stable_project: &str,
+) -> Result<Vec<ClaudeSession>, String> {
+    let (live_base, cwd) = parse_project_path(stable_project)?;
+    let mapped_base = archive_mapped_base(source, snapshot, &live_base.to_string_lossy())?;
+    let mapped_project = format!("cline://{mapped_base}:{cwd}");
+    let (mapped_base_path, target_cwd) = parse_project_path(&mapped_project)?;
+    // Union task entries across all completed snapshots for this source.
+    let history = unioned_task_history(source, snapshot, &mapped_base_path);
+    Ok(sessions_from_history(
+        &mapped_base_path,
+        &target_cwd,
+        &history,
+    ))
+}
+
+/// Messages for a stable session, read from the snapshot. Accepts both the
+/// `cline://{base}:{task}` session ID and the plain `ui_messages.json` file
+/// path (the session `file_path` field).
+pub(crate) fn archive_load_messages(
+    source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+    stable_session: &str,
+) -> Result<Vec<ClaudeMessage>, String> {
+    if stable_session.starts_with("cline://") {
+        let (live_base, task_id) = parse_session_path(stable_session)?;
+        let mapped_base = archive_mapped_base(source, snapshot, &live_base.to_string_lossy())?;
+        return load_messages(&format!("cline://{mapped_base}:{task_id}"));
+    }
+    // Plain file path: map into snapshot space, then derive the task id from
+    // the `tasks/<id>/ui_messages.json` layout.
+    let mapped =
+        crate::storage::registry::map_absolute_to_snapshot(source, snapshot, stable_session)
+            .ok_or_else(|| format!("No preserved snapshot covers {stable_session}"))?;
+    let mapped_path = PathBuf::from(&mapped);
+    let task_id = mapped_path
+        .parent()
+        .and_then(|p| p.file_name())
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| format!("Invalid session path: {stable_session}"))?;
+    let base = mapped_path
+        .ancestors()
+        .nth(3)
+        .ok_or_else(|| format!("Invalid session path: {stable_session}"))?;
+    load_messages(&format!("cline://{}:{}", base.to_string_lossy(), task_id))
+}
+
+/// Search confined to one snapshot (unioned with older snapshot indexes so
+/// tasks deleted upstream remain searchable; payloads come from the latest
+/// cumulative snapshot).
+pub(crate) fn archive_search(
+    source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<ClaudeMessage>, String> {
+    search_in_snapshot(source, snapshot, query, limit)
+}
+
+#[allow(clippy::unnecessary_wraps)]
+fn search_in_snapshot(
+    source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<ClaudeMessage>, String> {
+    let query_lower = query.to_lowercase();
+    let mut results = Vec::new();
+    for (ext_id, _) in EXTENSIONS {
+        let ext_path = snapshot.data_path.join(ext_id);
+        if !ext_path.is_dir() {
+            continue;
+        }
+        // Union with older snapshots so deleted tasks remain searchable.
+        let task_history = unioned_task_history(source, snapshot, &ext_path);
+        for item in &task_history {
+            let id = match item.get("id").and_then(Value::as_str) {
+                Some(id) => id,
+                None => continue,
+            };
+            let project_name = task_cwd(item)
+                .and_then(|p| {
+                    PathBuf::from(p)
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                })
+                .unwrap_or_default();
+            let ui_path = ext_path.join("tasks").join(id).join("ui_messages.json");
+            let Ok(data) = fs::read_to_string(&ui_path) else {
+                continue;
+            };
+            let Ok(ui_messages) = serde_json::from_str::<Vec<Value>>(&data) else {
+                continue;
+            };
+            let mut counter = 0u64;
+            for msg in &ui_messages {
+                if let Some(mut claude_msg) = convert_cline_message(msg, id, &mut counter) {
+                    if let Some(ref c) = claude_msg.content {
+                        if search_json_value_case_insensitive(c, &query_lower) {
+                            claude_msg.project_name = Some(project_name.clone());
+                            results.push(claude_msg);
+                            if results.len() >= limit {
+                                return Ok(results);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(results)
 }
 
 // ============================================================================
