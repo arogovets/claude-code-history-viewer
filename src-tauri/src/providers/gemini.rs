@@ -125,14 +125,24 @@ pub fn scan_projects() -> Result<Vec<ClaudeProject>, String> {
 /// Load sessions for a Gemini project
 pub fn load_sessions(
     project_path: &str,
+    exclude_sidechain: bool,
+) -> Result<Vec<ClaudeSession>, String> {
+    let base = get_base_path().ok_or("Could not determine Gemini base path")?;
+    load_sessions_in(Path::new(&base), project_path, exclude_sidechain)
+}
+
+/// [`load_sessions`] against an explicit base (snapshot or live).
+pub(crate) fn load_sessions_in(
+    base: &Path,
+    project_path: &str,
     _exclude_sidechain: bool,
 ) -> Result<Vec<ClaudeSession>, String> {
     let dir = project_path
         .strip_prefix("gemini://")
         .unwrap_or(project_path);
 
-    // Validate project path is inside Gemini data directory
-    let project_dir = validate_gemini_path(dir)?;
+    // Validate project path is inside the (snapshot or live) data directory
+    let project_dir = validate_gemini_path_at(dir, base)?;
     let chats_dir = project_dir.join("chats");
 
     if is_symlink(&chats_dir) || !chats_dir.is_dir() {
@@ -205,8 +215,17 @@ pub fn load_sessions(
 
 /// Load messages from a Gemini session file
 pub fn load_messages(session_path: &str) -> Result<Vec<ClaudeMessage>, String> {
-    // W-1: validate path is within Gemini data directory
-    let path = validate_session_path(session_path)?;
+    let base = get_base_path().ok_or("Could not determine Gemini base path")?;
+    load_messages_in(Path::new(&base), session_path)
+}
+
+/// [`load_messages`] against an explicit base (snapshot or live).
+pub(crate) fn load_messages_in(
+    base: &Path,
+    session_path: &str,
+) -> Result<Vec<ClaudeMessage>, String> {
+    // W-1: validate path is within the (snapshot or live) data directory
+    let path = validate_session_path_at(session_path, base)?;
 
     let data =
         fs::read_to_string(&path).map_err(|e| format!("Failed to read session file: {e}"))?;
@@ -234,7 +253,87 @@ pub fn load_messages(session_path: &str) -> Result<Vec<ClaudeMessage>, String> {
 /// Search across all Gemini sessions
 pub fn search(query: &str, limit: usize) -> Result<Vec<ClaudeMessage>, String> {
     let base = get_base_path().ok_or("Could not determine Gemini base path")?;
-    let tmp_dir = PathBuf::from(&base).join("tmp");
+    search_in(Path::new(&base), query, limit)
+}
+
+// ============================================================================
+// Archive glue (snapshot-backed reads; the explicit-base seams above are reused).
+// ============================================================================
+
+use crate::storage::registry::DiscoveredSource as ArchiveDiscoveredSource;
+use crate::storage::{SnapshotInfo as ArchiveSnapshotInfo, Source as ArchiveSource};
+
+/// Physical Gemini store root on this machine, if present.
+pub(crate) fn archive_discover() -> Vec<ArchiveDiscoveredSource> {
+    let machine = crate::storage::registry::discovery_machine_id();
+    match get_base_path() {
+        Some(base) => vec![ArchiveDiscoveredSource::local(
+            crate::storage::ROLE_PRIMARY,
+            PathBuf::from(base),
+            &machine,
+        )],
+        None => Vec::new(),
+    }
+}
+
+/// Scan projects under an explicit root (snapshot data root at runtime).
+pub(crate) fn archive_scan(
+    _source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+) -> Result<Vec<ClaudeProject>, String> {
+    scan_projects_from_path(&snapshot.data_path.to_string_lossy())
+}
+
+fn archive_mapped(
+    source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+    stable: &str,
+) -> Result<String, String> {
+    crate::storage::registry::map_absolute_to_snapshot(source, snapshot, stable)
+        .ok_or_else(|| format!("No preserved snapshot covers {stable}"))
+}
+
+fn snapshot_base(snapshot: &ArchiveSnapshotInfo) -> PathBuf {
+    snapshot.data_path.clone()
+}
+
+/// Sessions for a stable project, read from the snapshot.
+pub(crate) fn archive_load_sessions(
+    source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+    stable_project: &str,
+) -> Result<Vec<ClaudeSession>, String> {
+    let mapped = archive_mapped(source, snapshot, stable_project)?;
+    load_sessions_in(&snapshot_base(snapshot), &mapped, false)
+}
+
+/// Messages for a stable session, read from the snapshot.
+pub(crate) fn archive_load_messages(
+    source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+    stable_session: &str,
+) -> Result<Vec<ClaudeMessage>, String> {
+    let mapped = archive_mapped(source, snapshot, stable_session)?;
+    load_messages_in(&snapshot_base(snapshot), &mapped)
+}
+
+/// Search confined to one snapshot.
+pub(crate) fn archive_search(
+    _source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<ClaudeMessage>, String> {
+    search_in(&snapshot.data_path, query, limit)
+}
+
+/// [`search`] against an explicit base (snapshot or live).
+pub(crate) fn search_in(
+    base: &Path,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<ClaudeMessage>, String> {
+    let tmp_dir = base.join("tmp");
 
     if !tmp_dir.is_dir() {
         return Ok(Vec::new());
@@ -306,14 +405,14 @@ pub fn search(query: &str, limit: usize) -> Result<Vec<ClaudeMessage>, String> {
 // Path validation & file helpers
 // ============================================================================
 
-/// Resolve and validate that a path is inside `~/.gemini/tmp/`
-fn validate_gemini_path(raw_path: &str) -> Result<PathBuf, String> {
+/// Resolve and validate that a path is inside the Gemini `tmp/` directory
+/// under an explicit base (snapshot or live).
+fn validate_gemini_path_at(raw_path: &str, base: &Path) -> Result<PathBuf, String> {
     let path = PathBuf::from(raw_path)
         .canonicalize()
         .map_err(|e| format!("Invalid path: {e}"))?;
 
-    let base = get_base_path().ok_or("No Gemini base path")?;
-    let canonical_tmp = PathBuf::from(&base)
+    let canonical_tmp = base
         .join("tmp")
         .canonicalize()
         .map_err(|e| format!("Cannot resolve Gemini tmp directory: {e}"))?;
@@ -325,9 +424,10 @@ fn validate_gemini_path(raw_path: &str) -> Result<PathBuf, String> {
     Ok(path)
 }
 
-/// Validate that `session_path` is a real file inside `~/.gemini/tmp/`
-fn validate_session_path(session_path: &str) -> Result<PathBuf, String> {
-    let path = validate_gemini_path(session_path)?;
+/// Validate that `session_path` is a real file inside the Gemini `tmp/`
+/// directory under an explicit base (snapshot or live).
+fn validate_session_path_at(session_path: &str, base: &Path) -> Result<PathBuf, String> {
+    let path = validate_gemini_path_at(session_path, base)?;
 
     if !path.is_file() {
         return Err(format!("Session file not found: {session_path}"));

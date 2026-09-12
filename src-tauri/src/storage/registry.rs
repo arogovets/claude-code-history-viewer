@@ -44,7 +44,11 @@ pub struct DiscoveredSource {
     /// Snapshot-relative database paths needing backup capture.
     pub sqlite_dbs: Vec<String>,
     /// Snapshot-relative subtree prefixes to capture (empty = whole root).
+    /// Entries naming an exact file capture just that file.
     pub includes: Vec<String>,
+    /// Maximum directory depth below the root to capture (`None` =
+    /// unbounded). Counts the root's children as depth 1.
+    pub max_depth: Option<usize>,
     /// Extra databases discovered at sync time (e.g. per-workspace stores).
     pub extra_sqlite_dbs: Vec<String>,
 }
@@ -59,6 +63,7 @@ impl DiscoveredSource {
             machine_id: machine_id.to_string(),
             sqlite_dbs: Vec::new(),
             includes: Vec::new(),
+            max_depth: None,
             extra_sqlite_dbs: Vec::new(),
         }
     }
@@ -181,6 +186,76 @@ fn spec_table() -> Vec<ProviderArchiveSpec> {
             locate: locate_by_subpath_or_single,
             rewrite_outputs: true,
         },
+        ProviderArchiveSpec {
+            provider: "gemini",
+            discover: providers::gemini::archive_discover,
+            scan: providers::gemini::archive_scan,
+            load_sessions: providers::gemini::archive_load_sessions,
+            load_messages: providers::gemini::archive_load_messages,
+            search: Some(providers::gemini::archive_search),
+            locate: locate_by_subpath_or_single,
+            rewrite_outputs: true,
+        },
+        ProviderArchiveSpec {
+            provider: "qwen",
+            discover: providers::qwen::archive_discover,
+            scan: providers::qwen::archive_scan,
+            load_sessions: providers::qwen::archive_load_sessions,
+            load_messages: providers::qwen::archive_load_messages,
+            search: Some(providers::qwen::archive_search),
+            locate: locate_by_subpath_or_single,
+            rewrite_outputs: true,
+        },
+        ProviderArchiveSpec {
+            provider: "deepseek",
+            discover: providers::deepseek::archive_discover,
+            scan: providers::deepseek::archive_scan,
+            load_sessions: providers::deepseek::archive_load_sessions,
+            load_messages: providers::deepseek::archive_load_messages,
+            search: None,
+            locate: locate_by_subpath_or_single,
+            rewrite_outputs: true,
+        },
+        ProviderArchiveSpec {
+            provider: "openhands",
+            discover: providers::openhands::archive_discover,
+            scan: providers::openhands::archive_scan,
+            load_sessions: providers::openhands::archive_load_sessions,
+            load_messages: providers::openhands::archive_load_messages,
+            search: Some(providers::openhands::archive_search),
+            locate: locate_by_subpath_or_single,
+            rewrite_outputs: false,
+        },
+        ProviderArchiveSpec {
+            provider: "aider",
+            discover: providers::aider::archive_discover,
+            scan: providers::aider::archive_scan,
+            load_sessions: providers::aider::archive_load_sessions,
+            load_messages: providers::aider::archive_load_messages,
+            search: Some(providers::aider::archive_search),
+            locate: locate_by_subpath_or_single,
+            rewrite_outputs: true,
+        },
+        ProviderArchiveSpec {
+            provider: "codebuddy",
+            discover: providers::codebuddy::archive_discover,
+            scan: providers::codebuddy::archive_scan,
+            load_sessions: providers::codebuddy::archive_load_sessions,
+            load_messages: providers::codebuddy::archive_load_messages,
+            search: Some(providers::codebuddy::archive_search),
+            locate: locate_by_subpath_or_single,
+            rewrite_outputs: true,
+        },
+        ProviderArchiveSpec {
+            provider: "cursor-agent",
+            discover: providers::cursor_agent::archive_discover,
+            scan: providers::cursor_agent::archive_scan,
+            load_sessions: providers::cursor_agent::archive_load_sessions,
+            load_messages: providers::cursor_agent::archive_load_messages,
+            search: Some(providers::cursor_agent::archive_search),
+            locate: locate_by_subpath_or_single,
+            rewrite_outputs: true,
+        },
     ]
 }
 
@@ -251,6 +326,7 @@ pub fn source_for_discovered(provider: &str, discovered: &DiscoveredSource) -> S
         label: discovered.label.clone(),
         sqlite_dbs: discovered.sqlite_dbs.clone(),
         includes: discovered.includes.clone(),
+        max_depth: discovered.max_depth,
     }
 }
 
@@ -1154,6 +1230,649 @@ mod conformance_tests {
     #[serial_test::serial]
     async fn pearai_archive_conformance() {
         continue_like_conformance("pearai", ".pearai", "pearai://").await;
+    }
+
+    // -- gemini ------------------------------------------------------------------
+
+    fn gemini_session(sid: &str, texts: &[&str]) -> String {
+        let messages: Vec<_> = texts
+            .iter()
+            .enumerate()
+            .map(|(i, text)| {
+                serde_json::json!({
+                    "type": "user", "id": format!("m{i}"),
+                    "timestamp": "2026-09-01T00:00:00Z",
+                    "role": "user", "content": text,
+                })
+            })
+            .collect();
+        serde_json::json!({
+            "sessionId": sid,
+            "startTime": "2026-09-01T00:00:00Z",
+            "lastUpdated": "2026-09-01T00:01:00Z",
+            "messages": messages,
+        })
+        .to_string()
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn gemini_archive_conformance() {
+        let sandbox = crate::test_utils::SandboxHome::new();
+        let _env = ClearEnvGuard::clear(PROVIDER_ENVS);
+        let base = sandbox.path().join(".gemini");
+        let marker = "conformance-marker-gemini";
+        write_file(
+            &base.join("tmp/projhash/chats/session-1.json"),
+            gemini_session("gs1", &[&format!("hello {marker}")]).as_bytes(),
+        );
+        write_file(
+            &base.join("tmp/projhash/chats/session-2.json"),
+            gemini_session("gs2", &["second"]).as_bytes(),
+        );
+
+        let projects = scan_provider("gemini").await.unwrap();
+        assert_eq!(projects.len(), 1, "gemini: {projects:?}");
+        let project = projects[0].path.clone();
+        assert!(project.starts_with("gemini://"));
+
+        let sources = read_sources("gemini");
+        let sessions = load_provider_sessions("gemini", &project, &sources)
+            .await
+            .unwrap();
+        assert_eq!(sessions.len(), 2);
+        let s1 = sessions
+            .iter()
+            .find(|s| s.actual_session_id == "gs1")
+            .map(|s| s.file_path.clone())
+            .unwrap_or_else(|| sessions[0].file_path.clone());
+        assert!(message_text(
+            &load_provider_messages("gemini", &s1, &sources)
+                .await
+                .unwrap()
+        )
+        .contains(marker));
+        assert!(!search_provider("gemini", marker, 10, &sources)
+            .await
+            .unwrap()
+            .is_empty());
+
+        // Disappearance: delete session-1, extend session-2, add session-3.
+        std::fs::remove_file(base.join("tmp/projhash/chats/session-1.json")).unwrap();
+        write_file(
+            &base.join("tmp/projhash/chats/session-2.json"),
+            gemini_session("gs2", &["second", &format!("more {marker}")]).as_bytes(),
+        );
+        write_file(
+            &base.join("tmp/projhash/chats/session-3.json"),
+            gemini_session("gs3", &["third"]).as_bytes(),
+        );
+        let projects_after = scan_provider("gemini").await.unwrap();
+        assert_eq!(projects_after.len(), 1);
+        let sessions_after =
+            load_provider_sessions("gemini", &projects_after[0].path, &read_sources("gemini"))
+                .await
+                .unwrap();
+        assert_eq!(sessions_after.len(), 3, "s1 preserved + s2' + s3");
+
+        std::fs::remove_dir_all(&base).unwrap();
+        assert_eq!(scan_provider("gemini").await.unwrap().len(), 1);
+        let sources = read_sources("gemini");
+        assert_eq!(
+            load_provider_sessions("gemini", &project, &sources)
+                .await
+                .unwrap()
+                .len(),
+            3
+        );
+    }
+
+    // -- qwen --------------------------------------------------------------------
+
+    fn qwen_session(cwd: &str, sid: &str, texts: &[&str]) -> String {
+        texts
+            .iter()
+            .map(|text| {
+                serde_json::json!({
+                    "uuid": format!("{sid}-u"), "sessionId": sid,
+                    "timestamp": "2026-09-01T00:00:00Z", "type": "user", "cwd": cwd,
+                    "message": {"role": "user", "parts": [{"text": text}]},
+                })
+                .to_string()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn qwen_archive_conformance() {
+        let sandbox = crate::test_utils::SandboxHome::new();
+        let _env = ClearEnvGuard::clear(PROVIDER_ENVS);
+        let base = sandbox.path().join(".qwen");
+        let marker = "conformance-marker-qwen";
+        write_file(
+            &base.join("projects/-w-qproj/chats/qs1.jsonl"),
+            qwen_session("/w/qproj", "qs1", &[&format!("hello {marker}")]).as_bytes(),
+        );
+        write_file(
+            &base.join("projects/-w-qproj/chats/qs2.jsonl"),
+            qwen_session("/w/qproj", "qs2", &["second"]).as_bytes(),
+        );
+
+        let projects = scan_provider("qwen").await.unwrap();
+        assert_eq!(projects.len(), 1, "qwen: {projects:?}");
+        assert_eq!(projects[0].path, "qwen:///w/qproj");
+        let project = projects[0].path.clone();
+
+        let sources = read_sources("qwen");
+        let sessions = load_provider_sessions("qwen", &project, &sources)
+            .await
+            .unwrap();
+        assert_eq!(sessions.len(), 2);
+        let s1 = sessions
+            .iter()
+            .find(|s| s.actual_session_id == "qs1")
+            .map(|s| s.file_path.clone())
+            .unwrap_or_else(|| sessions[0].file_path.clone());
+        assert!(
+            message_text(&load_provider_messages("qwen", &s1, &sources).await.unwrap())
+                .contains(marker)
+        );
+        assert!(!search_provider("qwen", marker, 10, &sources)
+            .await
+            .unwrap()
+            .is_empty());
+
+        std::fs::remove_file(base.join("projects/-w-qproj/chats/qs1.jsonl")).unwrap();
+        write_file(
+            &base.join("projects/-w-qproj/chats/qs2.jsonl"),
+            qwen_session("/w/qproj", "qs2", &["second", &format!("more {marker}")]).as_bytes(),
+        );
+        write_file(
+            &base.join("projects/-w-qproj/chats/qs3.jsonl"),
+            qwen_session("/w/qproj", "qs3", &["third"]).as_bytes(),
+        );
+        let projects_after = scan_provider("qwen").await.unwrap();
+        assert_eq!(projects_after.len(), 1);
+        let sessions_after =
+            load_provider_sessions("qwen", &projects_after[0].path, &read_sources("qwen"))
+                .await
+                .unwrap();
+        assert_eq!(sessions_after.len(), 3);
+
+        std::fs::remove_dir_all(&base).unwrap();
+        assert_eq!(scan_provider("qwen").await.unwrap().len(), 1);
+        let sources = read_sources("qwen");
+        assert_eq!(
+            load_provider_sessions("qwen", &project, &sources)
+                .await
+                .unwrap()
+                .len(),
+            3
+        );
+    }
+
+    // -- deepseek ------------------------------------------------------------------
+
+    fn deepseek_session(id: &str, cwd: &str, texts: &[&str]) -> String {
+        let mut lines = vec![
+            serde_json::json!({"type": "session", "id": id, "cwd": cwd, "time": 1_757_000_000_000i64})
+                .to_string(),
+        ];
+        for text in texts {
+            lines.push(
+                serde_json::json!({
+                    "type": "user/message", "time": 1_757_000_001_000i64,
+                    "data": {"content": [{"type": "text", "text": text}]},
+                })
+                .to_string(),
+            );
+        }
+        lines.join("\n")
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn deepseek_archive_conformance() {
+        let sandbox = crate::test_utils::SandboxHome::new();
+        let _env = ClearEnvGuard::clear(PROVIDER_ENVS);
+        let base = sandbox.path().join(".dsh");
+        let marker = "conformance-marker-deepseek";
+        write_file(
+            &base.join("sessions/--w-dproj/ds1/session.jsonl"),
+            deepseek_session("ds1", "/w/dproj", &[&format!("hello {marker}")]).as_bytes(),
+        );
+        write_file(
+            &base.join("sessions/--w-dproj/ds2/session.jsonl"),
+            deepseek_session("ds2", "/w/dproj", &["second"]).as_bytes(),
+        );
+
+        let projects = scan_provider("deepseek").await.unwrap();
+        assert_eq!(projects.len(), 1, "deepseek: {projects:?}");
+        let project = projects[0].path.clone();
+
+        let sources = read_sources("deepseek");
+        let sessions = load_provider_sessions("deepseek", &project, &sources)
+            .await
+            .unwrap();
+        assert_eq!(sessions.len(), 2);
+        let s1 = sessions
+            .iter()
+            .find(|s| s.actual_session_id == "ds1")
+            .map(|s| s.file_path.clone())
+            .unwrap_or_else(|| sessions[0].file_path.clone());
+        assert!(!load_provider_messages("deepseek", &s1, &sources)
+            .await
+            .unwrap()
+            .is_empty());
+
+        std::fs::remove_dir_all(base.join("sessions/--w-dproj/ds1")).unwrap();
+        write_file(
+            &base.join("sessions/--w-dproj/ds2/session.jsonl"),
+            deepseek_session("ds2", "/w/dproj", &["second", "more"]).as_bytes(),
+        );
+        write_file(
+            &base.join("sessions/--w-dproj/ds3/session.jsonl"),
+            deepseek_session("ds3", "/w/dproj", &["third"]).as_bytes(),
+        );
+        let projects_after = scan_provider("deepseek").await.unwrap();
+        assert_eq!(projects_after.len(), 1);
+        let sessions_after = load_provider_sessions(
+            "deepseek",
+            &projects_after[0].path,
+            &read_sources("deepseek"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(sessions_after.len(), 3, "ds1 preserved + ds2' + ds3");
+
+        std::fs::remove_dir_all(&base).unwrap();
+        assert_eq!(scan_provider("deepseek").await.unwrap().len(), 1);
+        let sources = read_sources("deepseek");
+        assert_eq!(
+            load_provider_sessions("deepseek", &project, &sources)
+                .await
+                .unwrap()
+                .len(),
+            3
+        );
+        assert!(!load_provider_messages("deepseek", &s1, &sources)
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
+    // -- openhands ------------------------------------------------------------------
+
+    fn openhands_session(texts: &[&str]) -> String {
+        texts
+            .iter()
+            .enumerate()
+            .map(|(i, text)| {
+                serde_json::json!({
+                    "source": "user", "action": "message", "id": i + 1,
+                    "timestamp": "2026-09-01T00:00:00Z",
+                    "args": {"content": text},
+                })
+                .to_string()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn openhands_archive_conformance() {
+        let sandbox = crate::test_utils::SandboxHome::new();
+        let _env = ClearEnvGuard::clear(PROVIDER_ENVS);
+        let sessions = sandbox.path().join(".openhands/sessions");
+        let marker = "conformance-marker-openhands";
+        write_file(
+            &sessions.join("abc123/events/1.json"),
+            openhands_session(&[&format!("hello {marker}")]).as_bytes(),
+        );
+        write_file(
+            &sessions.join("def456/events/1.json"),
+            openhands_session(&["second"]).as_bytes(),
+        );
+
+        let projects = scan_provider("openhands").await.unwrap();
+        assert_eq!(projects.len(), 1, "openhands: {projects:?}");
+        assert_eq!(projects[0].path, "openhands://__workspace__");
+        let project = projects[0].path.clone();
+
+        let sources = read_sources("openhands");
+        let loaded = load_provider_sessions("openhands", &project, &sources)
+            .await
+            .unwrap();
+        assert_eq!(loaded.len(), 2);
+        assert!(message_text(
+            &load_provider_messages("openhands", "openhands://abc123", &sources)
+                .await
+                .unwrap()
+        )
+        .contains(marker));
+        assert!(!search_provider("openhands", marker, 10, &sources)
+            .await
+            .unwrap()
+            .is_empty());
+
+        std::fs::remove_dir_all(sessions.join("abc123")).unwrap();
+        write_file(
+            &sessions.join("def456/events/2.json"),
+            openhands_session(&["more"]).as_bytes(),
+        );
+        write_file(
+            &sessions.join("ghi789/events/1.json"),
+            openhands_session(&["third"]).as_bytes(),
+        );
+        let projects_after = scan_provider("openhands").await.unwrap();
+        assert_eq!(projects_after.len(), 1);
+        let after = load_provider_sessions(
+            "openhands",
+            &projects_after[0].path,
+            &read_sources("openhands"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(after.len(), 3, "abc123 preserved + def456 + ghi789");
+
+        std::fs::remove_dir_all(sandbox.path().join(".openhands")).unwrap();
+        assert_eq!(scan_provider("openhands").await.unwrap().len(), 1);
+        let sources = read_sources("openhands");
+        assert_eq!(
+            load_provider_sessions("openhands", &project, &sources)
+                .await
+                .unwrap()
+                .len(),
+            3
+        );
+        assert!(message_text(
+            &load_provider_messages("openhands", "openhands://abc123", &sources)
+                .await
+                .unwrap()
+        )
+        .contains(marker));
+    }
+
+    // -- aider ------------------------------------------------------------------
+
+    fn aider_history(texts: &[&str]) -> String {
+        texts
+            .iter()
+            .enumerate()
+            .map(|(i, text)| {
+                format!(
+                    "# aider chat started at 2026-09-0{} 00:00:0{}\n\n#### prompt {}\n\n{}\n",
+                    i + 1,
+                    i,
+                    i,
+                    text
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn aider_archive_conformance() {
+        let sandbox = crate::test_utils::SandboxHome::new();
+        let _env = ClearEnvGuard::clear(PROVIDER_ENVS);
+        let home = sandbox.path().to_path_buf();
+        let marker = "conformance-marker-aider";
+        // Aider discovers ~/client (depth 2) and ~ itself (depth 0).
+        write_file(
+            &home.join("client/projA/.aider.chat.history.md"),
+            aider_history(&[&format!("hello {marker}")]).as_bytes(),
+        );
+        write_file(
+            &home.join("client/projB/.aider.chat.history.md"),
+            aider_history(&["second"]).as_bytes(),
+        );
+
+        let projects = scan_provider("aider").await.unwrap();
+        assert_eq!(projects.len(), 2, "aider: {projects:?}");
+        let proj_a = projects
+            .iter()
+            .find(|p| p.name == "projA")
+            .expect("projA")
+            .path
+            .clone();
+
+        let sources = read_sources("aider");
+        let sessions = load_provider_sessions("aider", &proj_a, &sources)
+            .await
+            .unwrap();
+        assert_eq!(sessions.len(), 1);
+        let s1 = sessions[0].session_id.clone();
+        assert!(message_text(
+            &load_provider_messages("aider", &s1, &sources)
+                .await
+                .unwrap()
+        )
+        .contains(marker));
+        assert!(!search_provider("aider", marker, 10, &sources)
+            .await
+            .unwrap()
+            .is_empty());
+
+        std::fs::remove_file(home.join("client/projA/.aider.chat.history.md")).unwrap();
+        write_file(
+            &home.join("client/projB/.aider.chat.history.md"),
+            aider_history(&["second", &format!("more {marker}")]).as_bytes(),
+        );
+        write_file(
+            &home.join("client/projC/.aider.chat.history.md"),
+            aider_history(&["third"]).as_bytes(),
+        );
+        let projects_after = scan_provider("aider").await.unwrap();
+        assert_eq!(projects_after.len(), 3);
+        let sessions_b = load_provider_sessions(
+            "aider",
+            &projects_after
+                .iter()
+                .find(|p| p.name == "projB")
+                .expect("projB")
+                .path,
+            &read_sources("aider"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(sessions_b.len(), 2, "extended history splits sessions");
+        assert_eq!(
+            load_provider_sessions("aider", &proj_a, &read_sources("aider"))
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+
+        // Removing ~/client entirely still leaves projA + projB + projC browsable.
+        std::fs::remove_dir_all(home.join("client")).unwrap();
+        assert_eq!(scan_provider("aider").await.unwrap().len(), 3);
+        let sources = read_sources("aider");
+        assert!(message_text(
+            &load_provider_messages("aider", &s1, &sources)
+                .await
+                .unwrap()
+        )
+        .contains(marker));
+    }
+
+    // -- codebuddy ------------------------------------------------------------------
+
+    fn codebuddy_session(sid: &str, texts: &[&str]) -> String {
+        texts
+            .iter()
+            .map(|text| {
+                serde_json::json!({
+                    "type": "message", "sessionId": sid, "role": "user",
+                    "timestamp": "2026-09-01T00:00:00Z",
+                    "content": [{"type": "text", "text": text}],
+                })
+                .to_string()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn codebuddy_archive_conformance() {
+        let sandbox = crate::test_utils::SandboxHome::new();
+        let _env = ClearEnvGuard::clear(PROVIDER_ENVS);
+        let base = sandbox.path().join(".codebuddy/projects");
+        let marker = "conformance-marker-codebuddy";
+        write_file(
+            &base.join("projA/cbs1.jsonl"),
+            codebuddy_session("cbs1", &[&format!("hello {marker}")]).as_bytes(),
+        );
+        write_file(
+            &base.join("projB/cbs2.jsonl"),
+            codebuddy_session("cbs2", &["second"]).as_bytes(),
+        );
+
+        let projects = scan_provider("codebuddy").await.unwrap();
+        assert_eq!(projects.len(), 2, "codebuddy: {projects:?}");
+        let proj_a = projects
+            .iter()
+            .find(|p| p.actual_path.contains("projA") || p.name == "projA")
+            .map(|p| p.path.clone())
+            .unwrap_or_else(|| projects[0].path.clone());
+
+        let sources = read_sources("codebuddy");
+        let sessions = load_provider_sessions("codebuddy", &proj_a, &sources)
+            .await
+            .unwrap();
+        assert!(!sessions.is_empty());
+        let s1 = sessions[0].file_path.clone();
+        assert!(message_text(
+            &load_provider_messages("codebuddy", &s1, &sources)
+                .await
+                .unwrap()
+        )
+        .contains(marker));
+        assert!(!search_provider("codebuddy", marker, 10, &sources)
+            .await
+            .unwrap()
+            .is_empty());
+
+        std::fs::remove_file(base.join("projA/cbs1.jsonl")).unwrap();
+        write_file(
+            &base.join("projB/cbs2.jsonl"),
+            codebuddy_session("cbs2", &["second", &format!("more {marker}")]).as_bytes(),
+        );
+        write_file(
+            &base.join("projB/cbs3.jsonl"),
+            codebuddy_session("cbs3", &["third"]).as_bytes(),
+        );
+        let _ = scan_provider("codebuddy").await.unwrap();
+
+        std::fs::remove_dir_all(sandbox.path().join(".codebuddy")).unwrap();
+        let projects_gone = scan_provider("codebuddy").await.unwrap();
+        assert_eq!(projects_gone.len(), 2);
+        let sources = read_sources("codebuddy");
+        assert!(message_text(
+            &load_provider_messages("codebuddy", &s1, &sources)
+                .await
+                .unwrap()
+        )
+        .contains(marker));
+    }
+
+    // -- cursor-agent ------------------------------------------------------------------
+
+    fn cursor_agent_transcript(texts: &[&str]) -> String {
+        texts
+            .iter()
+            .map(|text| {
+                serde_json::json!({"role": "user", "message": {"content": [{"type": "text", "text": text}]}})
+                    .to_string()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn cursor_agent_archive_conformance() {
+        let sandbox = crate::test_utils::SandboxHome::new();
+        let _env = ClearEnvGuard::clear(PROVIDER_ENVS);
+        let base = sandbox.path().join(".cursor/projects");
+        let marker = "conformance-marker-cursor-agent";
+        let uuid_a = "11111111-1111-4111-8111-111111111111";
+        let uuid_b = "22222222-2222-4222-8222-222222222222";
+        write_file(
+            &base.join(format!("projA/agent-transcripts/{uuid_a}/{uuid_a}.jsonl")),
+            cursor_agent_transcript(&[&format!("hello {marker}")]).as_bytes(),
+        );
+        write_file(
+            &base.join(format!("projB/agent-transcripts/{uuid_b}/{uuid_b}.jsonl")),
+            cursor_agent_transcript(&["second"]).as_bytes(),
+        );
+
+        let projects = scan_provider("cursor-agent").await.unwrap();
+        assert_eq!(projects.len(), 2, "cursor-agent: {projects:?}");
+        let proj_a = projects
+            .iter()
+            .find(|p| p.name == "projA")
+            .expect("projA")
+            .path
+            .clone();
+
+        let sources = read_sources("cursor-agent");
+        let sessions = load_provider_sessions("cursor-agent", &proj_a, &sources)
+            .await
+            .unwrap();
+        assert_eq!(sessions.len(), 1);
+        let s1 = sessions[0].file_path.clone();
+        assert!(message_text(
+            &load_provider_messages("cursor-agent", &s1, &sources)
+                .await
+                .unwrap()
+        )
+        .contains(marker));
+        assert!(!search_provider("cursor-agent", marker, 10, &sources)
+            .await
+            .unwrap()
+            .is_empty());
+
+        std::fs::remove_dir_all(base.join(format!("projA/agent-transcripts/{uuid_a}"))).unwrap();
+        write_file(
+            &base.join(format!("projB/agent-transcripts/{uuid_b}/{uuid_b}.jsonl")),
+            cursor_agent_transcript(&["second", &format!("more {marker}")]).as_bytes(),
+        );
+        let uuid_c = "33333333-3333-4333-8333-333333333333";
+        write_file(
+            &base.join(format!("projB/agent-transcripts/{uuid_c}/{uuid_c}.jsonl")),
+            cursor_agent_transcript(&["third"]).as_bytes(),
+        );
+        let projects_after = scan_provider("cursor-agent").await.unwrap();
+        assert_eq!(projects_after.len(), 2);
+        let sessions_b = load_provider_sessions(
+            "cursor-agent",
+            &projects_after
+                .iter()
+                .find(|p| p.name == "projB")
+                .expect("projB")
+                .path,
+            &read_sources("cursor-agent"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(sessions_b.len(), 2);
+
+        std::fs::remove_dir_all(sandbox.path().join(".cursor")).unwrap();
+        assert_eq!(scan_provider("cursor-agent").await.unwrap().len(), 2);
+        let sources = read_sources("cursor-agent");
+        assert!(message_text(
+            &load_provider_messages("cursor-agent", &s1, &sources)
+                .await
+                .unwrap()
+        )
+        .contains(marker));
     }
 
     // -- grok ---------------------------------------------------------------

@@ -192,24 +192,17 @@ pub async fn scan_all_projects(
     type SyncScanner = fn() -> Result<Vec<ClaudeProject>, String>;
     let sync_scanners: &[(&str, SyncScanner)] = &[
         ("codex", providers::codex::scan_projects),
-        ("gemini", providers::gemini::scan_projects),
         ("goose", providers::goose::scan_projects),
         ("forgecode", providers::forgecode::scan_projects),
         ("opencode", providers::opencode::scan_projects),
         ("openinterpreter", providers::openinterpreter::scan_projects),
-        ("qwen", providers::qwen::scan_projects),
         ("zed", providers::zed::scan_projects),
-        ("openhands", providers::openhands::scan_projects),
         ("trae", providers::trae::scan_projects),
         ("cline", providers::cline::scan_projects),
         ("cursor", providers::cursor::scan_projects),
         ("crush", providers::crush::scan_projects),
-        ("cursor-agent", providers::cursor_agent::scan_projects),
-        ("aider", providers::aider::scan_projects),
         ("amazonq", providers::amazon_q::scan_projects),
         ("antigravity", providers::antigravity::scan_projects),
-        ("deepseek", providers::deepseek::scan_projects),
-        ("codebuddy", providers::codebuddy::scan_projects),
         ("kiro", providers::kiro::scan_projects),
         ("llm", providers::llm::scan_projects),
         ("copilot", providers::copilot::scan_projects),
@@ -460,25 +453,18 @@ pub async fn load_provider_sessions(
         // arms were removed. Each new migration deletes its arm here.
         "codex" => providers::codex::load_sessions(&project_path, exclude)?,
         "copilot" => providers::copilot::load_sessions(&project_path, exclude)?,
-        "gemini" => providers::gemini::load_sessions(&project_path, exclude)?,
         "goose" => providers::goose::load_sessions(&project_path, exclude)?,
         "forgecode" => providers::forgecode::load_sessions(&project_path, exclude)?,
         "opencode" => providers::opencode::load_sessions(&project_path, exclude)?,
         "openinterpreter" => providers::openinterpreter::load_sessions(&project_path, exclude)?,
-        "qwen" => providers::qwen::load_sessions(&project_path, exclude)?,
         "cline" => providers::cline::load_sessions(&project_path, exclude)?,
         "crush" => providers::crush::load_sessions(&project_path, exclude)?,
         "cursor" => providers::cursor::load_sessions(&project_path, exclude)?,
-        "cursor-agent" => providers::cursor_agent::load_sessions(&project_path, exclude)?,
-        "aider" => providers::aider::load_sessions(&project_path, exclude)?,
         "amazonq" => providers::amazon_q::load_sessions(&project_path, exclude)?,
         "antigravity" => providers::antigravity::load_sessions(&project_path, exclude)?,
-        "deepseek" => providers::deepseek::load_sessions(&project_path, exclude)?,
-        "codebuddy" => providers::codebuddy::load_sessions(&project_path, exclude)?,
         "kiro" => providers::kiro::load_sessions(&project_path, exclude)?,
         "llm" => providers::llm::load_sessions(&project_path, exclude)?,
         "zed" => providers::zed::load_sessions(&project_path, exclude)?,
-        "openhands" => providers::openhands::load_sessions(&project_path, exclude)?,
         "trae" => providers::trae::load_sessions(&project_path, exclude)?,
         _ => return Err(format!("Unknown provider: {provider}")),
     };
@@ -505,6 +491,13 @@ fn legacy_load_sessions(
         "pi" => providers::pi::load_sessions(project_path, exclude),
         "ompi" => providers::ompi::load_sessions(project_path, exclude),
         "vibe" => providers::vibe::load_sessions(project_path, exclude),
+        "gemini" => providers::gemini::load_sessions(project_path, exclude),
+        "qwen" => providers::qwen::load_sessions(project_path, exclude),
+        "deepseek" => providers::deepseek::load_sessions(project_path, exclude),
+        "openhands" => providers::openhands::load_sessions(project_path, exclude),
+        "aider" => providers::aider::load_sessions(project_path, exclude),
+        "codebuddy" => providers::codebuddy::load_sessions(project_path, exclude),
+        "cursor-agent" => providers::cursor_agent::load_sessions(project_path, exclude),
         _ => Err(format!("Unknown provider: {provider}")),
     }
 }
@@ -519,6 +512,13 @@ fn legacy_search(provider: &str, query: &str, limit: usize) -> Result<Vec<Claude
         "pi" => providers::pi::search(query, limit),
         "ompi" => providers::ompi::search(query, limit),
         "vibe" => providers::vibe::search(query, limit),
+        "gemini" => providers::gemini::search(query, limit),
+        "qwen" => providers::qwen::search(query, limit),
+        "deepseek" => Err("DeepSeek has no message search".to_string()),
+        "openhands" => providers::openhands::search(query, limit),
+        "aider" => providers::aider::search(query, limit),
+        "codebuddy" => providers::codebuddy::search(query, limit),
+        "cursor-agent" => providers::cursor_agent::search(query, limit),
         _ => Err(format!("Unknown provider: {provider}")),
     }
 }
@@ -997,16 +997,6 @@ pub async fn search_all_providers(
         }
     }
 
-    // Gemini
-    if providers_to_search.iter().any(|p| p == "gemini") {
-        match providers::gemini::search(&query, max_results) {
-            Ok(results) => all_results.extend(results),
-            Err(e) => {
-                log::warn!("Gemini search failed: {e}");
-            }
-        }
-    }
-
     // Goose
     if providers_to_search.iter().any(|p| p == "goose") {
         match providers::goose::search(&query, max_results) {
@@ -1047,16 +1037,6 @@ pub async fn search_all_providers(
         }
     }
 
-    // Qwen Code
-    if providers_to_search.iter().any(|p| p == "qwen") {
-        match providers::qwen::search(&query, max_results) {
-            Ok(results) => all_results.extend(results),
-            Err(e) => {
-                log::warn!("Qwen search failed: {e}");
-            }
-        }
-    }
-
     // Cline
     if providers_to_search.iter().any(|p| p == "cline") {
         match providers::cline::search(&query, max_results) {
@@ -1087,26 +1067,6 @@ pub async fn search_all_providers(
         }
     }
 
-    // Cursor Agent
-    if providers_to_search.iter().any(|p| p == "cursor-agent") {
-        match providers::cursor_agent::search(&query, max_results) {
-            Ok(results) => all_results.extend(results),
-            Err(e) => {
-                log::warn!("Cursor Agent search failed: {e}");
-            }
-        }
-    }
-
-    // Aider
-    if providers_to_search.iter().any(|p| p == "aider") {
-        match providers::aider::search(&query, max_results) {
-            Ok(results) => all_results.extend(results),
-            Err(e) => {
-                log::warn!("Aider search failed: {e}");
-            }
-        }
-    }
-
     // Amazon Q Developer CLI
     if providers_to_search.iter().any(|p| p == "amazonq") {
         match providers::amazon_q::search(&query, max_results) {
@@ -1127,15 +1087,6 @@ pub async fn search_all_providers(
         }
     }
 
-    // CodeBuddy
-    if providers_to_search.iter().any(|p| p == "codebuddy") {
-        match providers::codebuddy::search(&query, max_results) {
-            Ok(results) => all_results.extend(results),
-            Err(e) => {
-                log::warn!("CodeBuddy search failed: {e}");
-            }
-        }
-    }
     // Kiro
     if providers_to_search.iter().any(|p| p == "kiro") {
         match providers::kiro::search(&query, max_results) {
@@ -1162,16 +1113,6 @@ pub async fn search_all_providers(
             Ok(results) => all_results.extend(results),
             Err(e) => {
                 log::warn!("Zed search failed: {e}");
-            }
-        }
-    }
-
-    // OpenHands
-    if providers_to_search.iter().any(|p| p == "openhands") {
-        match providers::openhands::search(&query, max_results) {
-            Ok(results) => all_results.extend(results),
-            Err(e) => {
-                log::warn!("OpenHands search failed: {e}");
             }
         }
     }

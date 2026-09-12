@@ -42,11 +42,16 @@ pub fn detect() -> Option<ProviderInfo> {
 
 /// Scan for all Aider projects
 pub fn scan_projects() -> Result<Vec<ClaudeProject>, String> {
+    scan_projects_in_dirs(&get_search_dirs())
+}
+
+/// [`scan_projects`] over explicit search roots (snapshot or live).
+pub fn scan_projects_in_dirs(dirs: &[(PathBuf, usize)]) -> Result<Vec<ClaudeProject>, String> {
     let mut projects = Vec::new();
     let mut seen_paths = std::collections::HashSet::new();
 
-    for (search_dir, max_depth) in get_search_dirs() {
-        if let Some(files) = find_history_files(&search_dir, 100, max_depth) {
+    for (search_dir, max_depth) in dirs {
+        if let Some(files) = find_history_files(search_dir, 100, *max_depth) {
             for history_path in files {
                 // Deduplicate across overlapping search directories
                 let canonical = history_path
@@ -193,11 +198,20 @@ pub fn load_messages(session_path: &str) -> Result<Vec<ClaudeMessage>, String> {
 
 /// Search across all Aider sessions
 pub fn search(query: &str, limit: usize) -> Result<Vec<ClaudeMessage>, String> {
+    search_in_dirs(&get_search_dirs(), query, limit)
+}
+
+/// [`search`] over explicit search roots (snapshot or live).
+pub fn search_in_dirs(
+    dirs: &[(PathBuf, usize)],
+    query: &str,
+    limit: usize,
+) -> Result<Vec<ClaudeMessage>, String> {
     let query_lower = query.to_lowercase();
     let mut results = Vec::new();
 
-    for (search_dir, max_depth) in get_search_dirs() {
-        if let Some(files) = find_history_files(&search_dir, 100, max_depth) {
+    for (search_dir, max_depth) in dirs {
+        if let Some(files) = find_history_files(search_dir, 100, *max_depth) {
             for history_path in files {
                 let content = match fs::read_to_string(&history_path) {
                     Ok(c) => c,
@@ -527,6 +541,112 @@ fn parse_messages(content: &str, session_id: &str, base_timestamp: &str) -> Vec<
     }
 
     messages
+}
+
+// ============================================================================
+// Archive glue. Each existing search dir is an independent source (role
+// "search"); the home root keeps its depth-0 bound, subdirs depth 2 —
+// mirroring `get_search_dirs` exactly.
+// ============================================================================
+
+use crate::storage::registry::DiscoveredSource as ArchiveDiscoveredSource;
+use crate::storage::{SnapshotInfo as ArchiveSnapshotInfo, Source as ArchiveSource};
+
+/// Existing Aider search dirs on this machine, if any. The home root keeps
+/// its depth-0 bound (top-level history file only); subdirs keep depth 2 —
+/// mirroring `get_search_dirs` exactly so capture never balloons.
+pub(crate) fn archive_discover() -> Vec<ArchiveDiscoveredSource> {
+    let machine = crate::storage::registry::discovery_machine_id();
+    let home = crate::utils::home_dir();
+    get_search_dirs()
+        .into_iter()
+        .map(|(dir, _depth)| {
+            let mut found =
+                ArchiveDiscoveredSource::local(crate::storage::ROLE_PRIMARY, dir.clone(), &machine);
+            let is_home = home.as_ref().is_some_and(|home| *home == dir);
+            if is_home {
+                found.includes = vec![".aider.chat.history.md".to_string()];
+                found.max_depth = Some(0);
+            } else {
+                found.max_depth = Some(2);
+            }
+            found
+        })
+        .collect()
+}
+
+/// Depth bound matching `get_search_dirs`: home itself is depth 0, every
+/// other search dir depth 2.
+fn archive_depth_for(source: &ArchiveSource) -> usize {
+    let is_home = crate::utils::home_dir().is_some_and(|home| {
+        source
+            .original_root
+            .as_deref()
+            .is_some_and(|root| Path::new(root) == home)
+    });
+    if is_home {
+        0
+    } else {
+        2
+    }
+}
+
+/// Scan one search root (snapshot data root at runtime).
+pub(crate) fn archive_scan(
+    source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+) -> Result<Vec<ClaudeProject>, String> {
+    let depth = archive_depth_for(source);
+    scan_projects_in_dirs(std::slice::from_ref(&(snapshot.data_path.clone(), depth)))
+}
+
+/// Sessions for a stable project, read from the snapshot (loaders take plain
+/// absolute paths and need no base override).
+pub(crate) fn archive_load_sessions(
+    source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+    stable_project: &str,
+) -> Result<Vec<ClaudeSession>, String> {
+    let mapped =
+        crate::storage::registry::map_absolute_to_snapshot(source, snapshot, stable_project)
+            .ok_or_else(|| format!("No preserved snapshot covers {stable_project}"))?;
+    load_sessions(&mapped, false)
+}
+
+/// Messages for a stable session, read from the snapshot. Session IDs carry
+/// a `#index` fragment naming the split within the history file; only the
+/// file part maps into snapshot space.
+pub(crate) fn archive_load_messages(
+    source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+    stable_session: &str,
+) -> Result<Vec<ClaudeMessage>, String> {
+    let (file_part, fragment) = match stable_session.rsplit_once('#') {
+        Some((file, idx)) if idx.chars().all(|c| c.is_ascii_digit()) => (file, Some(idx)),
+        _ => (stable_session, None),
+    };
+    let mapped = crate::storage::registry::map_absolute_to_snapshot(source, snapshot, file_part)
+        .ok_or_else(|| format!("No preserved snapshot covers {stable_session}"))?;
+    let mapped = match fragment {
+        Some(idx) => format!("{mapped}#{idx}"),
+        None => mapped,
+    };
+    load_messages(&mapped)
+}
+
+/// Search confined to one snapshot.
+pub(crate) fn archive_search(
+    source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<ClaudeMessage>, String> {
+    let depth = archive_depth_for(source);
+    search_in_dirs(
+        std::slice::from_ref(&(snapshot.data_path.clone(), depth)),
+        query,
+        limit,
+    )
 }
 
 fn parse_session_path(session_path: &str) -> Result<(String, usize), String> {
