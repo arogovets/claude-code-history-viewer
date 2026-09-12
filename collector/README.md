@@ -61,3 +61,27 @@ Run collector tests with `python3 -m unittest discover -s collector -v`.
 Restart CCHV after registering a new source so its watcher includes that source.
 Subsequent changes under an existing current mirror are watched automatically.
 The default mirror root is `~/.claude-history-viewer/mirrors`.
+
+## Automatic collection on macOS
+
+After initializing Restic and testing the configuration, install a user LaunchAgent:
+
+```sh
+python3 collector/install_launchagent.py \
+  --config ~/.config/cchv-collector/sources.json \
+  --repository ~/Backups/cchv-history-restic \
+  --password-file ~/.config/cchv-collector/restic-password
+```
+
+The installer pins absolute collector/configuration paths and dependency search
+paths. Keep this checkout available. No password contents are stored in the plist.
+The job starts at login and every 60 seconds (`--interval` changes this).
+Launchd does not run overlapping instances of the same job. A long collection
+finishes before another starts; failed jobs are retried on subsequent intervals.
+Sleep, offline hosts, failed backups, or slow transfers can delay freshness; the
+last successful mirror remains readable. No source-host agent is installed.
+
+Check `launchctl print "gui/$(id -u)/com.cchv.collector"` and the timestamped
+success/failure output in `~/Library/Logs/cchv-collector/`. To stop automatic
+collection, run `launchctl bootout "gui/$(id -u)/com.cchv.collector"` and remove
+`~/Library/LaunchAgents/com.cchv.collector.plist`. This does not remove any history.

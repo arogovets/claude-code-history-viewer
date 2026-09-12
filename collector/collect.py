@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Pull history into local mirrors; Restic owns retained versions, not CCHV."""
 import argparse
+from datetime import datetime, timezone
 import fcntl
 import json
 import os
@@ -132,10 +133,12 @@ def main():
         if not source.get('enabled', True):
             continue
         try:
+            print(f"{datetime.now(timezone.utc).isoformat()} {source['id']}: collection started", flush=True)
             collect_source(root, source)
+            print(f"{datetime.now(timezone.utc).isoformat()} {source['id']}: mirror updated successfully", flush=True)
         except (OSError, ValueError, subprocess.CalledProcessError) as error:
             failures.append(source['id'])
-            print(f"{source['id']}: {error}", file=sys.stderr)
+            print(f"{datetime.now(timezone.utc).isoformat()} {source['id']}: collection failed: {error}", file=sys.stderr, flush=True)
     return bool(failures)
 
 
