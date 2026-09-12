@@ -256,6 +256,26 @@ fn spec_table() -> Vec<ProviderArchiveSpec> {
             locate: locate_by_subpath_or_single,
             rewrite_outputs: true,
         },
+        ProviderArchiveSpec {
+            provider: "codex",
+            discover: providers::codex::archive_discover,
+            scan: providers::codex::archive_scan,
+            load_sessions: providers::codex::archive_load_sessions,
+            load_messages: providers::codex::archive_load_messages,
+            search: Some(providers::codex::archive_search),
+            locate: locate_by_subpath_or_single,
+            rewrite_outputs: true,
+        },
+        ProviderArchiveSpec {
+            provider: "openinterpreter",
+            discover: providers::openinterpreter::archive_discover,
+            scan: providers::openinterpreter::archive_scan,
+            load_sessions: providers::openinterpreter::archive_load_sessions,
+            load_messages: providers::openinterpreter::archive_load_messages,
+            search: Some(providers::openinterpreter::archive_search),
+            locate: locate_by_subpath_or_single,
+            rewrite_outputs: true,
+        },
     ]
 }
 
@@ -1594,6 +1614,207 @@ mod conformance_tests {
                 .unwrap()
         )
         .contains(marker));
+    }
+
+    // -- codex (rollouts + state db) ---------------------------------------------
+
+    fn codex_rollout(cwd: &str, sid: &str, texts: &[&str]) -> String {
+        let mut lines = vec![
+            serde_json::json!({"type": "session_meta", "payload": {"id": sid, "cwd": cwd}})
+                .to_string(),
+        ];
+        for text in texts {
+            lines.push(
+                serde_json::json!({
+                    "timestamp": "2026-09-01T00:00:00Z", "type": "response_item",
+                    "payload": {
+                        "type": "message", "role": "user", "id": format!("{sid}-m"),
+                        "created_at": "2026-09-01T00:00:00Z",
+                        "content": [{"type": "input_text", "text": text}],
+                    },
+                })
+                .to_string(),
+            );
+        }
+        lines.join("\n") + "\n"
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn codex_archive_conformance() {
+        let sandbox = crate::test_utils::SandboxHome::new();
+        let _env = ClearEnvGuard::clear(PROVIDER_ENVS);
+        let base = sandbox.path().join(".codex");
+        let marker = "conformance-marker-codex";
+        let r1 = "rollout-2026-09-01-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.jsonl";
+        let r2 = "rollout-2026-09-01-bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb.jsonl";
+        write_file(
+            &base.join("sessions").join(r1),
+            codex_rollout("/w/cxproj", "cxs1", &[&format!("hello {marker}")]).as_bytes(),
+        );
+        write_file(
+            &base.join("sessions").join(r2),
+            codex_rollout("/w/cxproj", "cxs2", &["second"]).as_bytes(),
+        );
+        // A native title index exercises the snapshotted state db path.
+        {
+            let conn = rusqlite::Connection::open(base.join("state_5.sqlite")).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE threads(id TEXT PRIMARY KEY, title TEXT, first_user_message TEXT);",
+            )
+            .unwrap();
+        }
+
+        let projects = scan_provider("codex").await.unwrap();
+        assert_eq!(projects.len(), 1, "codex: {projects:?}");
+        assert_eq!(projects[0].path, "codex:///w/cxproj");
+        let project = projects[0].path.clone();
+        // The state db rode along into the snapshot.
+        let sources = read_sources("codex");
+        assert_eq!(sources.len(), 1);
+        assert!(sources[0]
+            .snapshot
+            .data_path
+            .join("state_5.sqlite")
+            .is_file());
+
+        let sessions = load_provider_sessions("codex", &project, &sources)
+            .await
+            .unwrap();
+        assert_eq!(sessions.len(), 2);
+        let s1 = sessions
+            .iter()
+            .find(|s| s.actual_session_id == "cxs1")
+            .map(|s| s.file_path.clone())
+            .unwrap_or_else(|| sessions[0].file_path.clone());
+        assert!(message_text(
+            &load_provider_messages("codex", &s1, &sources)
+                .await
+                .unwrap()
+        )
+        .contains(marker));
+        assert!(!search_provider("codex", marker, 10, &sources)
+            .await
+            .unwrap()
+            .is_empty());
+
+        // Disappearance: delete r1, extend r2, add r3.
+        std::fs::remove_file(base.join("sessions").join(r1)).unwrap();
+        write_file(
+            &base.join("sessions").join(r2),
+            codex_rollout("/w/cxproj", "cxs2", &["second", &format!("more {marker}")]).as_bytes(),
+        );
+        let r3 = "rollout-2026-09-01-cccccccc-cccc-4ccc-8ccc-cccccccccccc.jsonl";
+        write_file(
+            &base.join("sessions").join(r3),
+            codex_rollout("/w/cxproj", "cxs3", &["third"]).as_bytes(),
+        );
+        let projects_after = scan_provider("codex").await.unwrap();
+        assert_eq!(projects_after.len(), 1);
+        let sources2 = read_sources("codex");
+        eprintln!(
+            "DBG snapshots: {:?}",
+            sources2
+                .iter()
+                .map(|s| (
+                    &s.source.id,
+                    &s.snapshot.snapshot_id,
+                    s.snapshot
+                        .manifest
+                        .files
+                        .iter()
+                        .map(|f| (f.path.clone(), f.present))
+                        .collect::<Vec<_>>()
+                ))
+                .collect::<Vec<_>>()
+        );
+        let sessions_after = load_provider_sessions("codex", &projects_after[0].path, &sources2)
+            .await
+            .unwrap();
+        eprintln!(
+            "DBG sessions: {:?}",
+            sessions_after
+                .iter()
+                .map(|s| s.actual_session_id.clone())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(sessions_after.len(), 3, "r1 preserved + r2' + r3");
+
+        std::fs::remove_dir_all(&base).unwrap();
+        assert_eq!(scan_provider("codex").await.unwrap().len(), 1);
+        let sources = read_sources("codex");
+        assert_eq!(
+            load_provider_sessions("codex", &project, &sources)
+                .await
+                .unwrap()
+                .len(),
+            3
+        );
+        assert!(message_text(
+            &load_provider_messages("codex", &s1, &sources)
+                .await
+                .unwrap()
+        )
+        .contains(marker));
+    }
+
+    // -- openinterpreter ---------------------------------------------------------------
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn openinterpreter_archive_conformance() {
+        let sandbox = crate::test_utils::SandboxHome::new();
+        let _env = ClearEnvGuard::clear(PROVIDER_ENVS);
+        let base = sandbox.path().join(".openinterpreter");
+        let marker = "conformance-marker-openinterpreter";
+        let r1 = "rollout-2026-09-01-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.jsonl";
+        let r2 = "rollout-2026-09-01-bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb.jsonl";
+        struct HomeGuard;
+        impl Drop for HomeGuard {
+            fn drop(&mut self) {
+                std::env::remove_var("INTERPRETER_HOME");
+            }
+        }
+        std::env::set_var("INTERPRETER_HOME", &base);
+        let home_guard = HomeGuard;
+        write_file(
+            &base.join("sessions").join(r1),
+            codex_rollout("/w/oiproj", "ois1", &[&format!("hello {marker}")]).as_bytes(),
+        );
+        write_file(
+            &base.join("sessions").join(r2),
+            codex_rollout("/w/oiproj", "ois2", &["second"]).as_bytes(),
+        );
+
+        let projects = scan_provider("openinterpreter").await.unwrap();
+        drop(home_guard);
+        assert_eq!(projects.len(), 1, "openinterpreter: {projects:?}");
+        assert_eq!(projects[0].path, "openinterpreter:///w/oiproj");
+        let project = projects[0].path.clone();
+
+        let sources = read_sources("openinterpreter");
+        let sessions = load_provider_sessions("openinterpreter", &project, &sources)
+            .await
+            .unwrap();
+        assert_eq!(sessions.len(), 2);
+        let s1 = sessions[0].file_path.clone();
+        assert!(message_text(
+            &load_provider_messages("openinterpreter", &s1, &sources)
+                .await
+                .unwrap()
+        )
+        .contains(marker));
+
+        std::fs::remove_dir_all(&base).unwrap();
+        assert_eq!(scan_provider("openinterpreter").await.unwrap().len(), 1);
+        let sources = read_sources("openinterpreter");
+        assert_eq!(
+            load_provider_sessions("openinterpreter", &project, &sources)
+                .await
+                .unwrap()
+                .len(),
+            2
+        );
     }
 
     // -- aider ------------------------------------------------------------------

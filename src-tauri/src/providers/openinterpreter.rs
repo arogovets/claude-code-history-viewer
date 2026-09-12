@@ -59,16 +59,21 @@ fn session_dirs() -> Vec<PathBuf> {
     let Some(base) = home_dir() else {
         return Vec::new();
     };
+    session_dirs_in(&base)
+}
+
+/// [`session_dirs`] under an explicit home (snapshot or live).
+fn session_dirs_in(base: &Path) -> Vec<PathBuf> {
     [base.join("sessions"), base.join("archived_sessions")]
         .into_iter()
         .filter(|p| p.is_dir())
         .collect()
 }
 
-/// All `rollout-*.jsonl` files under the OI session roots.
-fn rollout_files() -> Vec<PathBuf> {
+/// [`rollout_files`] under an explicit home (snapshot or live).
+fn rollout_files_in(base: &Path) -> Vec<PathBuf> {
     let mut files = Vec::new();
-    for dir in session_dirs() {
+    for dir in session_dirs_in(base) {
         for entry in WalkDir::new(dir)
             .min_depth(1)
             .into_iter()
@@ -84,6 +89,14 @@ fn rollout_files() -> Vec<PathBuf> {
 
 /// Scan Open Interpreter projects (rollouts grouped by `cwd`).
 pub fn scan_projects() -> Result<Vec<ClaudeProject>, String> {
+    let Some(base) = home_dir() else {
+        return Ok(vec![]);
+    };
+    scan_projects_in(&base)
+}
+
+/// [`scan_projects`] against an explicit home (snapshot or live).
+pub fn scan_projects_in(base: &Path) -> Result<Vec<ClaudeProject>, String> {
     struct Agg {
         session_count: usize,
         message_count: usize,
@@ -91,7 +104,7 @@ pub fn scan_projects() -> Result<Vec<ClaudeProject>, String> {
     }
     let mut by_cwd: HashMap<String, Agg> = HashMap::new();
 
-    for path in rollout_files() {
+    for path in rollout_files_in(base) {
         if let Ok(info) = codex::extract_project_scan_info(&path) {
             let cwd = info.cwd.clone().unwrap_or_else(|| "unknown".to_string());
             let e = by_cwd.entry(cwd).or_insert_with(|| Agg {
@@ -136,12 +149,25 @@ pub fn scan_projects() -> Result<Vec<ClaudeProject>, String> {
 /// Load the sessions for one Open Interpreter project (filtered by `cwd`).
 pub fn load_sessions(
     project_path: &str,
+    exclude_sidechain: bool,
+) -> Result<Vec<ClaudeSession>, String> {
+    let Some(base) = home_dir() else {
+        return Ok(vec![]);
+    };
+    load_sessions_in(&base, project_path, exclude_sidechain)
+}
+
+/// [`load_sessions`] against an explicit home (snapshot or live). Project
+/// URIs name the user's cwd, so sessions filter snapshot content by URI.
+pub fn load_sessions_in(
+    base: &Path,
+    project_path: &str,
     _exclude_sidechain: bool,
 ) -> Result<Vec<ClaudeSession>, String> {
     let target_cwd = project_path.strip_prefix(SCHEME).unwrap_or(project_path);
     let mut sessions = Vec::new();
 
-    for path in rollout_files() {
+    for path in rollout_files_in(base) {
         if let Ok(Some(cwd)) = codex::extract_session_cwd(&path) {
             if cwd != target_cwd {
                 continue;
@@ -180,11 +206,19 @@ pub fn load_sessions(
 
 /// Load all messages from one Open Interpreter rollout file.
 pub fn load_messages(session_path: &str) -> Result<Vec<ClaudeMessage>, String> {
+    let Some(base) = home_dir() else {
+        return Err(format!("Session file not found: {session_path}"));
+    };
+    load_messages_in(&base, session_path)
+}
+
+/// [`load_messages`] against an explicit home (snapshot or live).
+pub fn load_messages_in(base: &Path, session_path: &str) -> Result<Vec<ClaudeMessage>, String> {
     let path = Path::new(session_path);
     if !path.exists() {
         return Err(format!("Session file not found: {session_path}"));
     }
-    let canonical = validate_under_base(path)?;
+    let canonical = validate_under_base_in(base, path)?;
     let mut messages = codex::parse_rollout_file(&canonical)?;
     // The Codex parser tags messages "codex"; re-tag for this provider.
     for msg in &mut messages {
@@ -198,11 +232,19 @@ pub fn search(query: &str, limit: usize) -> Result<Vec<ClaudeMessage>, String> {
     if query.is_empty() || limit == 0 {
         return Ok(Vec::new());
     }
+    let Some(base) = home_dir() else {
+        return Ok(vec![]);
+    };
+    search_in(&base, query, limit)
+}
+
+/// [`search`] against an explicit home (snapshot or live).
+pub fn search_in(base: &Path, query: &str, limit: usize) -> Result<Vec<ClaudeMessage>, String> {
     let query_lower = query.to_lowercase();
     let mut results = Vec::new();
 
-    for path in rollout_files() {
-        let Ok(messages) = load_messages(&path.to_string_lossy()) else {
+    for path in rollout_files_in(base) {
+        let Ok(messages) = load_messages_in(base, &path.to_string_lossy()) else {
             continue;
         };
         for msg in messages {
@@ -219,9 +261,69 @@ pub fn search(query: &str, limit: usize) -> Result<Vec<ClaudeMessage>, String> {
     Ok(results)
 }
 
-/// Confine `session_path` to the Open Interpreter session roots and confirm it
-/// is a rollout file. Canonicalizes both sides.
-fn validate_under_base(path: &Path) -> Result<PathBuf, String> {
+// ============================================================================
+// Archive glue (snapshot-backed reads; the explicit-home seams above are
+// reused). Project URIs name the user's cwd (content filter); session paths
+// are plain rollout files mapped into the snapshot.
+// ============================================================================
+
+use crate::storage::registry::DiscoveredSource as ArchiveDiscoveredSource;
+use crate::storage::{SnapshotInfo as ArchiveSnapshotInfo, Source as ArchiveSource};
+
+/// Physical Open Interpreter home on this machine, if present.
+pub(crate) fn archive_discover() -> Vec<ArchiveDiscoveredSource> {
+    let machine = crate::storage::registry::discovery_machine_id();
+    match home_dir() {
+        Some(base) => vec![ArchiveDiscoveredSource::local(
+            crate::storage::ROLE_PRIMARY,
+            base,
+            &machine,
+        )],
+        None => Vec::new(),
+    }
+}
+
+/// Scan projects under an explicit home (snapshot data root at runtime).
+pub(crate) fn archive_scan(
+    _source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+) -> Result<Vec<ClaudeProject>, String> {
+    scan_projects_in(&snapshot.data_path)
+}
+
+/// Sessions for a stable project URI, filtered from snapshot content.
+pub(crate) fn archive_load_sessions(
+    _source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+    stable_project: &str,
+) -> Result<Vec<ClaudeSession>, String> {
+    load_sessions_in(&snapshot.data_path, stable_project, false)
+}
+
+/// Messages for a stable session file, read from the snapshot.
+pub(crate) fn archive_load_messages(
+    source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+    stable_session: &str,
+) -> Result<Vec<ClaudeMessage>, String> {
+    let mapped =
+        crate::storage::registry::map_absolute_to_snapshot(source, snapshot, stable_session)
+            .ok_or_else(|| format!("No preserved snapshot covers {stable_session}"))?;
+    load_messages_in(&snapshot.data_path, &mapped)
+}
+
+/// Search confined to one snapshot.
+pub(crate) fn archive_search(
+    _source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<ClaudeMessage>, String> {
+    search_in(&snapshot.data_path, query, limit)
+}
+
+/// [`validate_under_base`] against an explicit home (snapshot or live).
+fn validate_under_base_in(base: &Path, path: &Path) -> Result<PathBuf, String> {
     let canonical = path
         .canonicalize()
         .map_err(|e| format!("Failed to resolve session path: {e}"))?;
@@ -231,7 +333,7 @@ fn validate_under_base(path: &Path) -> Result<PathBuf, String> {
             path.display()
         ));
     }
-    let allowed: Vec<PathBuf> = session_dirs()
+    let allowed: Vec<PathBuf> = session_dirs_in(base)
         .into_iter()
         .filter_map(|d| d.canonicalize().ok())
         .collect();

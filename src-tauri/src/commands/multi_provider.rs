@@ -191,11 +191,9 @@ pub async fn scan_all_projects(
 
     type SyncScanner = fn() -> Result<Vec<ClaudeProject>, String>;
     let sync_scanners: &[(&str, SyncScanner)] = &[
-        ("codex", providers::codex::scan_projects),
         ("goose", providers::goose::scan_projects),
         ("forgecode", providers::forgecode::scan_projects),
         ("opencode", providers::opencode::scan_projects),
-        ("openinterpreter", providers::openinterpreter::scan_projects),
         ("zed", providers::zed::scan_projects),
         ("trae", providers::trae::scan_projects),
         ("cline", providers::cline::scan_projects),
@@ -448,15 +446,14 @@ pub async fn load_provider_sessions(
             }
             sessions
         }
-        // NOTE: archive-migrated providers (pi, ompi, continue, pearai, grok,
-        // kimi, vibe, …) are served by the registry branch above; their legacy
-        // arms were removed. Each new migration deletes its arm here.
-        "codex" => providers::codex::load_sessions(&project_path, exclude)?,
+        // NOTE: archive-migrated providers are served by the registry branch
+        // above; their legacy arms were removed. Each new migration deletes
+        // its arm here.
         "copilot" => providers::copilot::load_sessions(&project_path, exclude)?,
         "goose" => providers::goose::load_sessions(&project_path, exclude)?,
         "forgecode" => providers::forgecode::load_sessions(&project_path, exclude)?,
         "opencode" => providers::opencode::load_sessions(&project_path, exclude)?,
-        "openinterpreter" => providers::openinterpreter::load_sessions(&project_path, exclude)?,
+
         "cline" => providers::cline::load_sessions(&project_path, exclude)?,
         "crush" => providers::crush::load_sessions(&project_path, exclude)?,
         "cursor" => providers::cursor::load_sessions(&project_path, exclude)?,
@@ -498,6 +495,8 @@ fn legacy_load_sessions(
         "aider" => providers::aider::load_sessions(project_path, exclude),
         "codebuddy" => providers::codebuddy::load_sessions(project_path, exclude),
         "cursor-agent" => providers::cursor_agent::load_sessions(project_path, exclude),
+        "codex" => providers::codex::load_sessions(project_path, exclude),
+        "openinterpreter" => providers::openinterpreter::load_sessions(project_path, exclude),
         _ => Err(format!("Unknown provider: {provider}")),
     }
 }
@@ -519,6 +518,10 @@ fn legacy_search(provider: &str, query: &str, limit: usize) -> Result<Vec<Claude
         "aider" => providers::aider::search(query, limit),
         "codebuddy" => providers::codebuddy::search(query, limit),
         "cursor-agent" => providers::cursor_agent::search(query, limit),
+        // Codex filters are applied globally after fan-out; bootstrap passes
+        // none explicitly.
+        "codex" => providers::codex::search(query, limit, &serde_json::json!({})),
+        "openinterpreter" => providers::openinterpreter::search(query, limit),
         _ => Err(format!("Unknown provider: {provider}")),
     }
 }
@@ -967,16 +970,6 @@ pub async fn search_all_providers(
         }
     }
 
-    // Codex
-    if providers_to_search.iter().any(|p| p == "codex") {
-        match providers::codex::search(&query, max_results, &search_filters) {
-            Ok(results) => all_results.extend(results),
-            Err(e) => {
-                log::warn!("Codex search failed: {e}");
-            }
-        }
-    }
-
     // Archive-migrated providers search preserved snapshots (bootstrap
     // fallback to legacy live search only when nothing was ever preserved).
     for name in crate::storage::registry::migrated_providers() {
@@ -1023,16 +1016,6 @@ pub async fn search_all_providers(
             Ok(results) => all_results.extend(results),
             Err(e) => {
                 log::warn!("OpenCode search failed: {e}");
-            }
-        }
-    }
-
-    // Open Interpreter
-    if providers_to_search.iter().any(|p| p == "openinterpreter") {
-        match providers::openinterpreter::search(&query, max_results) {
-            Ok(results) => all_results.extend(results),
-            Err(e) => {
-                log::warn!("Open Interpreter search failed: {e}");
             }
         }
     }

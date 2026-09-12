@@ -370,16 +370,29 @@ fn sync_source_locked(
 
     let now_secs = unix_now_secs();
 
-    // 1. Walk the live tree (bytes stay in hand only for hashing/staging).
-    let mut live_files = Vec::new();
-    collect_live_tree(live_root, live_root, &source.includes, &mut live_files)?;
-
-    // 2. Consistent SQLite captures join the overlay as ordinary files.
+    // 1. Consistent SQLite captures join the overlay as ordinary files.
+    // Databases are captured ONLY through the backup API: the file walk
+    // skips them so no torn plain copy ever competes with a backup.
     let mut dbs: Vec<String> = source.sqlite_dbs.clone();
     dbs.extend(opts.extra_sqlite_dbs.iter().cloned());
+    let db_relpaths = dedup_relpaths(dbs);
+    let db_skip: std::collections::HashSet<String> = db_relpaths.iter().cloned().collect();
+
+    // 2. Walk the live tree (bytes stay in hand only for hashing/staging).
+    let mut live_files = Vec::new();
+    collect_live_tree(
+        live_root,
+        live_root,
+        &source.includes,
+        source.max_depth,
+        0,
+        &db_skip,
+        &mut live_files,
+    )?;
+
     let mut db_carry_hint: HashMap<String, bool> = HashMap::new();
-    for db_rel in dedup_relpaths(dbs) {
-        match capture_sqlite_live(live_root, &db_rel, &staging_data_dir) {
+    for db_rel in &db_relpaths {
+        match capture_sqlite_live(live_root, db_rel, &staging_data_dir) {
             Ok(staged) => {
                 let bytes = std::fs::read(&staged).map_err(|e| {
                     format!("Failed to read staged SQLite {}: {e}", staged.display())
@@ -387,7 +400,7 @@ fn sync_source_locked(
                 live_files.push(LiveFile {
                     rel: db_rel.clone(),
                     bytes: Some(bytes),
-                    mtime_secs: live_mtime(&live_root.join(native_path(&db_rel))),
+                    mtime_secs: live_mtime(&live_root.join(native_path(db_rel))),
                 });
             }
             Err(e) => {
@@ -395,9 +408,9 @@ fn sync_source_locked(
                 // when no preserved copy exists at all (strict P0 rule: never
                 // publish a snapshot whose SQLite stores failed validation
                 // without a preserved fallback).
-                if carry_has(&carry_from, &db_rel) {
+                if carry_has(&carry_from, db_rel) {
                     log::warn!("SQLite capture failed for {db_rel}, keeping preserved copy: {e}");
-                    db_carry_hint.insert(db_rel, true);
+                    db_carry_hint.insert(db_rel.clone(), true);
                 } else {
                     cleanup_staging(&staging_snapshot_dir);
                     return Err(format!("SQLite capture failed for {db_rel}: {e}"));
@@ -644,7 +657,11 @@ fn link_or_copy(src: &Path, dest: &Path) -> Result<(), String> {
         return Ok(());
     }
     // Cross-device or hardlink-less filesystems: plain copy of owned bytes.
+    // (Copying over an existing dest must keep it writable for later stages:
+    // some platforms preserve the source mode bits, which would freeze a
+    // read-only mode onto staging.)
     std::fs::copy(src, dest).map_err(|e| format!("Failed to stage {}: {e}", dest.display()))?;
+    make_staging_writable(dest);
     Ok(())
 }
 
@@ -664,10 +681,35 @@ fn stage_bytes(
     if cas::cas_link_into(data_root, &hash, &dest) {
         return Ok(());
     }
+    // A previous stage step may have left a read-only file here (e.g. a
+    // mode-preserving copy); staging stays writable until publish.
+    let _ = std::fs::remove_file(&dest);
     std::fs::write(&dest, bytes).map_err(|e| format!("Failed to stage {rel}: {e}"))?;
+    make_staging_writable(&dest);
     // Best effort: CAS population must never fail a sync.
     let _ = cas::cas_insert_bytes(data_root, bytes);
     Ok(())
+}
+
+/// Keep staging files owner-writable (publication freezes them later).
+fn make_staging_writable(dest: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        if let Ok(meta) = std::fs::metadata(dest) {
+            let mut perms = meta.permissions();
+            perms.set_mode(perms.mode() | 0o200);
+            let _ = std::fs::set_permissions(dest, perms);
+        }
+    }
+    #[cfg(windows)]
+    {
+        if let Ok(meta) = std::fs::metadata(dest) {
+            let mut perms = meta.permissions();
+            perms.set_readonly(false);
+            let _ = std::fs::set_permissions(dest, perms);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -678,10 +720,14 @@ fn stage_bytes(
 /// subtree prefixes (empty = everything). Symlinks are dereferenced into
 /// plain entries; CCHV-derived caches are skipped; listed-but-unreadable
 /// files yield `bytes: None` so assembly can carry the preserved copy.
+#[allow(clippy::too_many_arguments)]
 fn collect_live_tree(
     live_root: &Path,
     current_dir: &Path,
     includes: &[String],
+    max_depth: Option<usize>,
+    depth: usize,
+    skip_relpaths: &std::collections::HashSet<String>,
     out: &mut Vec<LiveFile>,
 ) -> Result<(), String> {
     let read_dir = std::fs::read_dir(current_dir)
@@ -703,19 +749,31 @@ fn collect_live_tree(
                 continue;
             };
             if target_meta.is_dir() {
-                collect_symlinked_dir(live_root, &path, includes, out);
+                collect_symlinked_dir(live_root, &path, includes, skip_relpaths, out);
             } else if target_meta.is_file() {
-                push_live_file(live_root, &path, includes, out);
+                push_live_file(live_root, &path, includes, skip_relpaths, out);
             }
             continue;
         }
         if meta.is_dir() {
+            // Depth counts the root's children as 1; unbounded when unset.
+            if max_depth.is_some_and(|max| depth + 1 > max) {
+                continue;
+            }
             if dir_pruned(live_root, &path, includes) {
                 continue;
             }
-            collect_live_tree(live_root, &path, includes, out)?;
+            collect_live_tree(
+                live_root,
+                &path,
+                includes,
+                max_depth,
+                depth + 1,
+                skip_relpaths,
+                out,
+            )?;
         } else if meta.is_file() {
-            push_live_file(live_root, &path, includes, out);
+            push_live_file(live_root, &path, includes, skip_relpaths, out);
         }
     }
     Ok(())
@@ -755,15 +813,22 @@ fn file_included(live_root: &Path, file: &Path, includes: &[String]) -> Option<S
         .then_some(rel)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn push_live_file(
     live_root: &Path,
     source_file: &Path,
     includes: &[String],
+    skip_relpaths: &std::collections::HashSet<String>,
     out: &mut Vec<LiveFile>,
 ) {
     let Some(rel) = file_included(live_root, source_file, includes) else {
         return;
     };
+    // SQLite stores are captured exclusively through the backup API; a torn
+    // plain copy must never compete with (or duplicate) a backup.
+    if skip_relpaths.contains(&rel) {
+        return;
+    }
     let mtime_secs = live_mtime(source_file);
     match std::fs::read(source_file) {
         Ok(bytes) => out.push(LiveFile {
@@ -791,10 +856,12 @@ fn push_live_file(
 /// logical path (one dereference level; deeper links resolve files only).
 /// Dangling links and archive escapes yield no entries; every other outcome
 /// is infallible by construction.
+#[allow(clippy::too_many_arguments)]
 fn collect_symlinked_dir(
     live_root: &Path,
     link_path: &Path,
     includes: &[String],
+    skip_relpaths: &std::collections::HashSet<String>,
     out: &mut Vec<LiveFile>,
 ) {
     let Ok(target) = std::fs::canonicalize(link_path) else {
@@ -829,7 +896,13 @@ fn collect_symlinked_dir(
                             continue;
                         };
                         let virtual_source = link_path.join(relative_target);
-                        push_live_file_via(live_root, &virtual_source, includes, out);
+                        push_live_file_via(
+                            live_root,
+                            &virtual_source,
+                            includes,
+                            skip_relpaths,
+                            out,
+                        );
                     } else if target_meta.is_dir() {
                         let canonical =
                             std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
@@ -849,7 +922,7 @@ fn collect_symlinked_dir(
                     continue;
                 };
                 let virtual_source = link_path.join(relative_target);
-                push_live_file_via(live_root, &virtual_source, includes, out);
+                push_live_file_via(live_root, &virtual_source, includes, skip_relpaths, out);
             }
         }
     }
@@ -860,6 +933,7 @@ fn push_live_file_via(
     live_root: &Path,
     virtual_source: &Path,
     includes: &[String],
+    skip_relpaths: &std::collections::HashSet<String>,
     out: &mut Vec<LiveFile>,
 ) {
     // `virtual_source` may itself contain symlink components; resolve the
@@ -892,6 +966,9 @@ fn push_live_file_via(
             .iter()
             .any(|inc| inc == &rel || rel.starts_with(&format!("{inc}/")))
     {
+        return;
+    }
+    if skip_relpaths.contains(&rel) {
         return;
     }
     let mtime_secs = live_mtime(virtual_source);
@@ -1751,6 +1828,68 @@ mod tests {
         assert!(first.data_path.join("a.jsonl").is_file());
     }
 
+    /// Concurrent provider writes during capture must yield consistent
+    /// snapshots or a clean rejection — never a torn published database.
+    #[test]
+    #[serial_test::serial]
+    fn sqlite_capture_under_concurrent_writes() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
+        let original = tempfile::tempdir().unwrap();
+        let root = original.path().join("mixed");
+        let db_path = root.join("store.db");
+        std::fs::create_dir_all(&root).unwrap();
+        {
+            let conn = rusqlite::Connection::open(&db_path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE events(id INTEGER PRIMARY KEY, body TEXT);
+                 INSERT INTO events(body) VALUES ('seed');",
+            )
+            .unwrap();
+        }
+        write_file(&root.join("note.jsonl"), b"{}\n");
+
+        let mut source = unique_local_source("mixedprov", &root);
+        source.sqlite_dbs = vec!["store.db".to_string()];
+
+        // Hammer the live database from another thread while syncing.
+        let hammer = std::thread::spawn({
+            let db_path = db_path.clone();
+            move || {
+                for i in 0..60 {
+                    if let Ok(conn) = rusqlite::Connection::open(&db_path) {
+                        let _ = conn.execute(
+                            "INSERT INTO events(body) VALUES (?1)",
+                            rusqlite::params![format!("w{i}")],
+                        );
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                }
+            }
+        });
+        for _ in 0..4 {
+            // Syncs may carry the previous good copy while the db is hot;
+            // they must never publish a corrupt one.
+            let _ = sync_source(&source, &root, &SyncOptions::default());
+        }
+        hammer.join().unwrap();
+        // Final quiescent sync converges.
+        match sync_source(&source, &root, &SyncOptions::default()).unwrap() {
+            SyncOutcome::Created(_) | SyncOutcome::Unchanged(_) => {}
+        }
+
+        // Every published snapshot's database validates.
+        let data_root = crate::storage::snapshot::data_root().unwrap();
+        let snapshots = crate::storage::snapshot::list_snapshots_in_root(&data_root, &source.id);
+        assert!(!snapshots.is_empty());
+        for snap in &snapshots {
+            crate::storage::sqlite_capture::quick_check_db(&snap.data_path.join("store.db"))
+                .unwrap();
+        }
+        // The plain-file sidecar rode along too.
+        let latest = crate::storage::latest_completed_snapshot(&source.id).unwrap();
+        assert!(latest.data_path.join("note.jsonl").is_file());
+    }
+
     fn remote_source() -> Source {
         let mut source = Source {
             id: format!("test-remote-{}", &uuid::Uuid::new_v4().to_string()[..8]),
@@ -1764,6 +1903,7 @@ mod tests {
             label: None,
             sqlite_dbs: Vec::new(),
             includes: Vec::new(),
+            max_depth: None,
         };
         // Claim first so the id is stable for the rest of the test.
         source = crate::storage::source::claim_canonical_source(&source).unwrap();

@@ -65,14 +65,14 @@ fn get_archived_sessions_dir() -> Result<PathBuf, String> {
     Ok(Path::new(&base_path).join("archived_sessions"))
 }
 
-fn get_existing_session_dirs() -> Result<Vec<PathBuf>, String> {
-    let sessions_dir = get_sessions_dir()?;
-    let archived_sessions_dir = get_archived_sessions_dir()?;
-
-    Ok([sessions_dir, archived_sessions_dir]
+/// Session dirs (`sessions/`, `archived_sessions/`) under an explicit base
+/// (snapshot or live) that exist.
+fn existing_session_dirs_for(base: &str) -> Vec<PathBuf> {
+    let base = Path::new(base);
+    [base.join("sessions"), base.join("archived_sessions")]
         .into_iter()
         .filter(|path| path.exists() && path.is_dir())
-        .collect())
+        .collect()
 }
 
 // Codex generates these filenames itself, always lowercase — a
@@ -296,12 +296,22 @@ pub fn scan_projects() -> Result<Vec<ClaudeProject>, String> {
 /// Load sessions for a Codex project (filtered by cwd)
 pub fn load_sessions(
     project_path: &str,
+    exclude_sidechain: bool,
+) -> Result<Vec<ClaudeSession>, String> {
+    let base = get_base_path().ok_or_else(|| "Codex not found".to_string())?;
+    load_sessions_from_base(&base, project_path, exclude_sidechain)
+}
+
+/// [`load_sessions`] against an explicit base (snapshot or live). The native
+/// title index comes from the same base, so snapshot reads never touch the
+/// live `state_5.sqlite`.
+pub fn load_sessions_from_base(
+    base: &str,
+    project_path: &str,
     _exclude_sidechain: bool,
 ) -> Result<Vec<ClaudeSession>, String> {
-    let session_dirs = get_existing_session_dirs()?;
-    let title_index = get_base_path()
-        .map(|base_path| load_native_title_index(&base_path))
-        .unwrap_or_default();
+    let session_dirs = existing_session_dirs_for(base);
+    let title_index = load_native_title_index(base);
 
     if session_dirs.is_empty() {
         return Ok(vec![]);
@@ -366,12 +376,126 @@ pub fn load_sessions(
 
 /// Load all messages from a Codex rollout file
 pub fn load_messages(session_path: &str) -> Result<Vec<ClaudeMessage>, String> {
+    let base = get_base_path().ok_or_else(|| "Codex not found".to_string())?;
+    load_messages_in(&base, session_path)
+}
+
+/// [`load_messages`] against an explicit base (snapshot or live).
+pub fn load_messages_in(base: &str, session_path: &str) -> Result<Vec<ClaudeMessage>, String> {
     let path = Path::new(session_path);
     if !path.exists() {
         return Err(format!("Session file not found: {session_path}"));
     }
-    let canonical_path = validate_session_path(path, session_path)?;
+    let canonical_path = validate_session_path_in(base, path, session_path)?;
     parse_rollout_file(&canonical_path)
+}
+
+/// [`validate_session_path`] against an explicit base (snapshot or live).
+fn validate_session_path_in(
+    base: &str,
+    session_path: &Path,
+    raw_session_path: &str,
+) -> Result<PathBuf, String> {
+    let canonical_session = session_path
+        .canonicalize()
+        .map_err(|e| format!("Failed to resolve session path: {e}"))?;
+
+    let mut canonical_session_dirs = Vec::new();
+    for dir in existing_session_dirs_for(base) {
+        canonical_session_dirs.push(
+            dir.canonicalize()
+                .map_err(|e| format!("Failed to resolve Codex session directory: {e}"))?,
+        );
+    }
+
+    if canonical_session_dirs.is_empty() {
+        return Err("No Codex session directories found".to_string());
+    }
+
+    let is_allowed = canonical_session_dirs
+        .iter()
+        .any(|allowed_dir| canonical_session.starts_with(allowed_dir));
+
+    if !is_allowed {
+        return Err(format!(
+            "Session path is outside Codex session directories: {raw_session_path}"
+        ));
+    }
+
+    Ok(canonical_session)
+}
+
+// ============================================================================
+// Archive glue (snapshot-backed reads; the explicit-base seams above are
+// reused). Project URIs (`codex://{cwd}`) name the user's checkout (content
+// filter); session paths are plain rollout files mapped into the snapshot.
+// The native title index comes from the snapshotted `state_5.sqlite`, never
+// the live one. Explicit rename/delete operations below stay on live paths.
+// ============================================================================
+
+use crate::storage::registry::DiscoveredSource as ArchiveDiscoveredSource;
+use crate::storage::{SnapshotInfo as ArchiveSnapshotInfo, Source as ArchiveSource};
+
+/// Physical Codex base on this machine, if present. The state database is
+/// captured consistently; rollouts are plain files.
+pub(crate) fn archive_discover() -> Vec<ArchiveDiscoveredSource> {
+    let machine = crate::storage::registry::discovery_machine_id();
+    match get_base_path() {
+        Some(base) => {
+            let mut found = ArchiveDiscoveredSource::local(
+                crate::storage::ROLE_PRIMARY,
+                PathBuf::from(base),
+                &machine,
+            );
+            found.sqlite_dbs = vec![STATE_DB_FILENAME.to_string()];
+            vec![found]
+        }
+        None => Vec::new(),
+    }
+}
+
+/// Scan projects under an explicit root (snapshot data root at runtime).
+pub(crate) fn archive_scan(
+    _source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+) -> Result<Vec<ClaudeProject>, String> {
+    scan_projects_from_path(&snapshot.data_path.to_string_lossy())
+}
+
+/// Sessions for a stable project URI, filtered from snapshot content.
+pub(crate) fn archive_load_sessions(
+    _source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+    stable_project: &str,
+) -> Result<Vec<ClaudeSession>, String> {
+    load_sessions_from_base(&snapshot.data_path.to_string_lossy(), stable_project, false)
+}
+
+/// Messages for a stable session file, read from the snapshot.
+pub(crate) fn archive_load_messages(
+    source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+    stable_session: &str,
+) -> Result<Vec<ClaudeMessage>, String> {
+    let mapped =
+        crate::storage::registry::map_absolute_to_snapshot(source, snapshot, stable_session)
+            .ok_or_else(|| format!("No preserved snapshot covers {stable_session}"))?;
+    load_messages_in(&snapshot.data_path.to_string_lossy(), &mapped)
+}
+
+/// Search confined to one snapshot.
+pub(crate) fn archive_search(
+    _source: &ArchiveSource,
+    snapshot: &ArchiveSnapshotInfo,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<ClaudeMessage>, String> {
+    search_in(
+        &snapshot.data_path.to_string_lossy(),
+        query,
+        limit,
+        &serde_json::json!({}),
+    )
 }
 
 /// Parse an already-validated Codex rollout JSONL file into messages. Pure of
@@ -652,7 +776,18 @@ fn retain_newest_search_results(results: &mut Vec<ClaudeMessage>, limit: usize) 
 /// text is kept ahead of tool-only matches so verbose tool transcripts cannot
 /// crowd the user's prompt or the assistant's reply out of global search.
 pub fn search(query: &str, limit: usize, filters: &Value) -> Result<Vec<ClaudeMessage>, String> {
-    let session_dirs = get_existing_session_dirs()?;
+    let base = get_base_path().ok_or_else(|| "Codex not found".to_string())?;
+    search_in(&base, query, limit, filters)
+}
+
+/// [`search`] against an explicit base (snapshot or live).
+pub fn search_in(
+    base: &str,
+    query: &str,
+    limit: usize,
+    filters: &Value,
+) -> Result<Vec<ClaudeMessage>, String> {
+    let session_dirs = existing_session_dirs_for(base);
 
     if session_dirs.is_empty() {
         return Ok(vec![]);
@@ -681,7 +816,10 @@ pub fn search(query: &str, limit: usize, filters: &Value) -> Result<Vec<ClaudeMe
     .collect();
 
     let matches_by_file = par_map_bounded(candidate_paths, |rollout_path| {
-        let Ok(messages) = load_messages(&rollout_path.to_string_lossy()) else {
+        // Parse directly: callers already resolved this path (live or
+        // snapshot); re-validating against live session dirs here would
+        // reject preserved copies.
+        let Ok(messages) = parse_rollout_file(&rollout_path) else {
             return Vec::new();
         };
         let mut file_results: Vec<ClaudeMessage> = messages

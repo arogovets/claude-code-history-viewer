@@ -59,7 +59,9 @@ pub mod sync;
 
 pub use cas::{cas_contains, cas_insert_bytes, cas_link_into};
 pub use hash::{is_plausible_hash, sha256_hex, sha256_hex_str};
-pub use index::{rebuild_index_from_snapshots, reconcile_unindexed_snapshots, IndexReport};
+pub use index::{
+    rebuild_index_from_snapshots, reconcile_unindexed_snapshots, IndexReport, SnapshotIndexer,
+};
 pub use machine::{local_machine_id, wsl_machine_id};
 pub use manifest::{content_hash_for, entry_fingerprint, ManifestFileEntry, SnapshotManifest};
 pub use snapshot::{latest_completed_snapshot, list_snapshots, SnapshotInfo};
