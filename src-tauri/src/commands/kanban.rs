@@ -1,6 +1,12 @@
 //! Project organization, stored separately from provider history and user metadata.
 use serde::{Deserialize, Serialize};
-use std::{collections::HashSet, fs, io::Write, path::Path, sync::Mutex};
+use std::{
+    collections::{HashMap, HashSet},
+    fs,
+    io::Write,
+    path::Path,
+    sync::Mutex,
+};
 
 static KANBAN_LOCK: Mutex<()> = Mutex::new(());
 
@@ -106,12 +112,87 @@ fn write_data(path: &Path, mut data: KanbanData) -> Result<KanbanData, String> {
     Ok(data)
 }
 
+/// Unique aliases only: identical native handles on two sources must not guess.
+fn migrate_references(data: &mut KanbanData, aliases: &HashMap<String, HashSet<String>>) {
+    for board in &mut data.boards {
+        let mut seen = HashSet::new();
+        for column in &mut board.columns {
+            for id in &mut column.project_ids {
+                if let Some(matches) = aliases.get(id).filter(|matches| matches.len() == 1) {
+                    *id = matches.iter().next().unwrap().clone();
+                }
+            }
+            column.project_ids.retain(|id| seen.insert(id.clone()));
+        }
+    }
+}
+
+fn save_migrated(
+    path: &Path,
+    aliases: &HashMap<String, HashSet<String>>,
+) -> Result<KanbanData, String> {
+    let current = read_data(path)?;
+    let mut migrated = current.clone();
+    migrate_references(&mut migrated, aliases);
+    if migrated == current {
+        return Ok(current);
+    }
+    // Keep the exact pre-migration bytes; never replace an existing backup.
+    let backup = path.with_file_name(format!("boards.before-sources-{}.json", current.revision));
+    match fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(backup)
+    {
+        Ok(mut file) => {
+            file.write_all(&fs::read(path).map_err(|e| e.to_string())?)
+                .map_err(|e| e.to_string())?;
+            file.sync_all().map_err(|e| e.to_string())?;
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(e) => return Err(format!("Cannot back up boards before migration: {e}")),
+    }
+    write_data(path, migrated)
+}
+
 #[tauri::command]
 pub async fn load_kanban() -> Result<KanbanData, String> {
-    tauri::async_runtime::spawn_blocking(|| {
+    let data = tauri::async_runtime::spawn_blocking(|| {
         let _guard = KANBAN_LOCK.lock().map_err(|e| e.to_string())?;
         let path = super::metadata::get_user_data_path()?.with_file_name("boards.json");
         read_data(&path)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    if data
+        .boards
+        .iter()
+        .all(|b| b.columns.iter().all(|c| c.project_ids.is_empty()))
+    {
+        return Ok(data);
+    }
+    let projects =
+        match super::multi_provider::scan_all_projects(None, None, None, None, None).await {
+            Ok(projects) => projects,
+            Err(_) => return Ok(data), // Offline/unavailable sources never hide saved boards.
+        };
+    let mut aliases: HashMap<String, HashSet<String>> = HashMap::new();
+    for project in projects {
+        let Ok((source, _)) = crate::sources::resolve(&project.path) else {
+            continue;
+        };
+        let Some(legacy) = crate::sources::legacy_local_project_path(&source, &project.path) else {
+            continue;
+        };
+        let provider = project.provider.as_deref().unwrap_or("claude");
+        let old = serde_json::to_string(&[provider, &legacy]).map_err(|e| e.to_string())?;
+        let new = serde_json::to_string(&[provider, &project.path]).map_err(|e| e.to_string())?;
+        aliases.entry(old).or_default().insert(new);
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = KANBAN_LOCK.lock().map_err(|e| e.to_string())?;
+        let path = super::metadata::get_user_data_path()?.with_file_name("boards.json");
+        save_migrated(&path, &aliases)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -143,6 +224,49 @@ mod tests {
             ]}
         ]}))
         .unwrap()
+    }
+
+    #[test]
+    fn migration_preserves_boards_order_and_ambiguous_references() {
+        let mut data = fixture();
+        let old = data.boards[0].columns[0].project_ids[0].clone();
+        let new = r#"["claude","/mirrors/local/current/project"]"#.to_string();
+        let mut aliases = HashMap::from([(old.clone(), HashSet::from([new.clone()]))]);
+        migrate_references(&mut data, &aliases);
+        assert_eq!(data.boards[0].columns[0].project_ids, vec![new.clone()]);
+        assert_eq!(data.boards[1].columns[0].project_ids, vec![new.clone()]);
+        assert!(data.boards[0].columns[1].project_ids.is_empty());
+        aliases
+            .get_mut(&old)
+            .unwrap()
+            .insert("another source".into());
+        let mut ambiguous = fixture();
+        migrate_references(&mut ambiguous, &aliases);
+        assert_eq!(ambiguous, fixture());
+        let mut duplicate = fixture();
+        duplicate.boards[0].columns[1].project_ids.push(new.clone());
+        aliases.get_mut(&old).unwrap().remove("another source");
+        migrate_references(&mut duplicate, &aliases);
+        assert!(duplicate.boards[0].columns[1].project_ids.is_empty());
+    }
+
+    #[test]
+    fn migration_backs_up_exact_data_and_is_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("boards.json");
+        let original = serde_json::to_vec(&fixture()).unwrap();
+        fs::write(&path, &original).unwrap();
+        let old = fixture().boards[0].columns[0].project_ids[0].clone();
+        let new = r#"["claude","/mirrors/local/current/project"]"#.to_string();
+        let aliases = HashMap::from([(old, HashSet::from([new]))]);
+        let migrated = save_migrated(&path, &aliases).unwrap();
+        assert_eq!(migrated.revision, 1);
+        assert_eq!(
+            fs::read(dir.path().join("boards.before-sources-0.json")).unwrap(),
+            original
+        );
+        assert_eq!(save_migrated(&path, &aliases).unwrap(), migrated);
+        assert!(write_data(&path, fixture()).is_err());
     }
 
     #[test]

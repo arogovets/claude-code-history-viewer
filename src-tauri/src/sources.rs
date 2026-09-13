@@ -219,6 +219,44 @@ pub fn resolve(value: &str) -> Result<(Source, String), String> {
     }
 }
 
+/// Recover an old local project handle only from the collector's recorded origin.
+/// Remote sources never claim unqualified local references.
+pub fn legacy_local_project_path(source: &Source, value: &str) -> Option<String> {
+    let metadata: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(source.current.parent()?.join("source.json")).ok()?)
+            .ok()?;
+    let origin = metadata.get("origin")?;
+    if !origin.get("ssh")?.is_null() {
+        return None;
+    }
+    let mounts = origin.get("paths")?.as_array()?;
+    let prefix = format!("source:{}|", source.id);
+    let inner = value.strip_prefix(&prefix).unwrap_or(value);
+    let (scheme, path) = inner
+        .split_once("://")
+        .map_or(("", inner), |(scheme, path)| (scheme, path));
+    for mount in mounts {
+        let mirrored = source.current.join(mount.get("mirror_path")?.as_str()?);
+        let mirrored = mirrored.to_str()?;
+        if let Some(suffix) = path.strip_prefix(mirrored) {
+            if suffix.is_empty() || suffix.starts_with(['/', '#', ':']) {
+                let old = format!("{}{suffix}", mount.get("path")?.as_str()?);
+                return Some(if scheme.is_empty() {
+                    old
+                } else {
+                    format!("{scheme}://{old}")
+                });
+            }
+        }
+    }
+    // Opaque IDs / original workspace names are namespaced without rewriting.
+    if !scheme.is_empty() && !path.contains(source.current.to_str()?) {
+        Some(inner.to_owned())
+    } else {
+        None
+    }
+}
+
 pub fn require_history_path(value: &str) -> Result<(), String> {
     #[cfg(test)]
     {
@@ -257,6 +295,49 @@ pub fn require_mutable_history(value: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_aliases_use_recorded_local_origins_for_every_provider() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = Source {
+            id: "local".into(),
+            label: "Local".into(),
+            current: temp.path().join("current"),
+        };
+        let manifest = temp.path().join("source.json");
+        let mut metadata = serde_json::json!({"origin": {"ssh": null, "paths": [
+            {"path": "/old/.claude/projects", "mirror_path": ".claude/projects"},
+            {"path": "/old/Dev", "mirror_path": "Dev"}
+        ]}});
+        std::fs::write(&manifest, metadata.to_string()).unwrap();
+        for handle in [
+            "codex:///workspace",
+            "opencode://id",
+            "dsh:///workspace",
+            "antigravity-cli:///workspace",
+        ] {
+            assert_eq!(
+                legacy_local_project_path(&source, &format!("source:local|{handle}")),
+                Some(handle.into())
+            );
+        }
+        let claude = source.current.join(".claude/projects/project");
+        assert_eq!(
+            legacy_local_project_path(&source, claude.to_str().unwrap()),
+            Some("/old/.claude/projects/project".into())
+        );
+        let aider = format!(
+            "source:local|aider://{}/Dev/project",
+            source.current.display()
+        );
+        assert_eq!(
+            legacy_local_project_path(&source, &aider),
+            Some("aider:///old/Dev/project".into())
+        );
+        metadata["origin"]["ssh"] = serde_json::json!("remote-host");
+        std::fs::write(&manifest, metadata.to_string()).unwrap();
+        assert!(legacy_local_project_path(&source, "source:local|opencode://id").is_none());
+    }
 
     #[tokio::test]
     async fn concurrent_source_scopes_do_not_leak() {
