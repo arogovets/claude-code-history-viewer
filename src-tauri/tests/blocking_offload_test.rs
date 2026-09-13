@@ -20,6 +20,17 @@ fn yielded_during<F, T>(f: F) -> bool
 where
     F: Future<Output = T>,
 {
+    static WORKERS: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
+    WORKERS.get_or_init(|| {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .worker_threads(1)
+            .max_blocking_threads(1)
+            .build()
+            .unwrap();
+        tauri::async_runtime::set(runtime.handle().clone());
+        runtime
+    });
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .max_blocking_threads(1)
@@ -28,7 +39,7 @@ where
         .block_on(async move {
             let (release, gate) = std::sync::mpsc::channel();
             let (started, ready) = std::sync::mpsc::channel();
-            let worker = tokio::task::spawn_blocking(move || {
+            let worker = tauri::async_runtime::spawn_blocking(move || {
                 started.send(()).unwrap();
                 let _ = gate.recv();
             });
