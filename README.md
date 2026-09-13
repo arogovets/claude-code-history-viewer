@@ -32,6 +32,166 @@ Browse, search, and analyze conversations from **Claude Code**, **Gemini CLI**, 
   <img width="49%" alt="Recent Edits" src="https://github.com/user-attachments/assets/8c9fbff3-55dd-4cfc-a135-ddeb719f3057" />
 </p>
 
+## Filesystem sources and automatic collection
+
+This fork reads history from **registered local mirrors for every provider**.
+Configure collection before using the viewer. The upstream download/install
+commands below describe the upstream distribution; build this branch to use
+this filesystem-source redesign.
+
+```text
+Local history files ────┐
+                       ├─ pull-only collector ── Restic backup ── local mirrors ── CCHV
+SSH + rsync host files ─┘                         (all versions)    (current)       reader/watcher
+```
+
+The collector is a **separate service on the viewing/collection machine**.
+CCHV neither launches it nor connects to source hosts. For SSH sources, hosts
+need SSH access and rsync, with readable history files; they need no CCHV server,
+watcher, or agent. An offline host retains its last successful mirror. Local
+sources use the same pipeline without SSH.
+
+The old commit titled “filesystem-first snapshot archive with local and remote
+Claude slices” is part of preserved Git history, **not the current architecture**.
+The custom storage/snapshot/sync system, remote HTTP aggregation, and CCHV SQLite
+history cache/locator were removed. The upstream Archive Manager remains a
+separate user-facing feature with its existing format.
+
+### Provider coverage
+
+The collector copies configured paths without parsing conversations or choosing
+a provider. Claude, OpenCode, Codex, DeepSeek, Antigravity, and every other
+supported provider receive the same retention, offline, and source-identity
+behavior. Each CCHV provider parser reads its native format inside the mirror.
+**Only configured paths are collected**: this does not automatically discover
+all installed applications or make an unsupported provider format readable.
+
+Use the provider locations in the table below as origin-path guidance. Preserve
+the layout expected by the viewer beneath each mirror's `current` directory:
+for example `.claude/projects`, `.codex/sessions`, `.dsh/sessions`,
+`.gemini/tmp`, `.gemini/antigravity/brain`, and `.local/share/opencode`.
+For editor histories and per-project tools such as Aider/Crush, explicitly map
+history directories into the corresponding mirrored application/code-root
+layout. When collecting from another OS, map source paths to the layout expected
+by the viewer's OS. Do not copy credentials or entire home directories just to
+collect history. Provider HOME/XDG environment overrides do not bypass mirrors.
+
+Native SQLite files such as OpenCode's `opencode.db` remain **provider-owned
+history**, not a new CCHV cache. Active databases require a consistent filesystem
+snapshot or provider export, including appropriate WAL state, for transactional
+consistency. A raw file pull preserves observed bytes but cannot guarantee a
+transactionally consistent generation. The same capture limitation applies to
+any file being written during transfer.
+
+### Setup: local and SSH sources
+
+Install Python 3, rsync, and Restic on the collector machine. On macOS,
+`brew install rsync restic` supplies modern rsync needed for SSH protected
+arguments. Initialize a Restic repository **outside the mirror root** and keep
+its password in a private password file:
+
+```sh
+export RESTIC_REPOSITORY="$HOME/Backups/cchv-history-restic"
+export RESTIC_PASSWORD_FILE="$HOME/.config/cchv-collector/restic-password"
+# Create the password file securely first, with mode 600; retain a recovery copy.
+restic init
+```
+
+Create `~/.config/cchv-collector/sources.json` with absolute paths, for example:
+
+```json
+{
+  "mirror_root": "/Users/me/.claude-history-viewer/mirrors",
+  "sources": [
+    {
+      "id": "this-mac",
+      "label": "This Mac",
+      "paths": [
+        {"path": "/Users/me/.claude/projects", "mirror_path": ".claude/projects"},
+        {"path": "/Users/me/.codex/sessions", "mirror_path": ".codex/sessions"},
+        {"path": "/Users/me/.local/share/opencode/storage", "mirror_path": ".local/share/opencode/storage"}
+      ]
+    },
+    {
+      "id": "work-laptop",
+      "label": "Work laptop",
+      "ssh": "user@work-laptop",
+      "enabled": false,
+      "paths": [
+        {"path": "/home/user/.codex/sessions", "mirror_path": ".codex/sessions"},
+        {"path": "/home/user/.dsh/sessions", "mirror_path": ".dsh/sessions"}
+      ]
+    }
+  ]
+}
+```
+
+Use only paths that exist on that source. `kind: "file"` copies an individual
+file, with its filename included in `mirror_path`. For modern OpenCode, include
+its native database capture as well as legacy JSON storage where present. Verify
+SSH access with batch/key authentication and actual source paths before setting
+`enabled` to `true`. Collect once, then install automatic collection:
+
+```sh
+python3 collector/collect.py "$HOME/.config/cchv-collector/sources.json"
+python3 collector/install_launchagent.py \
+  --config "$HOME/.config/cchv-collector/sources.json" \
+  --repository "$RESTIC_REPOSITORY" \
+  --password-file "$RESTIC_PASSWORD_FILE"
+```
+
+On macOS this installs **`com.cchv.collector`**, separately from the
+**`com.cchv`** viewer service. It runs at login and every 60 seconds, without
+overlapping instances. A run may take several minutes; freshness includes
+transfer and backup time, and sleep/offline/failures can delay updates. Failed
+runs retry on later intervals. Linux users can run the same one-shot collector
+from a systemd timer; the supplied installer is macOS-specific.
+
+CCHV defaults to `~/.claude-history-viewer/mirrors`; set `CCHV_MIRROR_ROOT` in
+its service environment for another root. Restart CCHV after registering a new
+source so its watcher includes the new mirror. Existing mirrors are watched as
+they advance. The source `id` is permanent; labels can change. The collector pins
+origin/mount configuration at first capture: use a new ID for a changed origin
+or mount set rather than editing `source.json` to bypass this check.
+
+### Retention, maintenance, and recovery
+
+- **Versions:** missing origin files remain in `current`. Changed files advance
+  only after successful Restic backup. Interrupted staging data is also backed
+  up before reuse. Never run Restic `forget`/`prune` policies that discard captured
+  versions. Keep sufficient disk space and a recoverable copy of the repository
+  and its password. Retention covers captured versions, not every write between pulls.
+- **Status:** `launchctl print "gui/$(id -u)/com.cchv.collector"` shows run count
+  and last exit code. Timestamped starts/successes are in
+  `~/Library/Logs/cchv-collector/collector.log`; failures are in
+  `collector-error.log` in the same directory. Exit 0 means that run succeeded.
+- **Failed/stale source:** inspect those logs, source reachability, available disk
+  space, and Restic access. Repair the cause and let the next interval retry.
+  Backup failure deliberately blocks mirror advancement; the old mirror remains
+  usable. Refresh the UI if its currently open view has not rescanned yet.
+- **Updates:** retain the checkout used by the installer, since its path is pinned
+  in the LaunchAgent. After moving the checkout, changing dependency paths, or
+  changing `--interval`, rerun the installer. To run immediately, use the same
+  `collect.py` command with the Restic environment; if another pull holds the
+  source lock, let it finish before retrying.
+- **Pause:** `launchctl bootout "gui/$(id -u)/com.cchv.collector"` stops collection.
+  Remove `~/Library/LaunchAgents/com.cchv.collector.plist` to keep it stopped after
+  login. This does not delete history. Reinstall to resume.
+- **Backup checks/restores:** use `restic snapshots` and `restic check` with the
+  repository/password environment configured. Restore a selected snapshot to a
+  separate directory for inspection; do not overwrite `current` or prune prior
+  versions as a recovery shortcut. Rotate collector text logs as needed; they
+  are diagnostics, not the retained history.
+- **Kanban migration:** old local project references are migrated to discovered
+  mirror projects only when the recorded origin provides a unique match. The
+  original boards file is retained as `boards.before-sources-<revision>.json`
+  next to `boards.json`. Ambiguous or unavailable references remain unchanged,
+  rather than being attached to the wrong machine. Board names, columns, and
+  card order are preserved.
+
+See the [collector guide](collector/README.md) for capture/promotion details and
+[rebuild provenance](docs/filesystem-sources.md) for the commit treatment ledger.
+
 ## Quick Start
 
 **Desktop app** — download and run:
@@ -76,13 +236,14 @@ AI coding assistants generate thousands of conversation messages, but none of th
 |----------|--------------|--------------|
 | **Claude Code** | `~/.claude/projects/` | Full conversation history, tool use, thinking, costs |
 | **GitHub Copilot** | `~/.copilot/session-state/` (CLI & Desktop), VS Code `workspaceStorage/.../chatSessions/` | Copilot CLI, Copilot Desktop, and VS Code Copilot Chat history (read-only, WSL-aware) |
-| **Gemini CLI** | `~/.gemini/history/` | Conversation history with tool calls |
+| **Gemini CLI** | `~/.gemini/tmp/` | Conversation history with tool calls |
 | **Antigravity** | `~/.gemini/antigravity/` | Conversation state under `brain/` plus token monitor data under `.token-monitor/rpc-cache/v1/` |
 | **Codex CLI** | `~/.codex/sessions/` | Session rollouts with agent responses |
 | **Cline** (incl. Roo Code, Kilo Code) | VS Code `globalStorage/<ext>/tasks/` | Task-based history across the Cline family |
 | **Cursor** | `~/.cursor/` | Composer and chat conversations |
 | **Cursor Agent** | `~/.cursor/projects/.../agent-transcripts/` | Agent transcripts, distinct from the Cursor IDE source |
 | **Aider** | Project directories | Chat history and edit logs |
+| **DeepSeek Harness** | `~/.dsh/sessions/` | Native session history |
 | **OpenCode** | `~/.local/share/opencode/` | Conversation sessions and tool results |
 | **ForgeCode** | `~/.forge/.forge.db` | Conversation history from SQLite database |
 | **CodeBuddy Code** | `~/.codebuddy/projects/` | Conversation history with tool calls (Claude Code fork format) |
@@ -90,15 +251,15 @@ AI coding assistants generate thousands of conversation messages, but none of th
 | **Kimi** | `~/.kimi/` | Session history with `kimi -r` resume |
 | **Kiro** | `kiro-cli/data.sqlite3` | SQLite-backed conversation history |
 | **Amazon Q CLI** | `…/amazon-q/data.sqlite3` | SQLite `conversations` store (shares format with the Kiro CLI provider) |
-| **Continue.dev** | `~/.continue/sessions/*.json` | Per-session JSON, grouped by workspace (honors `CONTINUE_GLOBAL_DIR`) |
+| **Continue.dev** | `~/.continue/sessions/*.json` | Per-session JSON, grouped by workspace |
 | **PearAI** | `~/.pearai/sessions/` | Continue fork — same session format |
 | **Goose** | `…/goose/sessions/sessions.db` | Block's agent — SQLite sessions + messages |
 | **Crush** | per-project `./.crush/crush.db` | Charm's TUI — SQLite, discovered across common code roots |
 | **llm** | `…/io.datasette.llm/logs.db` | Simon Willison's CLI — SQLite conversations/responses with token counts |
-| **Open Interpreter** | `~/.openinterpreter/sessions/` | Codex-format rollouts (reuses the Codex parser; `INTERPRETER_HOME` override) |
+| **Open Interpreter** | `~/.openinterpreter/sessions/` | Codex-format rollouts (reuses the Codex parser) |
 | **Pi** | `~/.pi/agent/sessions/` | Per-cwd JSONL transcripts — messages, thinking, tool calls, token usage |
 | **oh-my-pi** | `~/.omp/agent/sessions/` | Pi-format sessions from the `omp` fork (shared parser) |
-| **Mistral Vibe** | `~/.vibe/logs/session/` | OpenAI-style chat transcripts with reasoning and tool calls (`VIBE_HOME` override) |
+| **Mistral Vibe** | `~/.vibe/logs/session/` | OpenAI-style chat transcripts with reasoning and tool calls |
 | **Qwen Code** | `~/.qwen/projects/.../chats/` | Per-session JSONL transcripts (tool calls, thinking, token usage) |
 | **Zed** | `…/Zed/threads/threads.db` | Agent Panel threads — SQLite + Zstd-compressed JSON |
 | **OpenHands** | `~/.openhands/sessions/` | Classic event-store conversations |
@@ -110,6 +271,7 @@ Antigravity note: the viewer resolves the Antigravity root as `~/.gemini/antigra
 
 ## Table of Contents
 
+- [Filesystem sources and automatic collection](#filesystem-sources-and-automatic-collection)
 - [Features](#features)
 - [Installation](#installation)
 - [Build from Source](#build-from-source)
