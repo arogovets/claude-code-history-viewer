@@ -442,6 +442,10 @@ handler_no_params!(
     commands::project::detect_claude_config_dir
 );
 handler_no_params!(get_system_info, commands::feedback::get_system_info);
+handler_no_params!(
+    list_filesystem_sources,
+    commands::multi_provider::list_filesystem_sources
+);
 handler_no_params!(detect_providers, commands::multi_provider::detect_providers);
 handler_no_params!(load_presets, commands::settings::load_presets);
 handler_no_params!(load_mcp_presets, commands::mcp_presets::load_mcp_presets);
@@ -462,15 +466,11 @@ pub async fn get_server_config(
     })))
 }
 
-/// Note: scope parameter is accepted for API contract compatibility but not used
-/// by the underlying command (it always reads the global MCP config).
+/// Retired host-local endpoint: callers must select a source and provider scope.
 pub async fn get_mcp_servers(Json(_p): Json<McpScopeParam>) -> Result<Json<Value>, ApiError> {
-    let result = commands::claude_settings::get_mcp_servers()
-        .await
-        .map_err(ApiError::from)?;
-    Ok(Json(serde_json::to_value(result).map_err(|e| {
-        ApiError(format!("Serialization error: {e}"))
-    })?))
+    Err(ApiError(
+        "Select a source and provider scope in Settings Manager".into(),
+    ))
 }
 
 // ─── Handlers: SIMPLE PARAMS ──────────────────────────────────────────────────
@@ -835,48 +835,60 @@ handler_json!(
 handler_json!(
     get_settings_by_scope,
     SettingsScopeParams,
-    |p: SettingsScopeParams| async move {
-        commands::claude_settings::get_settings_by_scope(p.scope, p.project_path).await
+    |_p: SettingsScopeParams| async move {
+        Err::<serde_json::Value, String>(
+            "Select a source and provider scope in Settings Manager".into(),
+        )
     }
 );
 
 handler_json!(
     save_settings,
     SaveSettingsParams,
-    |p: SaveSettingsParams| async move {
-        commands::claude_settings::save_settings(p.scope, p.content, p.project_path).await
+    |_p: SaveSettingsParams| async move {
+        Err::<serde_json::Value, String>(
+            "Select a source and provider scope in Settings Manager".into(),
+        )
     }
 );
 
 handler_json!(
     get_all_settings,
     OptionalProjectPath,
-    |p: OptionalProjectPath| async move {
-        commands::claude_settings::get_all_settings(p.project_path).await
+    |_p: OptionalProjectPath| async move {
+        Err::<serde_json::Value, String>(
+            "Select a source and provider scope in Settings Manager".into(),
+        )
     }
 );
 
 handler_json!(
     get_all_mcp_servers,
     OptionalProjectPath,
-    |p: OptionalProjectPath| async move {
-        commands::claude_settings::get_all_mcp_servers(p.project_path).await
+    |_p: OptionalProjectPath| async move {
+        Err::<serde_json::Value, String>(
+            "Select a source and provider scope in Settings Manager".into(),
+        )
     }
 );
 
 handler_json!(
     save_mcp_servers,
     SaveMcpServersParams,
-    |p: SaveMcpServersParams| async move {
-        commands::claude_settings::save_mcp_servers(p.source, p.servers, p.project_path).await
+    |_p: SaveMcpServersParams| async move {
+        Err::<serde_json::Value, String>(
+            "Select a source and provider scope in Settings Manager".into(),
+        )
     }
 );
 
 handler_json!(
     get_claude_json_config,
     OptionalProjectPath,
-    |p: OptionalProjectPath| async move {
-        commands::claude_settings::get_claude_json_config(p.project_path).await
+    |_p: OptionalProjectPath| async move {
+        Err::<serde_json::Value, String>(
+            "Select a source and provider scope in Settings Manager".into(),
+        )
     }
 );
 
@@ -1347,3 +1359,30 @@ pub async fn save_kanban(Json(params): Json<SaveKanbanParams>) -> Result<Json<Va
         .map_err(|error| ApiError(error.to_string()))?,
     ))
 }
+
+#[derive(Deserialize)]
+pub struct ProviderSettingsReadParams {
+    selection: crate::provider_settings::SettingsRequest,
+}
+#[derive(Deserialize)]
+pub struct ProviderSettingsApplyParams {
+    request: crate::provider_settings::ApplyRequest,
+}
+handler_no_params!(
+    list_provider_settings,
+    crate::provider_settings::list_provider_settings
+);
+handler_json!(
+    read_provider_settings,
+    ProviderSettingsReadParams,
+    |p: ProviderSettingsReadParams| async move {
+        crate::provider_settings::read_provider_settings(p.selection).await
+    }
+);
+handler_json!(
+    apply_provider_settings,
+    ProviderSettingsApplyParams,
+    |p: ProviderSettingsApplyParams| async move {
+        crate::provider_settings::apply_provider_settings(p.request).await
+    }
+);

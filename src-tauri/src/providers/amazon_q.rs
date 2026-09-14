@@ -18,11 +18,12 @@ const SCHEME: &str = "amazonq://";
 const SUMMARY_MAX_CHARS: usize = 100;
 
 fn get_db_path() -> Option<PathBuf> {
-    Some(
-        crate::sources::data_local_dir()?
-            .join("amazon-q")
-            .join("data.sqlite3"),
-    )
+    let paths = super::collection::home_paths(super::ProviderId::AmazonQ);
+    let base = paths
+        .iter()
+        .find(|p| p.join("data.sqlite3").is_file())
+        .or_else(|| paths.first())?;
+    Some(base.join("data.sqlite3"))
 }
 
 /// Detect an Amazon Q CLI installation.

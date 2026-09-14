@@ -35,21 +35,12 @@ const SCHEME: &str = "zed://";
 const UNKNOWN_WORKSPACE: &str = "unknown";
 
 fn get_db_path() -> Option<PathBuf> {
-    // Mirror Zed's own `paths::data_dir()`. macOS uses ~/Library/Application
-    // Support (== dirs::data_dir); Linux/FreeBSD and Windows use the *local*
-    // data dir (XDG_DATA_HOME / %LOCALAPPDATA%, == dirs::data_local_dir), NOT
-    // the roaming dir. The app folder is lowercase "zed" only on Linux/FreeBSD.
-    let base = if cfg!(target_os = "macos") {
-        crate::sources::data_dir()?
-    } else {
-        crate::sources::data_local_dir()?
-    };
-    let app_name = if cfg!(any(target_os = "linux", target_os = "freebsd")) {
-        "zed"
-    } else {
-        "Zed"
-    };
-    Some(base.join(app_name).join("threads").join("threads.db"))
+    let paths = super::collection::home_paths(super::ProviderId::Zed);
+    let base = paths
+        .iter()
+        .find(|p| p.join("threads/threads.db").is_file())
+        .or_else(|| paths.first())?;
+    Some(base.join("threads/threads.db"))
 }
 
 /// Detect a Zed installation.
@@ -648,18 +639,15 @@ mod tests {
 
     #[test]
     #[serial_test::serial]
-    fn db_path_uses_platform_app_name() {
+    fn db_path_uses_collection_contract() {
         let Some(p) = get_db_path() else { return };
         let s = p.to_string_lossy().replace('\\', "/");
         assert!(s.ends_with("threads/threads.db"), "got {s}");
-        if cfg!(any(target_os = "linux", target_os = "freebsd")) {
-            assert!(
-                s.contains("/zed/threads"),
-                "linux must use lowercase zed: {s}"
-            );
-        } else {
-            assert!(s.contains("/Zed/threads"), "got {s}");
-        }
+        assert!(
+            super::super::collection::home_paths(super::super::ProviderId::Zed)
+                .iter()
+                .any(|root| root.join("threads/threads.db") == p)
+        );
     }
 
     #[test]

@@ -69,51 +69,22 @@ pub fn get_base_paths() -> Vec<PathBuf> {
 }
 
 fn get_user_data_roots() -> Vec<UserDataRoot> {
-    let Some(home) = crate::sources::home_dir() else {
-        return Vec::new();
-    };
-
-    #[cfg(target_os = "macos")]
-    let candidates = [
-        ("Code", "VS Code"),
-        ("Code - Insiders", "VS Code Insiders"),
-        ("VSCodium", "VSCodium"),
-    ]
-    .into_iter()
-    .map(|(dir, label)| UserDataRoot {
-        path: home
-            .join("Library/Application Support")
-            .join(dir)
-            .join("User"),
-        label,
-    })
-    .collect::<Vec<_>>();
-
-    #[cfg(target_os = "linux")]
-    let candidates = [
-        ("Code", "VS Code"),
-        ("Code - Insiders", "VS Code Insiders"),
-        ("VSCodium", "VSCodium"),
-    ]
-    .into_iter()
-    .map(|(dir, label)| UserDataRoot {
-        path: home.join(".config").join(dir).join("User"),
-        label,
-    })
-    .collect::<Vec<_>>();
-
-    #[cfg(target_os = "windows")]
-    let candidates = [
-        ("Code", "VS Code"),
-        ("Code - Insiders", "VS Code Insiders"),
-        ("VSCodium", "VSCodium"),
-    ]
-    .into_iter()
-    .map(|(dir, label)| UserDataRoot {
-        path: home.join("AppData/Roaming").join(dir).join("User"),
-        label,
-    })
-    .collect::<Vec<_>>();
+    let candidates = super::collection::home_paths(super::ProviderId::Copilot)
+        .into_iter()
+        .filter(|p| p.file_name().is_some_and(|n| n == "User"))
+        .map(|path| {
+            let label = match path
+                .parent()
+                .and_then(|p| p.file_name())
+                .and_then(|n| n.to_str())
+            {
+                Some("Code - Insiders") => "VS Code Insiders",
+                Some("VSCodium") => "VSCodium",
+                _ => "VS Code",
+            };
+            UserDataRoot { path, label }
+        })
+        .collect::<Vec<_>>();
 
     candidates
         .into_iter()

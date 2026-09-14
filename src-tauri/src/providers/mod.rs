@@ -10,6 +10,7 @@ pub mod claude;
 pub mod cline;
 pub mod codebuddy;
 pub mod codex;
+pub mod collection;
 pub mod continue_dev;
 pub mod copilot;
 pub mod copilot_cli;

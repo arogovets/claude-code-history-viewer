@@ -45,10 +45,7 @@ const KEY_PREFIXES: &[&str] = &[
 /// `~/Library/Application Support` on macOS, `~/.config` on Linux, `%APPDATA%`
 /// on Windows — matching VS Code-family layout).
 fn workspace_storage() -> Option<PathBuf> {
-    let dir = crate::sources::config_dir()?
-        .join("Trae")
-        .join("User")
-        .join("workspaceStorage");
+    let dir = super::collection::existing_home(super::ProviderId::Trae)?.join("workspaceStorage");
     if dir.is_dir() {
         Some(dir)
     } else {

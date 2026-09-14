@@ -83,8 +83,8 @@ export const EditorFooter: React.FC<EditorFooterProps> = ({
           {t("settingsManager.unified.footer.reset")}
         </Button>
 
-        {/* Save Button */}
-        <Button
+        {/* Apply is offered only for a live, explicitly writable scope. */}
+        {!readOnly && <Button
           size="sm"
           className="h-10 md:h-8"
           onClick={onSave}
@@ -97,8 +97,8 @@ export const EditorFooter: React.FC<EditorFooterProps> = ({
           )}
           {isSaving
             ? t("settingsManager.unified.footer.saving")
-            : t("settingsManager.unified.footer.save")}
-        </Button>
+            : "Apply"}
+        </Button>}
       </div>
     </div>
   );

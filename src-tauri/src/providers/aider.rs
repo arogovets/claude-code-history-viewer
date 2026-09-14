@@ -7,27 +7,12 @@ use std::path::{Path, PathBuf};
 const HISTORY_FILE: &str = ".aider.chat.history.md";
 const SESSION_HEADER_PREFIX: &str = "# aider chat started at ";
 
-/// Detect Aider by checking top-level project directories for history files.
-/// Only does a shallow (depth-1) check to avoid slow recursive scans at startup.
+/// Detect Aider within the collector-recorded project roots.
 pub fn detect() -> Option<ProviderInfo> {
     let dirs = get_search_dirs();
-    // Shallow check: look for .aider.chat.history.md directly in search dirs
-    // and their immediate children (depth 1 only, no recursive scan)
-    let has_history = dirs.iter().any(|(d, _)| {
-        if d.join(HISTORY_FILE).is_file() {
-            return true;
-        }
-        // Check one level of subdirectories
-        fs::read_dir(d)
-            .into_iter()
-            .flatten()
-            .flatten()
-            .filter(|entry| {
-                let name = entry.file_name();
-                !should_skip_dir(&name.to_string_lossy())
-            })
-            .any(|entry| entry.path().join(HISTORY_FILE).is_file())
-    });
+    let has_history = dirs
+        .iter()
+        .any(|(root, depth)| find_history_files(root, 1, *depth).is_some());
 
     Some(ProviderInfo {
         id: "aider".to_string(),
@@ -279,29 +264,7 @@ fn should_skip_dir(name: &str) -> bool {
 }
 
 fn get_search_dirs() -> Vec<(PathBuf, usize)> {
-    let mut dirs = Vec::new();
-    if let Some(home) = crate::sources::home_dir() {
-        for subdir in [
-            "client",
-            "projects",
-            "code",
-            "src",
-            "dev",
-            "Dev",
-            "work",
-            "repos",
-            "workspace",
-            "github",
-        ] {
-            let d = home.join(subdir);
-            if d.is_dir() {
-                dirs.push((d, 2));
-            }
-        }
-        // Only check home root itself (depth 0)
-        dirs.push((home, 0));
-    }
-    dirs
+    crate::sources::project_dirs("aider")
 }
 
 fn find_history_files(dir: &Path, max: usize, max_depth: usize) -> Option<Vec<PathBuf>> {

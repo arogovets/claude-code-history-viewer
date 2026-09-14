@@ -1,18 +1,16 @@
 //! Crush provider (Charmbracelet's agentic coding TUI).
 //!
 //! Crush stores history **per project** in `<project>/.crush/crush.db` (`SQLite`)
-//! — there is no global root — so discovery mirrors the Aider provider: a
-//! depth-limited scan of common code roots (`~/{client,projects,code,src,dev,
-//! work,repos}` + `$HOME`) for `.crush/crush.db`. Each such DB is one project.
+//! — there is no global root. Discovery uses collector-recorded project roots
+//! within the active local mirror. Each `.crush/crush.db` is one project.
 //!
 //! Tables: `sessions(id,title,...,created_at,updated_at INTEGER)` and
 //! `messages(id,session_id,role,parts TEXT,created_at,...)`. `parts` is a JSON
 //! array of `{"type":..,"data":..}` items (`text`/`tool_call`/`tool_result`/
 //! `reasoning`/…); we map them to the viewer's Claude-style content blocks.
 //!
-//! NOTE: because DBs are scattered, Crush is not tracked by the file watcher or
-//! the `WebUI` session-path allowlist (the desktop IPC path works; the `WebUI`
-//! headless server cannot read arbitrary per-project DBs).
+//! The source watcher covers collected project roots. Source-qualified handles
+//! keep `WebUI` reads within the registered mirror.
 
 use crate::models::{ClaudeMessage, ClaudeProject, ClaudeSession};
 use crate::providers::ProviderInfo;
@@ -28,6 +26,7 @@ const SCHEME: &str = "crush://";
 const SESSION_SEP: char = '#';
 /// Max `.crush/crush.db` files to discover (guards the recursive scan).
 const MAX_DBS: usize = 200;
+#[cfg(test)]
 const MAX_DEPTH: usize = 2;
 
 /// Detect a Crush installation (shallow scan for any `.crush/crush.db`).
@@ -299,34 +298,12 @@ fn should_skip_dir(name: &str) -> bool {
         )
 }
 
-/// Common code roots to scan (mirrors the Aider provider).
+/// Collector-recorded project roots.
 fn search_dirs() -> Vec<(PathBuf, usize)> {
-    let mut dirs = Vec::new();
-    if let Some(home) = crate::sources::home_dir() {
-        for subdir in [
-            "client",
-            "projects",
-            "code",
-            "src",
-            "dev",
-            "Dev",
-            "work",
-            "repos",
-            "workspace",
-            "github",
-        ] {
-            let d = home.join(subdir);
-            if d.is_dir() {
-                dirs.push((d, MAX_DEPTH));
-            }
-        }
-        // Only check home root itself (depth 0)
-        dirs.push((home, 0));
-    }
-    dirs
+    crate::sources::project_dirs("crush")
 }
 
-/// Find up to `max` `.crush/crush.db` files under the common code roots.
+/// Find up to `max` `.crush/crush.db` files under collected project roots.
 fn discover_dbs(max: usize) -> Vec<PathBuf> {
     let mut results = Vec::new();
     for (root, max_depth) in search_dirs() {

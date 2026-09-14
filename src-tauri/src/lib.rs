@@ -3,7 +3,9 @@ pub mod cli_args;
 pub mod commands;
 pub mod export;
 pub mod models;
+pub mod provider_settings;
 pub mod providers;
+pub mod settings_transport;
 pub mod sources;
 pub mod utils;
 pub mod wsl;
@@ -41,11 +43,7 @@ use crate::commands::{
         get_archive_disk_usage, get_archive_sessions, get_expiring_sessions, list_archives,
         load_archive_session_messages, rename_archive,
     },
-    claude_settings::{
-        get_all_mcp_servers, get_all_settings, get_claude_json_config, get_mcp_servers,
-        get_settings_by_scope, read_text_file, save_mcp_servers, save_screenshot, save_settings,
-        write_text_file,
-    },
+    claude_settings::{read_text_file, save_screenshot, write_text_file},
     feedback::{get_system_info, open_github_issues, send_feedback},
     mcp_presets::{delete_mcp_preset, get_mcp_preset, load_mcp_presets, save_mcp_preset},
     metadata::{
@@ -54,9 +52,9 @@ use crate::commands::{
         MetadataState,
     },
     multi_provider::{
-        detect_providers, get_provider_message_offset, load_provider_messages,
-        load_provider_messages_paginated, load_provider_sessions, load_provider_sessions_page,
-        scan_all_projects, search_all_providers,
+        detect_providers, get_provider_message_offset, list_filesystem_sources,
+        load_provider_messages, load_provider_messages_paginated, load_provider_sessions,
+        load_provider_sessions_page, scan_all_projects, search_all_providers,
     },
     project::{
         detect_claude_config_dir, get_claude_folder_path, get_git_log, scan_projects,
@@ -234,14 +232,6 @@ fn run_tauri() {
             load_unified_presets,
             get_unified_preset,
             delete_unified_preset,
-            // Claude Code settings commands
-            get_settings_by_scope,
-            save_settings,
-            get_all_settings,
-            get_mcp_servers,
-            get_all_mcp_servers,
-            save_mcp_servers,
-            get_claude_json_config,
             // File I/O commands for export/import
             write_text_file,
             read_text_file,
@@ -257,6 +247,10 @@ fn run_tauri() {
             stop_file_watcher,
             // Multi-provider commands
             detect_providers,
+            list_filesystem_sources,
+            provider_settings::list_provider_settings,
+            provider_settings::read_provider_settings,
+            provider_settings::apply_provider_settings,
             scan_all_projects,
             load_provider_sessions,
             load_provider_sessions_page,

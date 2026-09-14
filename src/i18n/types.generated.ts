@@ -5,8 +5,8 @@
  * 직접 수정하지 마세요.
  *
  * 생성 명령: pnpm run generate:i18n-types
- * 생성 시간: 2026-09-10T17:01:14.084Z
- * 총 키 개수: 2010
+ * 생성 시간: 2026-09-14T11:18:33.059Z
+ * 총 키 개수: 2023
  * Namespace 수: 12
  */
 
@@ -41,7 +41,7 @@ export type I18nNamespace =
   | 'kanban';
 
 /**
- * common namespace의 번역 키 (187개)
+ * common namespace의 번역 키 (185개)
  * 파일: locales/{lang}/common.json
  */
 export type CommonKeys =
@@ -97,7 +97,6 @@ export type CommonKeys =
   | 'common.id'
   | 'common.input'
   | 'common.loading'
-  | 'common.local'
   | 'common.mobile.closeSidebar'
   | 'common.mobile.openNavigator'
   | 'common.mobile.openSidebar'
@@ -144,7 +143,6 @@ export type CommonKeys =
   | 'common.provider.zcode'
   | 'common.provider.zed'
   | 'common.refresh'
-  | 'common.remote'
   | 'common.remove'
   | 'common.restartApp'
   | 'common.retry'
@@ -685,7 +683,7 @@ export type SessionKeys =
   | 'sessionPicker.title';
 
 /**
- * settings namespace의 번역 키 (529개)
+ * settings namespace의 번역 키 (544개)
  * 파일: locales/{lang}/settings.json
  */
 export type SettingsKeys =
@@ -1114,6 +1112,21 @@ export type SettingsKeys =
   | 'settingsManager.scope.user.priority'
   | 'settingsManager.scope.user.title'
   | 'settingsManager.scopeSettings'
+  | 'settingsManager.sources.absent'
+  | 'settingsManager.sources.collected'
+  | 'settingsManager.sources.description'
+  | 'settingsManager.sources.directory'
+  | 'settingsManager.sources.empty'
+  | 'settingsManager.sources.extra'
+  | 'settingsManager.sources.file'
+  | 'settingsManager.sources.home'
+  | 'settingsManager.sources.local'
+  | 'settingsManager.sources.localSettings'
+  | 'settingsManager.sources.mirroredTo'
+  | 'settingsManager.sources.pending'
+  | 'settingsManager.sources.projectRoot'
+  | 'settingsManager.sources.ssh'
+  | 'settingsManager.sources.title'
   | 'settingsManager.tabs.editor'
   | 'settingsManager.tabs.exportImport'
   | 'settingsManager.tabs.mcp'
@@ -2481,7 +2494,6 @@ export type TranslationKey =
   | 'common.id'
   | 'common.input'
   | 'common.loading'
-  | 'common.local'
   | 'common.mobile.closeSidebar'
   | 'common.mobile.openNavigator'
   | 'common.mobile.openSidebar'
@@ -2528,7 +2540,6 @@ export type TranslationKey =
   | 'common.provider.zcode'
   | 'common.provider.zed'
   | 'common.refresh'
-  | 'common.remote'
   | 'common.remove'
   | 'common.restartApp'
   | 'common.retry'
@@ -3780,6 +3791,21 @@ export type TranslationKey =
   | 'settingsManager.scope.user.priority'
   | 'settingsManager.scope.user.title'
   | 'settingsManager.scopeSettings'
+  | 'settingsManager.sources.absent'
+  | 'settingsManager.sources.collected'
+  | 'settingsManager.sources.description'
+  | 'settingsManager.sources.directory'
+  | 'settingsManager.sources.empty'
+  | 'settingsManager.sources.extra'
+  | 'settingsManager.sources.file'
+  | 'settingsManager.sources.home'
+  | 'settingsManager.sources.local'
+  | 'settingsManager.sources.localSettings'
+  | 'settingsManager.sources.mirroredTo'
+  | 'settingsManager.sources.pending'
+  | 'settingsManager.sources.projectRoot'
+  | 'settingsManager.sources.ssh'
+  | 'settingsManager.sources.title'
   | 'settingsManager.tabs.editor'
   | 'settingsManager.tabs.exportImport'
   | 'settingsManager.tabs.mcp'

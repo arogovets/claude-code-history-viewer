@@ -29,16 +29,7 @@ pub fn get_base_path() -> Option<PathBuf> {
         }
     }
 
-    let home = crate::sources::home_dir()?;
-
-    #[cfg(target_os = "macos")]
-    let base = home.join("Library/Application Support/Cursor/User");
-
-    #[cfg(target_os = "linux")]
-    let base = home.join(".config/Cursor/User");
-
-    #[cfg(target_os = "windows")]
-    let base = home.join("AppData/Roaming/Cursor/User");
+    let base = super::collection::existing_home(super::ProviderId::Cursor)?;
 
     if base.is_dir() {
         Some(base)

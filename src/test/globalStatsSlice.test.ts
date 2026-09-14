@@ -62,7 +62,7 @@ type TestStore = GlobalStatsSlice & {
 const createTestStore = () => {
   const setError = vi.fn();
   return create<TestStore>()((set, get) => ({
-    claudePath: "/tmp/claude",
+    claudePath: "",
     activeProviders: ["claude"],
     dateFilter: { start: null, end: null },
     setError,
@@ -116,7 +116,7 @@ describe("globalStatsSlice", () => {
 
     expect(mockFetchGlobalStatsSummary).toHaveBeenCalledTimes(1);
     expect(mockFetchGlobalStatsSummary).toHaveBeenCalledWith(
-      "/tmp/claude",
+      "",
       "billing_total",
       ["codex"],
       undefined,
@@ -128,7 +128,7 @@ describe("globalStatsSlice", () => {
     expect(useStore.getState().globalConversationSummary).toEqual(summary);
   });
 
-  it("forwards customClaudePaths from settings to the global stats fetch (#362)", async () => {
+  it("ignores preserved customClaudePaths when fetching mirror statistics", async () => {
     const useStore = createTestStore();
     const summary = buildGlobalSummary();
     const customClaudePaths = [{ path: "/extra/claude", label: "Extra" }];
@@ -141,12 +141,12 @@ describe("globalStatsSlice", () => {
     await useStore.getState().loadGlobalStats();
 
     expect(mockFetchGlobalStatsSummary).toHaveBeenCalledWith(
-      "/tmp/claude",
+      "",
       "billing_total",
       ["codex"],
       undefined,
       undefined,
-      customClaudePaths,
+      undefined,
     );
   });
 
@@ -184,7 +184,7 @@ describe("globalStatsSlice", () => {
 
     expect(mockFetchGlobalStatsSummary).toHaveBeenNthCalledWith(
       1,
-      "/tmp/claude",
+      "",
       "billing_total",
       ["claude"],
       start.toISOString(),
@@ -193,7 +193,7 @@ describe("globalStatsSlice", () => {
     );
     expect(mockFetchGlobalStatsSummary).toHaveBeenNthCalledWith(
       2,
-      "/tmp/claude",
+      "",
       "conversation_only",
       ["claude"],
       start.toISOString(),

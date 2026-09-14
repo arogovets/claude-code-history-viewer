@@ -33,8 +33,6 @@ import { useAppStore } from "@/store/useAppStore";
 import type { ClaudeMessage, ClaudeProject, ClaudeSession, ContentItem, LocatedSession } from "@/types";
 import {
     getProviderLabel,
-    getWslSearchableProviderIds,
-    hasNonDefaultProvider,
     getProviderBadgeStyle,
 } from "@/utils/providers";
 import { cn } from "@/lib/utils";
@@ -103,7 +101,6 @@ export const GlobalSearchModal = ({
     const resolveTokenRef = useRef(0);
 
     const {
-        claudePath,
         projects,
         selectProject,
         selectSession,
@@ -113,7 +110,6 @@ export const GlobalSearchModal = ({
         navigateToMessage,
         clearTargetMessage,
         setAnalyticsCurrentView,
-        userMetadata,
         isProjectHidden,
     } = useAppStore();
 
@@ -237,15 +233,7 @@ export const GlobalSearchModal = ({
         async (searchQuery: string) => {
             const trimmedQuery = searchQuery.trim();
 
-            const hasNonClaudeProviders = hasNonDefaultProvider(activeProviders);
-            const customClaudePaths = userMetadata?.settings?.customClaudePaths;
-            const hasCustomPaths = (customClaudePaths?.length ?? 0) > 0;
-            const wslEnabled = userMetadata?.settings?.wsl?.enabled ?? false;
-            const hasAlternativeSource = hasNonClaudeProviders || hasCustomPaths || wslEnabled;
-            const nativeClaudePath = claudePath || undefined;
-            const wslProviders = wslEnabled ? getWslSearchableProviderIds(activeProviders) : undefined;
-
-            if (trimmedQuery.length < 2 || (!claudePath && !hasAlternativeSource)) {
+            if (trimmedQuery.length < 2) {
                 setResults([]);
                 setSessionResults([]);
                 setIsSearching(false);
@@ -295,28 +283,12 @@ export const GlobalSearchModal = ({
                 if (messageTypeFilter !== "all") {
                     filters.messageType = messageTypeFilter;
                 }
-                const wslExcludedDistros = userMetadata?.settings?.wsl?.excludedDistros ?? [];
-                const useAllProvidersSearch = hasNonClaudeProviders || hasCustomPaths || wslEnabled;
                 const providersToSearch = !isExcludedFilter && selectedProject?.provider
                     ? [selectedProject.provider]
                     : activeProviders;
-
-                const searchResults = await api<GlobalSearchResult[]>(
-                    useAllProvidersSearch ? "search_all_providers" : "search_messages",
-                    useAllProvidersSearch
-                        ? {
-                              claudePath: nativeClaudePath,
-                              query: trimmedQuery,
-                              activeProviders: providersToSearch,
-                              filters,
-                              limit: MAX_RESULTS,
-                              customClaudePaths: hasCustomPaths ? customClaudePaths : undefined,
-                              wslEnabled,
-                              wslProviders,
-                              wslExcludedDistros,
-                          }
-                        : { claudePath: nativeClaudePath, query: trimmedQuery, filters, limit: MAX_RESULTS },
-                );
+                const searchResults = await api<GlobalSearchResult[]>("search_all_providers", {
+                    query: trimmedQuery, activeProviders: providersToSearch, filters, limit: MAX_RESULTS,
+                });
 
                 if (isExcludedFilter && selectedProject) {
                     const selectedSourceId = getProjectSourceId(selectedProject);
@@ -375,7 +347,7 @@ export const GlobalSearchModal = ({
                 setIsSearching(false);
             }
         },
-        [claudePath, activeProviders, effectiveProjectPath, isExcludedFilter, selectedProject, projects, sessions, messageTypeFilter, userMetadata, t],
+        [activeProviders, effectiveProjectPath, isExcludedFilter, selectedProject, projects, sessions, messageTypeFilter, t],
     );
 
     // Handle input change with debounce

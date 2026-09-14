@@ -27,16 +27,16 @@ const NO_CONVERSATION: &str = "__none__";
 
 fn get_db_path() -> Option<PathBuf> {
     if let Ok(p) = crate::sources::env_var("LLM_USER_PATH") {
-        let p = p.trim();
-        if !p.is_empty() {
-            return Some(PathBuf::from(p).join("logs.db"));
+        if !p.trim().is_empty() {
+            return Some(PathBuf::from(p.trim()).join("logs.db"));
         }
     }
-    Some(
-        crate::sources::config_dir()?
-            .join("io.datasette.llm")
-            .join("logs.db"),
-    )
+    let paths = super::collection::home_paths(super::ProviderId::Llm);
+    let base = paths
+        .iter()
+        .find(|p| p.join("logs.db").is_file())
+        .or_else(|| paths.first())?;
+    Some(base.join("logs.db"))
 }
 
 /// Detect an `llm` installation (only when the logs DB exists).

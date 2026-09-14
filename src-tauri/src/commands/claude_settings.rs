@@ -603,6 +603,7 @@ pub async fn get_claude_json_config(
 /// Checks: absolute path, no `..` traversal, parent directory exists.
 /// Used by [`write_text_file`], [`read_text_file`], and [`save_screenshot`].
 pub(crate) fn validate_dialog_path(path: &Path) -> Result<(), String> {
+    crate::provider_settings::reject_generic_settings_path(path)?;
     if !path.is_absolute() {
         return Err("Path must be absolute".to_string());
     }

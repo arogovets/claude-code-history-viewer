@@ -6,7 +6,7 @@
 
 import { api } from "@/services/api";
 import { storageAdapter } from "@/services/storage";
-import type { ClaudeProject, ClaudeSession, SessionPage, AppError, ProviderId, UserSettings } from "../../types";
+import type { ClaudeProject, ClaudeSession, SessionPage, AppError, ProviderId } from "../../types";
 import { AppErrorType } from "../../types";
 import type { StateCreator } from "zustand";
 import { toast } from "sonner";
@@ -168,71 +168,12 @@ const isSameSession = (
   session.session_id === selectedSession.session_id ||
   session.actual_session_id === selectedSession.actual_session_id;
 
-const scanProviderProjects = async ({
-  provider,
-  claudePath,
-  customClaudePaths,
-  settings,
-}: {
-  provider: ProviderId;
-  claudePath: string;
-  customClaudePaths: UserSettings["customClaudePaths"];
-  settings: UserSettings | undefined;
-}): Promise<ClaudeProject[]> => {
-  const hasCustomPaths = customClaudePaths != null && customClaudePaths.length > 0;
-  const wslEnabled = settings?.wsl?.enabled ?? false;
-
-  if (provider === DEFAULT_PROVIDER_ID && !hasCustomPaths && !wslEnabled) {
-    if (!claudePath) {
-      return [];
-    }
-    const projects = await api<ClaudeProject[]>("scan_projects", {
-      claudePath,
-    });
-    return withProvider(projects, provider);
-  }
-
+const scanProviderProjects = async (provider: ProviderId): Promise<ClaudeProject[]> => {
   const projects = await api<ClaudeProject[]>("scan_all_projects", {
-    ...(claudePath && { claudePath }),
     activeProviders: [provider],
-    ...(provider === DEFAULT_PROVIDER_ID && hasCustomPaths
-      ? { customClaudePaths }
-      : {}),
-    ...(provider === DEFAULT_PROVIDER_ID
-      ? {
-          wslEnabled,
-          wslExcludedDistros: settings?.wsl?.excludedDistros ?? [],
-        }
-      : {}),
   });
   return withProvider(projects, provider);
 };
-
-// ============================================================================
-// CLAUDE_CONFIG_DIR Auto-detection
-// ============================================================================
-
-/** Auto-register CLAUDE_CONFIG_DIR as a custom directory if not already present. */
-async function autoRegisterConfigDir(get: () => FullAppStore): Promise<void> {
-  try {
-    if (get().isServerReadOnly) return;
-
-    const detected = await api<string | null>("detect_claude_config_dir");
-    if (!detected) return;
-
-    const normalize = (p: string) => p.replace(/[\\/]+$/, "");
-    const normalizedDetected = normalize(detected);
-    const existing = get().userMetadata?.settings?.customClaudePaths ?? [];
-    const alreadyRegistered = existing.some((cp) => normalize(cp.path) === normalizedDetected);
-    if (alreadyRegistered) return;
-
-    await get().addCustomClaudePath(detected, "CLAUDE_CONFIG_DIR");
-  } catch {
-    if (import.meta.env.DEV) {
-      console.warn("[autoRegisterConfigDir] Failed to detect CLAUDE_CONFIG_DIR");
-    }
-  }
-}
 
 // ============================================================================
 // Slice Creator
@@ -267,65 +208,9 @@ export const createProjectSlice: StateCreator<
       if (savedProviderIds.length > 0) {
         get().setActiveProviders(savedProviderIds);
       }
-      const hasSavedNonClaudeProviders = savedProviderIds.some(
-        (provider) => provider !== DEFAULT_PROVIDER_ID
-      );
-      const savedSettings = get().userMetadata?.settings;
-      const hasCustomClaudePaths =
-        (savedSettings?.customClaudePaths?.length ?? 0) > 0;
-      const hasWslSource = savedSettings?.wsl?.enabled ?? false;
-      const hasConfiguredScanSource =
-        hasSavedNonClaudeProviders || hasCustomClaudePaths || hasWslSource;
-
-      // Try to load saved settings first
-      try {
-        const store = await storageAdapter.load("settings.json", {
-          autoSave: false,
-          defaults: {},
-        });
-        const savedPath = await store.get<string>("claudePath");
-
-        if (savedPath) {
-          const isValid = await api<boolean>("validate_claude_folder", {
-            path: savedPath,
-          });
-          if (isValid) {
-            set({ claudePath: savedPath });
-            await get().scanProjects();
-            return;
-          }
-        }
-      } catch {
-        console.log("No saved settings found");
-      }
-
-      // Try the default Claude path. Provider discovery is intentionally not
-      // part of startup: scanning every supported provider can touch protected
-      // user folders before the user has asked to browse them.
-      try {
-        const claudePath = await api<string>("get_claude_folder_path");
-        set({ claudePath });
-        await get().scanProjects();
-        return;
-      } catch (claudeFolderError) {
-        const claudeErrorMessage =
-          claudeFolderError instanceof Error
-            ? claudeFolderError.message
-            : String(claudeFolderError);
-        if (!claudeErrorMessage.includes("CLAUDE_FOLDER_NOT_FOUND:")) {
-          throw claudeFolderError;
-        }
-
-        // A user who previously opted in to another provider (or configured a
-        // custom Claude/WSL source) should not be forced through the Claude
-        // folder picker on every launch.
-        if (hasConfiguredScanSource) {
-          await get().scanProjects();
-          return;
-        }
-
-        throw claudeFolderError;
-      }
+      // Runtime history is resolved from registered mirrors, including when
+      // there is no Claude installation on the viewer host.
+      await get().scanProjects();
     } catch (error) {
       console.error("Failed to initialize app:", error);
       const errorMessage =
@@ -362,7 +247,6 @@ export const createProjectSlice: StateCreator<
       await get().scanProjects();
       return;
     }
-    await autoRegisterConfigDir(get);
     const discoveredProviderIds = normalizeProviderIds(
       get().providers
         .filter((provider) => provider.is_available)
@@ -387,11 +271,8 @@ export const createProjectSlice: StateCreator<
   // not block fast providers from appearing in the sidebar.
   scanProjects: async () => {
     const requestId = nextRequestId("scanProjects");
-    const { claudePath, providers, activeProviders } = get();
-    const customClaudePaths = get().userMetadata?.settings?.customClaudePaths;
-    const hasCustomPaths = customClaudePaths != null && customClaudePaths.length > 0;
+    const { providers, activeProviders } = get();
     const settings = get().userMetadata?.settings;
-    const wslEnabled = settings?.wsl?.enabled ?? false;
     const detectedProviderIds = normalizeProviderIds(
       providers
         .filter((provider) => provider.is_available)
@@ -410,19 +291,11 @@ export const createProjectSlice: StateCreator<
           ? requestedProviderIds
           : [DEFAULT_PROVIDER_ID]
     );
-    if (claudePath || hasCustomPaths || wslEnabled) {
-      providerSet.add(DEFAULT_PROVIDER_ID);
-    }
     const scanProviders = PROVIDER_IDS.filter((provider) => providerSet.has(provider));
-    const hasNonClaudeProviders = scanProviders.some((provider) => provider !== DEFAULT_PROVIDER_ID);
-    // Allow scanning when at least one source is available: a saved Claude path,
-    // a custom Claude path, WSL, or any non-Claude provider detected on disk (#222).
-    if (!claudePath && !hasCustomPaths && !wslEnabled && !hasNonClaudeProviders) return;
 
     set({ isLoadingProjects: true, error: null });
     try {
       const start = performance.now();
-      const settings = get().userMetadata?.settings;
       const previouslyLoadedProjects = get().projects.filter((project) =>
         scanProviders.includes(getProviderId(project.provider))
       );
@@ -462,12 +335,7 @@ export const createProjectSlice: StateCreator<
       await Promise.all(
         scanProviders.map(async (provider) => {
           try {
-            const providerProjects = await scanProviderProjects({
-              provider,
-              claudePath,
-              customClaudePaths,
-              settings,
-            });
+            const providerProjects = await scanProviderProjects(provider);
             if (requestId !== getRequestId("scanProjects")) {
               return;
             }

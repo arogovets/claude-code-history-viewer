@@ -62,6 +62,12 @@ fn compare_global_search_results(
         })
 }
 
+/// Read-only collector inventory; no source-host access.
+#[tauri::command]
+pub async fn list_filesystem_sources() -> Result<Vec<crate::sources::Source>, String> {
+    crate::sources::inventory()
+}
+
 /// Detect all available providers
 #[tauri::command]
 pub async fn detect_providers() -> Result<Vec<providers::ProviderInfo>, String> {

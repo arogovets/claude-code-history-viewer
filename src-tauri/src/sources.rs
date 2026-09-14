@@ -7,8 +7,72 @@ use std::path::{Path, PathBuf};
 pub struct Source {
     pub id: String,
     pub label: String,
-    #[serde(skip)]
+    #[serde(default)]
+    pub allow_settings_write: bool,
+    #[serde(default)]
     pub current: PathBuf,
+    #[serde(default)]
+    pub origin: Origin,
+    #[serde(default)]
+    pub mounts: Vec<Mount>,
+    #[serde(default)]
+    pub last_collected_at: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct Origin {
+    pub ssh: Option<String>,
+    pub home: Option<String>,
+    #[serde(default)]
+    pub paths: Vec<Mount>,
+    #[serde(default)]
+    pub project_roots: Vec<Mount>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Mount {
+    pub path: String,
+    pub mirror_path: String,
+    #[serde(default = "directory_kind")]
+    pub kind: String,
+    #[serde(default)]
+    pub providers: Vec<String>,
+    #[serde(default)]
+    pub role: Option<String>,
+    pub available: Option<bool>,
+}
+
+fn directory_kind() -> String {
+    "directory".into()
+}
+
+pub fn relative_mount(value: &str) -> Result<PathBuf, String> {
+    if value.is_empty()
+        || value.contains('\\')
+        || value.chars().any(char::is_control)
+        || Path::new(value).is_absolute()
+        || value
+            .split('/')
+            .any(|part| part.is_empty() || part == "." || part == "..")
+    {
+        return Err("Invalid relative mirror mount".into());
+    }
+    Ok(PathBuf::from(value))
+}
+
+fn validate_mount(current: &Path, mount: &Mount) -> Result<(), String> {
+    let relative = relative_mount(&mount.mirror_path)?;
+    if !["directory", "file"].contains(&mount.kind.as_str()) {
+        return Err("Invalid mount kind".into());
+    }
+    let mut path = current.to_owned();
+    for part in relative.components() {
+        path.push(part);
+        if path.is_symlink() {
+            return Err("Mirror mount contains a symlink".into());
+        }
+    }
+    Ok(())
 }
 
 tokio::task_local! { static ASYNC_HOME: PathBuf; }
@@ -27,6 +91,14 @@ pub fn root() -> Option<PathBuf> {
 }
 
 pub fn list() -> Result<Vec<Source>, String> {
+    Ok(inventory()?
+        .into_iter()
+        .filter(|s| s.current.is_dir())
+        .collect())
+}
+
+/// Registered sources, including those awaiting their first successful capture.
+pub fn inventory() -> Result<Vec<Source>, String> {
     let root = root().ok_or("Could not resolve mirror root")?;
     if !root.exists() {
         return Ok(Vec::new());
@@ -38,6 +110,9 @@ pub fn list() -> Result<Vec<Source>, String> {
             continue;
         }
         let metadata = entry.path().join("source.json");
+        if metadata.is_symlink() {
+            return Err("Source metadata must not be a symlink".into());
+        }
         if !metadata.is_file() {
             continue;
         }
@@ -45,6 +120,12 @@ pub fn list() -> Result<Vec<Source>, String> {
             serde_json::from_slice(&std::fs::read(metadata).map_err(|e| e.to_string())?)
                 .map_err(|e| e.to_string())?;
         if source.id != entry.file_name().to_string_lossy()
+            || source.id.len() > 64
+            || !source
+                .id
+                .bytes()
+                .next()
+                .is_some_and(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
             || !source
                 .id
                 .bytes()
@@ -56,9 +137,31 @@ pub fn list() -> Result<Vec<Source>, String> {
         if source.current.is_symlink() {
             return Err("Mirror current must not be a symlink".into());
         }
-        if source.current.is_dir() {
-            sources.push(source);
+        if source.mounts.is_empty() {
+            source.mounts.clone_from(&source.origin.paths);
         }
+        for mount in &mut source.mounts {
+            if mount.providers.is_empty() {
+                let relative = relative_mount(&mount.mirror_path)?;
+                for spec in crate::providers::collection::specs() {
+                    if spec.home_paths.iter().any(|p| {
+                        let base = Path::new(&p.path);
+                        relative.starts_with(base) || base.starts_with(&relative)
+                    }) {
+                        mount.providers.push(spec.provider.as_str().into());
+                    }
+                }
+            }
+        }
+        for mount in source
+            .mounts
+            .iter()
+            .chain(&source.origin.project_roots)
+            .chain(&source.origin.paths)
+        {
+            validate_mount(&source.current, mount)?;
+        }
+        sources.push(source);
     }
     sources.sort_by(|a, b| a.id.cmp(&b.id));
     Ok(sources)
@@ -119,6 +222,35 @@ pub fn env_var(key: &str) -> Result<String, std::env::VarError> {
         let _ = key;
         Err(std::env::VarError::NotPresent)
     }
+}
+
+/// Project-local discovery uses recorded mounts, never guessed current-host code roots.
+pub fn project_dirs(provider: &str) -> Vec<(PathBuf, usize)> {
+    let Some(home) = home_dir() else {
+        return Vec::new();
+    };
+    let source = inventory()
+        .unwrap_or_default()
+        .into_iter()
+        .find(|s| s.current == home);
+    if let Some(source) = source {
+        return source
+            .mounts
+            .iter()
+            .filter(|m| {
+                (m.role.as_deref() == Some("project_root")
+                    && m.providers.iter().any(|p| p == provider))
+                    // Legacy/manual project directories remain local mirror mounts.
+                    || (m.kind == "directory" && m.providers.is_empty()
+                        && matches!(m.role.as_deref(), None | Some("extra")))
+            })
+            .filter_map(|m| {
+                let path = home.join(relative_mount(&m.mirror_path).ok()?);
+                path.is_dir().then_some((path, usize::MAX))
+            })
+            .collect();
+    }
+    Vec::new()
 }
 
 pub fn config_dir() -> Option<PathBuf> {
@@ -303,6 +435,10 @@ mod tests {
             id: "local".into(),
             label: "Local".into(),
             current: temp.path().join("current"),
+            origin: Origin::default(),
+            mounts: Vec::new(),
+            last_collected_at: None,
+            allow_settings_write: false,
         };
         let manifest = temp.path().join("source.json");
         let mut metadata = serde_json::json!({"origin": {"ssh": null, "paths": [
@@ -370,6 +506,10 @@ mod tests {
             id: "a".into(),
             label: "Same label".into(),
             current: "/mirror/a".into(),
+            origin: Origin::default(),
+            mounts: Vec::new(),
+            last_collected_at: None,
+            allow_settings_write: false,
         };
         let b = Source {
             id: "b".into(),

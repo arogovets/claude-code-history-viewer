@@ -2060,6 +2060,24 @@ pub async fn get_session_subagents(session_path: String) -> Result<Vec<SubagentS
     crate::sources::require_history_path(&session_path)?;
     use crate::utils::find_subagent_files;
 
+    // Database handles carry source identity. Resolve it before provider dispatch,
+    // and scope discovery to that source's mirror rather than the default source.
+    if session_path.starts_with("source:") {
+        let (source, inner) = crate::sources::resolve(&session_path)?;
+        return Ok(crate::sources::sync_scope(source.current.clone(), || {
+            let mut children = if inner.starts_with("opencode://") {
+                opencode_subagents(&inner)
+            } else {
+                // Other URI providers do not currently expose child-session discovery.
+                Vec::new()
+            };
+            for child in &mut children {
+                child.file_path = crate::sources::qualify(&source, &child.file_path);
+            }
+            children
+        }));
+    }
+
     // OpenCode keeps subagent runs as child rows in SQLite rather than as
     // sidechain files beside the parent, so the file scan below has nothing to
     // find and the absolute-path check would reject the URI outright (#560).

@@ -19,7 +19,7 @@ import { EffectiveSummaryBanner } from "./EffectiveSummaryBanner";
 import { EditorFooter } from "./EditorFooter";
 import { GeneralSection } from "../sections/GeneralSection";
 import { PermissionsSection } from "../sections/PermissionsSection";
-import { MCPServersSection } from "../sections/MCPServersSection";
+
 import { HooksSection } from "../sections/HooksSection";
 import { EnvVarsSection } from "../sections/EnvVarsSection";
 import { EmptyState } from "../components/EmptyState";
@@ -79,7 +79,7 @@ type SaveResult = {
   message: string;
 } | null;
 
-export const SettingsEditorPane: React.FC = () => {
+export const SettingsEditorPane: React.FC<{ sourceScoped?: boolean }> = ({ sourceScoped = false }) => {
   const { t } = useTranslation();
   const {
     allSettings,
@@ -324,11 +324,7 @@ export const SettingsEditorPane: React.FC = () => {
 
               {/* MCP Servers Section */}
               <div ref={(el) => { sectionRefs.current["mcp"] = el; }}>
-                <MCPServersSection
-                  isExpanded={expandedSections.has("mcp")}
-                  onToggle={() => toggleSection("mcp")}
-                  readOnly={isReadOnly}
-                />
+                <p className="p-3 text-sm text-muted-foreground">Select the MCP scope above to edit MCP servers for this source.</p>
               </div>
 
               {/* Hooks Section */}
@@ -445,7 +441,7 @@ export const SettingsEditorPane: React.FC = () => {
       </Card>
 
       {/* What's Active? - Effective Settings Summary (collapsed by default) */}
-      {allSettings && (
+      {allSettings && !sourceScoped && (
         <EffectiveSummaryBanner allSettings={allSettings} />
       )}
     </main>

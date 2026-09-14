@@ -83,7 +83,7 @@ vi.mock("sonner", () => ({
     },
 }));
 
-describe("GlobalSearchModal WSL search routing", () => {
+describe("GlobalSearchModal filesystem source routing", () => {
     beforeEach(() => {
         vi.clearAllMocks();
         mockApi.mockResolvedValue([]);
@@ -92,7 +92,7 @@ describe("GlobalSearchModal WSL search routing", () => {
         storeState.userMetadata.settings.wsl.enabled = true;
     });
 
-    it("searches WSL when no native Claude path is configured", async () => {
+    it("searches mirrors without a native Claude path", async () => {
         storeState.activeProviders = ["claude", "codex"];
         render(<GlobalSearchModal isOpen onClose={vi.fn()} />);
 
@@ -104,11 +104,8 @@ describe("GlobalSearchModal WSL search routing", () => {
             expect(mockApi).toHaveBeenCalledWith(
                 "search_all_providers",
                 expect.objectContaining({
-                    claudePath: undefined,
                     query: "hello",
                     activeProviders: ["claude", "codex"],
-                    wslEnabled: true,
-                    wslProviders: ["claude"],
                 }),
             );
         });
@@ -128,16 +125,14 @@ describe("GlobalSearchModal WSL search routing", () => {
             expect(mockApi).toHaveBeenCalledWith(
                 "search_all_providers",
                 expect.objectContaining({
-                    claudePath: undefined,
                     query: "hello",
                     activeProviders: ["codex"],
-                    wslEnabled: false,
                 }),
             );
         });
     });
 
-    it("keeps the native search path when native Claude is available", async () => {
+    it("uses the mirror search API even with a legacy Claude path", async () => {
         storeState.claudePath = "/home/user/.claude";
         storeState.userMetadata.settings.wsl.enabled = false;
 
@@ -149,9 +144,8 @@ describe("GlobalSearchModal WSL search routing", () => {
 
         await waitFor(() => {
             expect(mockApi).toHaveBeenCalledWith(
-                "search_messages",
+                "search_all_providers",
                 expect.objectContaining({
-                    claudePath: "/home/user/.claude",
                     query: "hello",
                 }),
             );

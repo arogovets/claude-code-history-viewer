@@ -50,6 +50,9 @@ use self::state::AppState;
 const READ_ONLY_ALLOWED_API_PATHS: &[&str] = &[
     "/detect_claude_config_dir",
     "/detect_providers",
+    "/list_filesystem_sources",
+    "/list_provider_settings",
+    "/read_provider_settings",
     "/export_session",
     "/get_all_mcp_servers",
     "/get_all_settings",
@@ -127,6 +130,7 @@ const READ_ONLY_MUTATING_API_PATHS: &[&str] = &[
     "/save_preset",
     "/save_screenshot",
     "/save_settings",
+    "/apply_provider_settings",
     "/save_unified_preset",
     "/save_kanban",
     "/save_user_metadata",
@@ -302,6 +306,10 @@ pub fn build_router(
         .route("/stop_file_watcher", post(h::stop_file_watcher))
         // Multi-provider commands
         .route("/detect_providers", post(h::detect_providers))
+        .route("/list_filesystem_sources", post(h::list_filesystem_sources))
+        .route("/list_provider_settings", post(h::list_provider_settings))
+        .route("/read_provider_settings", post(h::read_provider_settings))
+        .route("/apply_provider_settings", post(h::apply_provider_settings))
         .route("/scan_all_projects", post(h::scan_all_projects))
         .route("/load_provider_sessions", post(h::load_provider_sessions))
         .route(
