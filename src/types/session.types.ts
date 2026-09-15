@@ -63,9 +63,10 @@ export interface ClaudeSession {
   has_tool_use: boolean;
   has_errors: boolean;
   summary?: string;
-  relevance?: number;
   /** Originating Claude Code client (raw JSONL `entrypoint` value). */
   entrypoint?: string;
+  /** Whether the session file is currently available on the source host/filesystem */
+  is_available?: boolean;
 }
 
 // ============================================================================

@@ -152,6 +152,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[serial_test::serial]
     fn build_unc_path_converts_linux_path() {
         let result = build_unc_path("Ubuntu", Path::new("/home/user/.claude"));
         assert_eq!(
@@ -161,18 +162,21 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn build_unc_path_fallback_uses_wsl_dollar() {
         let result = build_unc_path_fallback("Debian", Path::new("/home/dev/.codex"));
         assert_eq!(result, PathBuf::from(r"\\wsl$\Debian\home\dev\.codex"));
     }
 
     #[test]
+    #[serial_test::serial]
     fn build_unc_path_handles_root_path() {
         let result = build_unc_path("Ubuntu", Path::new("/"));
         assert_eq!(result, PathBuf::from(r"\\wsl.localhost\Ubuntu\"));
     }
 
     #[test]
+    #[serial_test::serial]
     fn build_unc_path_handles_nested_path() {
         let result = build_unc_path("Ubuntu", Path::new("/home/user/.local/share/opencode"));
         assert_eq!(
@@ -182,6 +186,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn is_wsl_available_returns_false_on_non_windows() {
         if !cfg!(target_os = "windows") {
             assert!(!is_wsl_available());
@@ -189,6 +194,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn detect_distros_returns_empty_on_non_windows() {
         if !cfg!(target_os = "windows") {
             assert!(detect_distros().is_empty());

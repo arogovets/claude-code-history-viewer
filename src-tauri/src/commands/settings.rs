@@ -312,6 +312,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_get_presets_folder() {
         let _temp = setup_test_env();
         let folder = get_presets_folder().unwrap();
@@ -328,6 +329,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_ensure_presets_folder() {
         let _temp = setup_test_env();
         let folder = ensure_presets_folder().unwrap();
@@ -335,7 +337,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_validate_settings_json() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let valid_settings = r#"{"hiddenPatterns":[]}"#;
         assert!(validate_settings_json(valid_settings).is_ok());
 
@@ -344,6 +348,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_save_and_load_preset() {
         let _temp = setup_test_env();
 
@@ -368,6 +373,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_load_all_presets() {
         let _temp = setup_test_env();
 
@@ -388,6 +394,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_delete_preset() {
         let _temp = setup_test_env();
 
@@ -413,6 +420,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_auto_generate_id() {
         let _temp = setup_test_env();
 
@@ -429,6 +437,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_update_preset_preserves_created_at() {
         let _temp = setup_test_env();
 

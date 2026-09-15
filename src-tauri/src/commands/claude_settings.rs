@@ -603,6 +603,7 @@ pub async fn get_claude_json_config(
 /// Checks: absolute path, no `..` traversal, parent directory exists.
 /// Used by [`write_text_file`], [`read_text_file`], and [`save_screenshot`].
 pub(crate) fn validate_dialog_path(path: &Path) -> Result<(), String> {
+    crate::provider_settings::reject_generic_settings_path(path)?;
     if !path.is_absolute() {
         return Err("Path must be absolute".to_string());
     }
@@ -837,6 +838,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_get_user_settings_path() {
         let temp = setup_test_env();
         let path = get_user_settings_path().unwrap();
@@ -856,6 +858,7 @@ mod tests {
     /// proves the sandbox holds. This fails on Windows without the
     /// `CCHV_TEST_HOME` indirection, which is the point.
     #[test]
+    #[serial_test::serial]
     fn settings_paths_stay_inside_the_sandbox() {
         let temp = setup_test_env();
         for path in [
@@ -874,6 +877,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_read_nonexistent_settings() {
         let temp = setup_test_env();
         let path = temp.path().join("nonexistent.json");
@@ -883,6 +887,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_write_and_read_settings() {
         let temp = setup_test_env();
         let claude_dir = temp.path().join(".claude");
@@ -903,6 +908,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_write_invalid_json() {
         let temp = setup_test_env();
         let path = temp.path().join("invalid.json");
@@ -913,6 +919,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_atomic_write_creates_dirs() {
         let temp = setup_test_env();
         let nested_path = temp
@@ -929,20 +936,25 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_get_settings_path_invalid_scope() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let result = get_settings_path("invalid", None);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Invalid scope"));
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_get_settings_path_project_without_path() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let result = get_settings_path("project", None);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("project_path required"));
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_get_settings_by_scope_user() {
         let temp = setup_test_env();
         let claude_dir = temp.path().join(".claude");
@@ -960,13 +972,16 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_save_settings_managed_readonly() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let result = save_settings("managed".to_string(), "{}".to_string(), None).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("read-only"));
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_get_all_settings_empty() {
         let temp = setup_test_env();
         let result = get_all_settings(None).await;
@@ -982,6 +997,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_get_mcp_servers_empty() {
         let temp = setup_test_env();
         let result = get_mcp_servers().await;
@@ -995,6 +1011,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_get_mcp_servers_merges_sources() {
         let temp = setup_test_env();
         let claude_dir = temp.path().join(".claude");
@@ -1025,6 +1042,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_mcp_json_overrides_settings_json() {
         let temp = setup_test_env();
         let claude_dir = temp.path().join(".claude");
@@ -1053,6 +1071,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_save_and_retrieve_user_settings() {
         let temp = setup_test_env();
         let content = r#"{"theme":"dark","fontSize":14}"#;
@@ -1074,6 +1093,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_validate_dialog_path_absolute_accepted() {
         let temp = setup_test_env();
         let path = temp.path().join("test.txt");
@@ -1082,7 +1102,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_validate_dialog_path_relative_rejected() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let path = Path::new("relative/path.txt");
         let result = validate_dialog_path(path);
         assert!(result.is_err());
@@ -1090,7 +1112,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_validate_dialog_path_parent_dir_rejected() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let raw = crate::test_utils::abs("some/path/../escape.txt");
         let path = Path::new(&raw);
         let result = validate_dialog_path(path);
@@ -1099,7 +1123,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_validate_dialog_path_nonexistent_parent_rejected() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let raw = crate::test_utils::abs("nonexistent_dir_abc123/file.txt");
         let path = Path::new(&raw);
         let result = validate_dialog_path(path);
@@ -1109,6 +1135,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    #[serial_test::serial]
     fn test_validate_dialog_path_symlink_parent_rejected() {
         let temp = setup_test_env();
         let real_dir = temp.path().join("real_dir");
@@ -1124,6 +1151,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_write_text_file_to_temp_dir() {
         let temp = setup_test_env();
         let file_path = temp.path().join("export-test.md");
@@ -1137,13 +1165,16 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_write_text_file_relative_path_rejected() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let result = write_text_file("relative/path.txt".to_string(), "content".to_string()).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("absolute"));
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_read_text_file_success() {
         let temp = setup_test_env();
         let file_path = temp.path().join("read-test.json");
@@ -1156,6 +1187,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_read_text_file_nonexistent_returns_error() {
         let temp = setup_test_env();
         let file_path = temp.path().join("does-not-exist.json");
@@ -1167,7 +1199,9 @@ mod tests {
 
     #[cfg(feature = "webui-server")]
     #[test]
+    #[serial_test::serial]
     fn test_strip_windows_prefix_with_prefix() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let path = Path::new(r"\\?\C:\Users\test");
         let result = strip_windows_prefix(path);
         assert_eq!(result, PathBuf::from(r"C:\Users\test"));
@@ -1175,7 +1209,9 @@ mod tests {
 
     #[cfg(feature = "webui-server")]
     #[test]
+    #[serial_test::serial]
     fn test_strip_windows_prefix_without_prefix() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let path = Path::new("/normal/unix/path");
         let result = strip_windows_prefix(path);
         assert_eq!(result, PathBuf::from("/normal/unix/path"));
@@ -1183,7 +1219,9 @@ mod tests {
 
     #[cfg(feature = "webui-server")]
     #[test]
+    #[serial_test::serial]
     fn test_strip_windows_prefix_empty() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let path = Path::new("");
         let result = strip_windows_prefix(path);
         assert_eq!(result, PathBuf::from(""));
@@ -1191,6 +1229,7 @@ mod tests {
 
     #[cfg(feature = "webui-server")]
     #[test]
+    #[serial_test::serial]
     fn test_is_safe_path_downloads_accepted() {
         let temp = setup_test_env();
         let downloads = temp.path().join("Downloads");
@@ -1205,6 +1244,7 @@ mod tests {
 
     #[cfg(feature = "webui-server")]
     #[test]
+    #[serial_test::serial]
     fn test_is_safe_path_desktop_accepted() {
         let temp = setup_test_env();
         let desktop = temp.path().join("Desktop");
@@ -1219,6 +1259,7 @@ mod tests {
 
     #[cfg(feature = "webui-server")]
     #[test]
+    #[serial_test::serial]
     fn test_is_safe_path_disallowed_dir_rejected() {
         let temp = setup_test_env();
         let random_dir = temp.path().join("SomeRandomDir");

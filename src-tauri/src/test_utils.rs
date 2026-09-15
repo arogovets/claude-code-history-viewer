@@ -482,7 +482,9 @@ mod tests {
     use super::*;
 
     #[test]
+    #[serial_test::serial]
     fn test_message_builder_user() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let msg = MessageBuilder::user().with_text_content("Hello!").build();
 
         assert_eq!(msg.message_type, "user");
@@ -490,7 +492,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_message_builder_assistant() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let msg = MessageBuilder::assistant()
             .with_text_content("Hi there!")
             .with_usage(100, 50)
@@ -502,7 +506,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_mock_claude_project() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let mock = MockClaudeProject::new();
         let session_path = mock.add_session("test-project", "session1", "{}");
 
@@ -511,7 +517,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_create_jsonl_content() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let messages = vec![
             MessageBuilder::user().with_text_content("Hello"),
             MessageBuilder::assistant().with_text_content("Hi!"),

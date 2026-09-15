@@ -19,10 +19,7 @@ vi.mock("@/components/ui", () => ({
     Input: (props: InputHTMLAttributes<HTMLInputElement>) => <input {...props} />,
     Select: ({ children }: MockProps) => <div>{children}</div>,
     SelectContent: ({ children }: MockProps) => <div>{children}</div>,
-    SelectItem: ({ children, ...props }: MockProps) => {
-        delete props.textValue;
-        return <div {...props}>{children}</div>;
-    },
+    SelectItem: ({ children, ...props }: MockProps) => <div {...props}>{children}</div>,
     SelectTrigger: ({ children, ...props }: MockProps) => <button {...props}>{children}</button>,
     SelectValue: ({ children }: MockProps) => <span>{children}</span>,
     Badge: ({ children, ...props }: MockProps) => <div {...props}>{children}</div>,
@@ -86,7 +83,7 @@ vi.mock("sonner", () => ({
     },
 }));
 
-describe("GlobalSearchModal WSL search routing", () => {
+describe("GlobalSearchModal filesystem source routing", () => {
     beforeEach(() => {
         vi.clearAllMocks();
         mockApi.mockResolvedValue([]);
@@ -95,7 +92,7 @@ describe("GlobalSearchModal WSL search routing", () => {
         storeState.userMetadata.settings.wsl.enabled = true;
     });
 
-    it("searches WSL when no native Claude path is configured", async () => {
+    it("searches mirrors without a native Claude path", async () => {
         storeState.activeProviders = ["claude", "codex"];
         render(<GlobalSearchModal isOpen onClose={vi.fn()} />);
 
@@ -107,11 +104,8 @@ describe("GlobalSearchModal WSL search routing", () => {
             expect(mockApi).toHaveBeenCalledWith(
                 "search_all_providers",
                 expect.objectContaining({
-                    claudePath: undefined,
                     query: "hello",
                     activeProviders: ["claude", "codex"],
-                    wslEnabled: true,
-                    wslProviders: ["claude"],
                 }),
             );
         });
@@ -131,16 +125,14 @@ describe("GlobalSearchModal WSL search routing", () => {
             expect(mockApi).toHaveBeenCalledWith(
                 "search_all_providers",
                 expect.objectContaining({
-                    claudePath: undefined,
                     query: "hello",
                     activeProviders: ["codex"],
-                    wslEnabled: false,
                 }),
             );
         });
     });
 
-    it("keeps the native search path when native Claude is available", async () => {
+    it("uses the mirror search API even with a legacy Claude path", async () => {
         storeState.claudePath = "/home/user/.claude";
         storeState.userMetadata.settings.wsl.enabled = false;
 
@@ -152,80 +144,11 @@ describe("GlobalSearchModal WSL search routing", () => {
 
         await waitFor(() => {
             expect(mockApi).toHaveBeenCalledWith(
-                "search_messages",
+                "search_all_providers",
                 expect.objectContaining({
-                    claudePath: "/home/user/.claude",
                     query: "hello",
                 }),
             );
         });
-    });
-
-    it("renders project filter with provider and remote/local badges", () => {
-        storeState.projects = [
-            {
-                name: "cchv",
-                path: "/Users/emac/Dev/cchv",
-                actual_path: "/Users/emac/Dev/cchv",
-                provider: "claude",
-                session_count: 5,
-                message_count: 50,
-                last_modified: "2026-09-07T00:00:00Z",
-            },
-            {
-                name: "master",
-                path: "remote://http://100.93.94.80:3728#/home/arogovets/.codex/sessions",
-                actual_path: "/home/arogovets/master",
-                provider: "codex",
-                custom_directory_label: "arogovets@100.93.94.80",
-                session_count: 3,
-                message_count: 30,
-                last_modified: "2026-09-07T00:00:00Z",
-            },
-        ];
-
-        render(<GlobalSearchModal isOpen onClose={vi.fn()} />);
-
-        // Check project names
-        expect(screen.getAllByText("cchv").length).toBeGreaterThanOrEqual(1);
-        expect(screen.getAllByText("master").length).toBeGreaterThanOrEqual(1);
-
-        // Check providers
-        expect(screen.getAllByText("Claude Code").length).toBeGreaterThanOrEqual(1);
-        expect(screen.getAllByText("Codex CLI").length).toBeGreaterThanOrEqual(1);
-
-        // Check local and remote badges
-        expect(screen.getAllByText("Local").length).toBeGreaterThanOrEqual(1);
-        expect(screen.getAllByText("arogovets@100.93.94.80").length).toBeGreaterThanOrEqual(1);
-
-        // Check exclude section is rendered
-        expect(screen.getByText("Exclude project (spam filter)")).toBeDefined();
-    });
-
-    it("persists project filter selection in localStorage and restores it", () => {
-        localStorage.setItem("cchv_global_search_project_filter", "exclude:/Users/emac/Dev/cchv");
-        storeState.projects = [
-            {
-                name: "cchv",
-                path: "/Users/emac/Dev/cchv",
-                actual_path: "/Users/emac/Dev/cchv",
-                provider: "claude",
-                session_count: 5,
-                message_count: 50,
-                last_modified: "2026-09-07T00:00:00Z",
-            },
-            {
-                name: "master",
-                path: "/Users/emac/Dev/master",
-                actual_path: "/Users/emac/Dev/master",
-                provider: "claude",
-                session_count: 3,
-                message_count: 30,
-                last_modified: "2026-09-07T00:00:00Z",
-            },
-        ];
-
-        render(<GlobalSearchModal isOpen onClose={vi.fn()} />);
-        expect(screen.getAllByText("Exclude:").length).toBeGreaterThanOrEqual(1);
     });
 });

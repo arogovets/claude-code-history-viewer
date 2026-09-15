@@ -33,7 +33,7 @@ const SUMMARY_MAX_CHARS: usize = 80;
 
 /// `~/.openhands/sessions` (the classic `file_store_path` default).
 fn sessions_dir() -> Option<PathBuf> {
-    let dir = crate::utils::home_dir()?
+    let dir = crate::sources::home_dir()?
         .join(".openhands")
         .join("sessions");
     if dir.is_dir() {
@@ -468,6 +468,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn convert_user_and_assistant_messages() {
         let u = convert_event(&user_event(), "s1", 0).unwrap();
         assert_eq!(u.role.as_deref(), Some("user"));
@@ -481,6 +482,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn convert_tool_call_and_observation_link_by_cause() {
         let call = convert_event(&toolcall_event(), "s1", 2).unwrap();
         assert_eq!(call.role.as_deref(), Some("assistant"));
@@ -500,12 +502,14 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn system_and_unknown_records_are_skipped() {
         assert!(convert_event(&system_event(), "s1", 0).is_none());
         assert!(convert_event(&json!({ "id": 1, "source": "agent" }), "s1", 0).is_none());
     }
 
     #[test]
+    #[serial_test::serial]
     fn events_dir_rejects_traversal() {
         assert!(events_dir_for("../../etc").is_err());
         assert!(events_dir_for("a/b").is_err());

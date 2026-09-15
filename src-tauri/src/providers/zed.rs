@@ -35,21 +35,12 @@ const SCHEME: &str = "zed://";
 const UNKNOWN_WORKSPACE: &str = "unknown";
 
 fn get_db_path() -> Option<PathBuf> {
-    // Mirror Zed's own `paths::data_dir()`. macOS uses ~/Library/Application
-    // Support (== dirs::data_dir); Linux/FreeBSD and Windows use the *local*
-    // data dir (XDG_DATA_HOME / %LOCALAPPDATA%, == dirs::data_local_dir), NOT
-    // the roaming dir. The app folder is lowercase "zed" only on Linux/FreeBSD.
-    let base = if cfg!(target_os = "macos") {
-        dirs::data_dir()?
-    } else {
-        dirs::data_local_dir()?
-    };
-    let app_name = if cfg!(any(target_os = "linux", target_os = "freebsd")) {
-        "zed"
-    } else {
-        "Zed"
-    };
-    Some(base.join(app_name).join("threads").join("threads.db"))
+    let paths = super::collection::home_paths(super::ProviderId::Zed);
+    let base = paths
+        .iter()
+        .find(|p| p.join("threads/threads.db").is_file())
+        .or_else(|| paths.first())?;
+    Some(base.join("threads/threads.db"))
 }
 
 /// Detect a Zed installation.
@@ -561,6 +552,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn parse_thread_user_agent_and_tool_results() {
         let msgs = parse_thread(&db_thread(), "thread-1", "2026-06-20T10:00:00Z");
         // user, assistant, tool-result(user) ; "Resume" ignored
@@ -587,6 +579,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn tool_result_content_extracts_text_from_all_shapes() {
         // Legacy bare string passes through.
         assert_eq!(tool_result_content(&json!("auth.rs:42")), "auth.rs:42");
@@ -611,6 +604,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn parse_legacy_serialized_thread() {
         let legacy = json!({
             "version": "0.1.0",
@@ -633,6 +627,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn workspace_grouping_from_folder_paths() {
         assert_eq!(
             workspace_of(Some(r#"["/Users/jack/proj","/other"]"#)),
@@ -643,21 +638,20 @@ mod tests {
     }
 
     #[test]
-    fn db_path_uses_platform_app_name() {
+    #[serial_test::serial]
+    fn db_path_uses_collection_contract() {
         let Some(p) = get_db_path() else { return };
         let s = p.to_string_lossy().replace('\\', "/");
         assert!(s.ends_with("threads/threads.db"), "got {s}");
-        if cfg!(any(target_os = "linux", target_os = "freebsd")) {
-            assert!(
-                s.contains("/zed/threads"),
-                "linux must use lowercase zed: {s}"
-            );
-        } else {
-            assert!(s.contains("/Zed/threads"), "got {s}");
-        }
+        assert!(
+            super::super::collection::home_paths(super::super::ProviderId::Zed)
+                .iter()
+                .any(|root| root.join("threads/threads.db") == p)
+        );
     }
 
     #[test]
+    #[serial_test::serial]
     fn table_columns_and_optional_col() {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute("CREATE TABLE threads (id TEXT, summary TEXT)", [])
@@ -682,6 +676,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn scan_and_load_tolerate_old_5col_schema() {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute(
@@ -716,6 +711,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn scan_and_load_use_new_schema_columns() {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute(
@@ -750,6 +746,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn decode_plain_and_zstd() {
         let value = json!({ "messages": [] });
         let json_bytes = serde_json::to_vec(&value).unwrap();

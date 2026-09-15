@@ -25,7 +25,7 @@ pub fn detect() -> Option<ProviderInfo> {
 }
 
 pub fn get_base_path() -> Option<String> {
-    if let Ok(env_val) = std::env::var("DSH_HOME") {
+    if let Ok(env_val) = crate::sources::env_var("DSH_HOME") {
         let path = PathBuf::from(&env_val);
         let absolute_path = if path.is_absolute() {
             path
@@ -38,7 +38,7 @@ pub fn get_base_path() -> Option<String> {
         }
     }
 
-    let default = crate::utils::home_dir()?.join(".dsh");
+    let default = crate::sources::home_dir()?.join(".dsh");
     if default.exists() {
         let normalized = default.canonicalize().unwrap_or(default);
         Some(normalized.to_string_lossy().to_string())
@@ -656,7 +656,9 @@ mod tests {
     use super::*;
 
     #[test]
+    #[serial_test::serial]
     fn test_slug_to_path() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         assert_eq!(
             slug_to_path("--Users-emac-Dev-tutor--"),
             "/Users/emac/Dev/tutor"
@@ -665,7 +667,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_epoch_ms_to_rfc3339() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let ts = epoch_ms_to_rfc3339(1786951970519);
         assert!(ts.contains("2026") || ts.contains("2025") || ts.contains('T'));
     }

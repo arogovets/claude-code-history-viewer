@@ -1508,30 +1508,40 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_validate_archive_id_valid_uuid() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let id = Uuid::new_v4().to_string();
         assert!(validate_archive_id(&id).is_ok());
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_validate_archive_id_empty() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         assert!(validate_archive_id("").is_err());
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_validate_archive_id_path_traversal() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         assert!(validate_archive_id("../etc/passwd").is_err());
         assert!(validate_archive_id("abc/../def").is_err());
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_validate_archive_id_uppercase_accepted() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         // Name-based IDs may contain mixed case
         assert!(validate_archive_id("UPPERCASE-UUID").is_ok());
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_validate_archive_id_invalid_chars() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         assert!(validate_archive_id("abc!def").is_err());
         assert!(validate_archive_id("abc def").is_err());
         assert!(validate_archive_id("abc:def").is_err());
@@ -1543,12 +1553,16 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_validate_archive_id_unicode_rejected() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         assert!(validate_archive_id("프로젝트-백업_3f8a1b2c").is_err());
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_sanitize_for_dirname() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         assert_eq!(sanitize_for_dirname("Project Backup"), "Project-Backup");
         assert_eq!(sanitize_for_dirname("  spaces  "), "spaces");
         assert_eq!(sanitize_for_dirname("a/b\\c"), "a-b-c");
@@ -1560,6 +1574,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_create_archive_uses_name_based_id() {
         let _temp = setup_test_env();
         let session_dir = tempfile::tempdir().unwrap();
@@ -1587,6 +1602,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_load_manifest_default_when_missing() {
         let _temp = setup_test_env();
         let manifest = load_manifest().unwrap();
@@ -1595,6 +1611,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_save_and_load_manifest() {
         let _temp = setup_test_env();
 
@@ -1623,6 +1640,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_count_messages_empty_file() {
         let _temp = setup_test_env();
         let dir = tempfile::tempdir().unwrap();
@@ -1632,6 +1650,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_count_messages_skips_sidechain() {
         let _temp = setup_test_env();
         let dir = tempfile::tempdir().unwrap();
@@ -1646,7 +1665,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_extract_timestamps() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("session.jsonl");
         let content = r#"{"type":"user","timestamp":"2026-01-01T10:00:00Z"}
@@ -1660,7 +1681,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_extract_summary() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("session.jsonl");
         let content = r#"{"type":"user","timestamp":"2026-01-01T10:00:00Z"}
@@ -1672,7 +1695,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_extract_summary_none() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("no_summary.jsonl");
         let content = r#"{"type":"user","timestamp":"2026-01-01T10:00:00Z"}
@@ -1682,7 +1707,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_jsonl_to_json_array() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("session.jsonl");
         let content = r#"{"type":"user","message":{"role":"user","content":"hello"}}
@@ -1696,6 +1723,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_get_archive_base_path() {
         let _temp = setup_test_env();
         let path = get_archive_base_path().await.unwrap();
@@ -1704,6 +1732,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_list_archives_empty() {
         let _temp = setup_test_env();
         let manifest = list_archives().await.unwrap();
@@ -1711,6 +1740,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_create_and_list_archive() {
         let _temp = setup_test_env();
 
@@ -1745,6 +1775,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_delete_archive() {
         let _temp = setup_test_env();
 
@@ -1773,6 +1804,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_rename_archive() {
         let _temp = setup_test_env();
 
@@ -1811,6 +1843,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_rename_archive_empty_name_rejected() {
         let _temp = setup_test_env();
 
@@ -1835,6 +1868,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_rename_archive_missing_source_dir_rejected() {
         let _temp = setup_test_env();
 
@@ -1868,6 +1902,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_get_archive_sessions() {
         let _temp = setup_test_env();
 
@@ -1899,7 +1934,9 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    #[serial_test::serial]
     fn test_find_subagent_files_skips_symlinked_candidate_dir() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let project_dir = tempfile::tempdir().unwrap();
         let sessions_dir = project_dir.path().join("sessions");
         fs::create_dir_all(&sessions_dir).unwrap();
@@ -1921,6 +1958,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_create_archive_uses_destination_stem_for_duplicate_file_names() {
         let _temp = setup_test_env();
 
@@ -1977,6 +2015,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_create_archive_fails_when_subagent_copy_fails() {
         let _temp = setup_test_env();
 
@@ -2011,6 +2050,7 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_get_archive_sessions_skips_symlinked_session_files() {
         let _temp = setup_test_env();
 
@@ -2044,6 +2084,7 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_load_archive_session_messages_rejects_symlinked_session_file() {
         let _temp = setup_test_env();
 
@@ -2077,7 +2118,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_export_session_json() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("export.jsonl");
         let content = r#"{"type":"user","timestamp":"2026-01-01T00:00:00Z","message":{"role":"user","content":"hi"}}
@@ -2096,7 +2139,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_export_session_invalid_format() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("bad_fmt.jsonl");
         fs::write(&path, "").unwrap();
@@ -2107,7 +2152,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_export_session_relative_path_rejected() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let result =
             export_session("relative/path/file.jsonl".to_string(), "json".to_string()).await;
         assert!(result.is_err());
@@ -2115,6 +2162,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_get_archive_disk_usage_empty() {
         let _temp = setup_test_env();
         let usage = get_archive_disk_usage().await.unwrap();
@@ -2124,6 +2172,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_get_archive_disk_usage_with_archive() {
         let _temp = setup_test_env();
 
@@ -2151,18 +2200,23 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_dir_size_nonexistent() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         assert_eq!(dir_size(Path::new("/nonexistent/path/xyz")), 0);
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_archive_manifest_default() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let m = ArchiveManifest::default();
         assert_eq!(m.version, 1);
         assert!(m.archives.is_empty());
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_migration_uuid_to_name_based() {
         let _temp = setup_test_env();
 

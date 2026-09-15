@@ -235,7 +235,7 @@ describe("projectSlice scanProjects", () => {
     });
 
     vi.mocked(api).mockImplementation((command, args) => {
-      if (command === "scan_projects") {
+      if (command === "scan_all_projects" && (args?.activeProviders as string[])?.[0] === "claude") {
         return Promise.resolve([claudeProject]);
       }
       if (command === "scan_all_projects") {
@@ -278,40 +278,20 @@ describe("projectSlice scanProjects", () => {
     ]);
   });
 
-  it("limits the initial scan to Claude before provider discovery is requested", async () => {
+  it("scans Claude mirrors without any legacy paths or live host discovery", async () => {
     const store = createTestStore();
     const claudeProject = createMockProject("initial-claude");
-
-    store.setState({
-      claudePath: "/root/.claude",
-      providers: [],
-      activeProviders: ["claude"],
-    });
-
-    vi.mocked(api).mockImplementation((command) => {
-      if (command === "scan_projects") {
-        return Promise.resolve([claudeProject]);
-      }
+    store.setState({ claudePath: "", providers: [], activeProviders: ["claude"] });
+    vi.mocked(api).mockImplementation((command, args) => {
       if (command === "scan_all_projects") {
-        return Promise.reject(
-          new Error("initial startup must not scan non-Claude providers")
-        );
+        expect(args).toEqual({ activeProviders: ["claude"] });
+        return Promise.resolve([claudeProject]);
       }
       return Promise.reject(new Error(`Unexpected command: ${command}`));
     });
-
-    await store.getState().scanProjects();
-
-    expect(store.getState().projects).toEqual([
-      { ...claudeProject, provider: "claude" },
-    ]);
-    expect(vi.mocked(api)).toHaveBeenCalledWith("scan_projects", {
-      claudePath: "/root/.claude",
-    });
-    expect(vi.mocked(api)).not.toHaveBeenCalledWith(
-      "scan_all_projects",
-      expect.anything()
-    );
+    await store.getState().initializeApp();
+    expect(store.getState().projects).toEqual([{ ...claudeProject, provider: "claude" }]);
+    expect(api).toHaveBeenCalledExactlyOnceWith("scan_all_projects", { activeProviders: ["claude"] });
   });
 
   it("restores explicitly discovered providers when Claude is not installed", async () => {
@@ -347,7 +327,7 @@ describe("projectSlice scanProjects", () => {
     expect(store.getState().setActiveProviders).toHaveBeenCalledWith(["codex"]);
   });
 
-  it("initializes WSL-only sources when native Claude is unavailable", async () => {
+  it("ignores legacy WSL discovery settings when scanning mirrors", async () => {
     const store = createTestStore();
     const wslProject = createMockProject("wsl-only");
 
@@ -370,8 +350,6 @@ describe("projectSlice scanProjects", () => {
       if (command === "scan_all_projects") {
         expect(args).toEqual({
           activeProviders: ["claude"],
-          wslEnabled: true,
-          wslExcludedDistros: [],
         });
         return Promise.resolve([wslProject]);
       }
@@ -583,8 +561,8 @@ describe("projectSlice scanProjects", () => {
       activeProviders: ["claude"],
     });
 
-    vi.mocked(api).mockImplementation((command) => {
-      if (command === "scan_projects") {
+    vi.mocked(api).mockImplementation((command, args) => {
+      if (command === "scan_all_projects" && (args?.activeProviders as string[])?.[0] === "claude") {
         return Promise.resolve([refreshedProject]);
       }
       if (command === "load_provider_sessions_page") {
@@ -631,8 +609,8 @@ describe("projectSlice scanProjects", () => {
       messages: [{ uuid: "stale" }],
     });
 
-    vi.mocked(api).mockImplementation((command) => {
-      if (command === "scan_projects") {
+    vi.mocked(api).mockImplementation((command, args) => {
+      if (command === "scan_all_projects" && (args?.activeProviders as string[])?.[0] === "claude") {
         return Promise.resolve([]);
       }
       return Promise.reject(new Error(`Unexpected command: ${command}`));
@@ -668,8 +646,8 @@ describe("projectSlice scanProjects", () => {
       messages: [{ uuid: "stale" }],
     });
 
-    vi.mocked(api).mockImplementation((command) => {
-      if (command === "scan_projects") {
+    vi.mocked(api).mockImplementation((command, args) => {
+      if (command === "scan_all_projects" && (args?.activeProviders as string[])?.[0] === "claude") {
         return Promise.resolve([project]);
       }
       if (command === "load_provider_sessions_page") {
@@ -715,8 +693,8 @@ describe("projectSlice scanProjects", () => {
     });
     store.getState().loadProjectStatsSummary.mockResolvedValue(projectSummary);
 
-    vi.mocked(api).mockImplementation((command) => {
-      if (command === "scan_projects") {
+    vi.mocked(api).mockImplementation((command, args) => {
+      if (command === "scan_all_projects" && (args?.activeProviders as string[])?.[0] === "claude") {
         return Promise.resolve([project]);
       }
       if (command === "load_provider_sessions_page") {

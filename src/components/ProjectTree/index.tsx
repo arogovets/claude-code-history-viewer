@@ -1,3 +1,8 @@
+import { projectMetadataKey } from "@/types/kanban";
+import { BoardFilter } from "@/components/ProjectKanban/BoardFilter";
+import { useKanbanStore } from "@/store/useKanbanStore";
+import { projectKey } from "@/types/kanban";
+import { matchesBoardFilter } from "@/utils/kanban";
 // src/components/ProjectTree/index.tsx
 import React, { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -111,7 +116,7 @@ export const ProjectTree: React.FC<ProjectTreeProps> = ({
   } = useProjectTreeState(groupingMode);
 
   const [searchTerm, setSearchTerm] = useState("");
-  const [selectedHostFilter, setSelectedHostFilter] = useState<string>("all");
+  const [selectedSourceFilter, setSelectedSourceFilter] = useState<string>("all");
   const [areProviderFiltersOpen, setAreProviderFiltersOpen] = useState(
     loadProviderFiltersOpenState
   );
@@ -338,41 +343,48 @@ export const ProjectTree: React.FC<ProjectTreeProps> = ({
     [deferredSearchTerm]
   );
 
+  const projectMetadata = useAppStore((s) => s.userMetadata.projects);
   const matchesSearch = useCallback(
     (project: (typeof projects)[number]) => {
       if (!normalizedSearchTerm) return true;
-      const name = (project.name ?? "").toLowerCase();
+      const name = (projectMetadata[projectMetadataKey(project)]?.alias ?? project.name ?? "").toLowerCase();
       const path = (project.actual_path ?? project.path ?? "").toLowerCase();
       return name.includes(normalizedSearchTerm) || path.includes(normalizedSearchTerm);
     },
-    [normalizedSearchTerm]
+    [normalizedSearchTerm, projectMetadata]
   );
 
-  const availableHosts = useMemo(() => {
-    const hosts = new Set<string>();
+  const availableSources = useMemo(() => {
+    const sources = new Set<string>();
     for (const p of projects) {
-      if (p.custom_directory_label) {
-        hosts.add(p.custom_directory_label);
+      if (p.source_id) {
+        sources.add(p.source_id);
       }
     }
-    return Array.from(hosts);
+    return Array.from(sources);
   }, [projects]);
 
-  const matchesHostFilter = useCallback(
+  const matchesSourceFilter = useCallback(
     (project: (typeof projects)[number]) => {
-      if (selectedHostFilter === "all") return true;
-      if (selectedHostFilter === "local") return !project.custom_directory_label;
-      return project.custom_directory_label === selectedHostFilter;
+      if (selectedSourceFilter === "all") return true;
+      return project.source_id === selectedSourceFilter;
     },
-    [selectedHostFilter]
+    [selectedSourceFilter]
   );
+
+  const kanban = useKanbanStore((s) => s.data);
+  const loadKanban = useKanbanStore((s) => s.load);
+  const [boardFilters, setBoardFilters] = useState<string[]>([]);
+  const [unassignedFilter, setUnassignedFilter] = useState(false);
+  useEffect(() => { if (!useKanbanStore.getState().loaded) void loadKanban(); }, [loadKanban]);
 
   const matchesVisibility = useCallback(
     (project: (typeof projects)[number]) => {
+      if (!matchesBoardFilter(kanban, projectKey(project), boardFilters, unassignedFilter)) return false;
       if (!isProjectHidden) return true;
-      return !isProjectHidden(project.actual_path || project.path);
+      return !isProjectHidden(project.path);
     },
-    [isProjectHidden]
+    [isProjectHidden, kanban, boardFilters, unassignedFilter]
   );
 
   const filteredProjects = useMemo(
@@ -380,21 +392,21 @@ export const ProjectTree: React.FC<ProjectTreeProps> = ({
       projects.filter(
         (p) =>
           matchesVisibility(p) &&
-          matchesHostFilter(p) &&
+          matchesSourceFilter(p) &&
           matchesProviderFilter(p) &&
           matchesSearch(p)
       ),
-    [projects, matchesVisibility, matchesHostFilter, matchesProviderFilter, matchesSearch]
+    [projects, matchesVisibility, matchesSourceFilter, matchesProviderFilter, matchesSearch]
   );
 
   const filteredDirectoryGroups = useMemo(() => {
     const filterFn = (p: (typeof projects)[number]) =>
       matchesVisibility(p) &&
-      matchesHostFilter(p) &&
+      matchesSourceFilter(p) &&
       matchesProviderFilter(p) &&
       matchesSearch(p);
 
-    if (isAllProvidersSelected && !normalizedSearchTerm && selectedHostFilter === "all") {
+    if (isAllProvidersSelected && !normalizedSearchTerm && selectedSourceFilter === "all" && !boardFilters.length && !unassignedFilter) {
       return directoryGroups
         .map((group) => ({
           ...group,
@@ -409,17 +421,17 @@ export const ProjectTree: React.FC<ProjectTreeProps> = ({
         projects: group.projects.filter(filterFn),
       }))
       .filter((group) => group.projects.length > 0);
-  }, [directoryGroups, isAllProvidersSelected, matchesVisibility, matchesHostFilter, matchesProviderFilter, matchesSearch, normalizedSearchTerm, selectedHostFilter]);
+  }, [directoryGroups, isAllProvidersSelected, matchesVisibility, matchesSourceFilter, matchesProviderFilter, matchesSearch, normalizedSearchTerm, selectedSourceFilter, boardFilters, unassignedFilter]);
 
   const { filteredWorktreeGroups, filteredUngroupedProjects } = useMemo(() => {
     const baseUngrouped = ungroupedProjects ?? projects;
     const filterFn = (p: (typeof projects)[number]) =>
       matchesVisibility(p) &&
-      matchesHostFilter(p) &&
+      matchesSourceFilter(p) &&
       matchesProviderFilter(p) &&
       matchesSearch(p);
 
-    if (isAllProvidersSelected && !normalizedSearchTerm && selectedHostFilter === "all") {
+    if (isAllProvidersSelected && !normalizedSearchTerm && selectedSourceFilter === "all" && !boardFilters.length && !unassignedFilter) {
       return {
         filteredWorktreeGroups: worktreeGroups,
         filteredUngroupedProjects: baseUngrouped,
@@ -458,7 +470,7 @@ export const ProjectTree: React.FC<ProjectTreeProps> = ({
       filteredWorktreeGroups: nextGroups,
       filteredUngroupedProjects: nextUngrouped,
     };
-  }, [worktreeGroups, ungroupedProjects, projects, isAllProvidersSelected, matchesProviderFilter, matchesSearch, normalizedSearchTerm, matchesVisibility, matchesHostFilter, selectedHostFilter]);
+  }, [worktreeGroups, ungroupedProjects, projects, isAllProvidersSelected, matchesProviderFilter, matchesSearch, normalizedSearchTerm, matchesVisibility, matchesSourceFilter, selectedSourceFilter, boardFilters, unassignedFilter]);
 
   const providerTabs = useMemo(
     () => {
@@ -1086,48 +1098,36 @@ export const ProjectTree: React.FC<ProjectTreeProps> = ({
           </Collapsible>
         </div>
 
-        {/* Host Filter (when remote hosts are present) */}
-        {availableHosts.length > 0 && (
+        {/* Source filter */}
+        {availableSources.length > 0 && (
           <div className="px-3 pt-2 pb-1 flex flex-wrap gap-1 items-center border-b border-accent/10">
             <button
               type="button"
-              onClick={() => setSelectedHostFilter("all")}
+              onClick={() => setSelectedSourceFilter("all")}
               className={cn(
                 "px-2 py-0.5 rounded text-2xs font-medium border transition-colors",
-                selectedHostFilter === "all"
+                selectedSourceFilter === "all"
                   ? "bg-accent/20 text-accent border-accent/30"
                   : "bg-muted/30 text-muted-foreground border-transparent hover:bg-muted/50"
               )}
             >
-              All Hosts ({projects.length})
+              All Sources ({projects.length})
             </button>
-            <button
-              type="button"
-              onClick={() => setSelectedHostFilter("local")}
-              className={cn(
-                "px-2 py-0.5 rounded text-2xs font-medium border transition-colors",
-                selectedHostFilter === "local"
-                  ? "bg-accent/20 text-accent border-accent/30"
-                  : "bg-muted/30 text-muted-foreground border-transparent hover:bg-muted/50"
-              )}
-            >
-              Local ({projects.filter((p) => !p.custom_directory_label).length})
-            </button>
-            {availableHosts.map((host) => {
-              const count = projects.filter((p) => p.custom_directory_label === host).length;
-              const shortLabel = host.includes("@") ? host.split("@")[0] + " (remote)" : host;
+            {availableSources.map((source) => {
+              const count = projects.filter((p) => p.source_id === source).length;
+              const shortLabel = projects.find((p) => p.source_id === source)?.custom_directory_label || source;
               return (
                 <button
-                  key={host}
+                  key={source}
                   type="button"
-                  onClick={() => setSelectedHostFilter(host)}
+                  onClick={() => setSelectedSourceFilter(source)}
                   className={cn(
                     "px-2 py-0.5 rounded text-2xs font-medium border transition-colors truncate max-w-[160px]",
-                    selectedHostFilter === host
+                    selectedSourceFilter === source
                       ? "bg-accent/20 text-accent border-accent/30"
                       : "bg-muted/30 text-muted-foreground border-transparent hover:bg-muted/50"
                   )}
-                  title={host}
+                  title={source}
                 >
                   {shortLabel} ({count})
                 </button>
@@ -1136,6 +1136,7 @@ export const ProjectTree: React.FC<ProjectTreeProps> = ({
           </div>
         )}
 
+        <div className="px-3 py-2 border-b border-border"><BoardFilter boardIds={boardFilters} unassigned={unassignedFilter} onChange={(ids, unassigned) => { setBoardFilters(ids); setUnassignedFilter(unassigned); }} /></div>
         {/* Search */}
         <div className="px-3 py-2 border-b border-accent/10">
           <div className="relative">
@@ -1307,7 +1308,7 @@ export const ProjectTree: React.FC<ProjectTreeProps> = ({
           onClose={closeContextMenu}
           onHide={onHideProject}
           onUnhide={onUnhideProject}
-          isHidden={isProjectHidden(contextMenu.project.actual_path)}
+          isHidden={isProjectHidden(contextMenu.project.path)}
         />
       )}
     </aside>

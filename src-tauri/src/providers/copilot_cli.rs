@@ -113,13 +113,13 @@ pub fn detect_desktop() -> Option<ProviderInfo> {
 /// Honours `$COPILOT_CLI_HOME` if it points to an existing directory,
 /// otherwise falls back to `~/.copilot`.
 pub fn get_base_path() -> Option<String> {
-    if let Ok(env) = std::env::var("COPILOT_CLI_HOME") {
+    if let Ok(env) = crate::sources::env_var("COPILOT_CLI_HOME") {
         let path = PathBuf::from(&env);
         if path.is_dir() {
             return Some(env);
         }
     }
-    let home = crate::utils::home_dir()?;
+    let home = crate::sources::home_dir()?;
     let candidate = home.join(".copilot");
     if candidate.is_dir() {
         Some(candidate.to_string_lossy().to_string())
@@ -1147,6 +1147,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn detect_uses_copilot_cli_home_env() {
         let tmp = TempDir::new().unwrap();
@@ -1161,6 +1162,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn scan_groups_sessions_by_cwd() {
         let tmp = TempDir::new().unwrap();
@@ -1236,6 +1238,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn scan_and_load_skip_empty_sessions() {
         let tmp = TempDir::new().unwrap();
@@ -1302,6 +1305,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn load_messages_pairs_tool_use_and_result() {
         let tmp = TempDir::new().unwrap();
@@ -1377,6 +1381,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn load_messages_skips_malformed_lines() {
         let tmp = TempDir::new().unwrap();
@@ -1410,6 +1415,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn load_messages_rejects_path_outside_root() {
         let tmp = TempDir::new().unwrap();
@@ -1425,6 +1431,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn project_name_for_path_handles_local_and_wsl_forms() {
         // Local form: basename of cwd
         assert_eq!(
@@ -1456,6 +1463,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn parse_flat_yaml_handles_quotes_and_colons_in_values() {
         let text = "client_name: github/autopilot\nname: \"Hello: world\"\nbroken-line-no-colon\n";
         let meta = parse_flat_yaml(text);
@@ -1477,6 +1485,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn classify_client_routes_by_client_name() {
         let meta = WorkspaceMetadata {
             client_name: Some("github/autopilot".to_string()),
@@ -1505,6 +1514,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn extract_session_info_picks_up_workspace_yaml_summary() {
         use std::fs;
         use tempfile::tempdir;
@@ -1537,6 +1547,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn cached_session_info_invalidates_when_workspace_yaml_appears() {
         use std::fs;
         use tempfile::tempdir;

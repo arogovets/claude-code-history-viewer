@@ -66,11 +66,9 @@ const CACHE_VERSION: u32 = 11;
 const DEFAULT_SESSION_PAGE_LIMIT: usize = 250;
 const MAX_SESSION_PAGE_LIMIT: usize = 500;
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionPage {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub offline: Option<bool>,
     pub sessions: Vec<ClaudeSession>,
     pub total: usize,
     pub offset: usize,
@@ -86,10 +84,7 @@ fn get_cache_path(project_path: &str) -> PathBuf {
 
 /// Load cache from disk
 fn load_cache(project_path: &str) -> SessionMetadataCache {
-    // Completed snapshots are immutable: never read a cache file from inside
-    // the archive (stale copies could shadow fresh parses) and never write
-    // one there (see `save_cache`).
-    if crate::storage::is_snapshot_data_path(Path::new(project_path)) {
+    if crate::sources::for_path(Path::new(project_path)).is_some() {
         return SessionMetadataCache::default();
     }
     let cache_path = get_cache_path(project_path);
@@ -103,46 +98,9 @@ fn load_cache(project_path: &str) -> SessionMetadataCache {
     SessionMetadataCache::default()
 }
 
-/// Map an original path to its snapshot copy when a completed snapshot
-/// covers it. Returns `(effective_path, rewrite)` where `rewrite` holds
-/// `(snapshot_prefix, original_prefix)` for translating parser outputs back
-/// to the stable external contract.
-fn snapshot_effective_path(original: &str) -> (String, Option<(String, String)>) {
-    let original_path = Path::new(original);
-    if crate::storage::is_snapshot_data_path(original_path) {
-        return (original.to_string(), None);
-    }
-    if let Some(mapped) = crate::storage::map_original_path_to_snapshot(original_path) {
-        let mapped_str = mapped.to_string_lossy().to_string();
-        return (mapped_str.clone(), Some((mapped_str, original.to_string())));
-    }
-    (original.to_string(), None)
-}
-
-fn rewrite_snapshot_prefix(value: &str, snapshot_prefix: &str, original_prefix: &str) -> String {
-    if let Some(rest) = value.strip_prefix(snapshot_prefix) {
-        format!("{original_prefix}{rest}")
-    } else {
-        value.to_string()
-    }
-}
-
-fn rewrite_session_to_original(
-    session: &mut ClaudeSession,
-    snapshot_prefix: &str,
-    original_prefix: &str,
-) {
-    session.session_id =
-        rewrite_snapshot_prefix(&session.session_id, snapshot_prefix, original_prefix);
-    session.file_path =
-        rewrite_snapshot_prefix(&session.file_path, snapshot_prefix, original_prefix);
-}
-
 /// Save cache to disk atomically (best effort, errors are ignored)
 fn save_cache(project_path: &str, cache: &SessionMetadataCache) {
-    // Completed snapshots are immutable. Parser caches are derived state that
-    // belongs next to live sources, not inside the archive.
-    if crate::storage::is_snapshot_data_path(Path::new(project_path)) {
+    if crate::sources::for_path(Path::new(project_path)).is_some() {
         return;
     }
     let cache_path = get_cache_path(project_path);
@@ -1119,34 +1077,12 @@ pub async fn load_project_sessions_page(
     offset: Option<usize>,
     limit: Option<usize>,
 ) -> Result<SessionPage, String> {
-    if crate::remote::is_remote_path(&project_path) {
-        if let Some((endpoint, inner_path)) = crate::remote::parse_remote_path(&project_path) {
-            return crate::remote::load_remote_sessions_page(
-                endpoint,
-                "claude",
-                inner_path,
-                exclude_sidechain,
-                offset.unwrap_or(0),
-                limit.unwrap_or(250),
-            )
-            .await;
-        }
-    }
-
-    // Filesystem first: parse the CCHV-owned copy when one covers this
-    // project, then translate paths back to the stable original contract.
-    let (effective_path, rewrite) = snapshot_effective_path(&project_path);
-    let mut page = tauri::async_runtime::spawn_blocking(move || {
-        load_project_sessions_page_blocking(effective_path, exclude_sidechain, offset, limit)
+    crate::sources::require_history_path(&project_path)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        load_project_sessions_page_blocking(project_path, exclude_sidechain, offset, limit)
     })
     .await
-    .map_err(|e| format!("Task join error: {e}"))??;
-    if let Some((snapshot_prefix, original_prefix)) = rewrite {
-        for session in &mut page.sessions {
-            rewrite_session_to_original(session, &snapshot_prefix, &original_prefix);
-        }
-    }
-    Ok(page)
+    .map_err(|e| format!("Task join error: {e}"))?
 }
 
 /// The load itself. Separate from the command so the body stays at one indent
@@ -1415,7 +1351,6 @@ fn load_project_sessions_page_blocking(
     }
 
     Ok(SessionPage {
-        offline: None,
         sessions,
         total,
         offset,
@@ -1435,27 +1370,9 @@ pub async fn load_project_sessions(
     project_path: String,
     exclude_sidechain: Option<bool>,
 ) -> Result<Vec<ClaudeSession>, String> {
-    if crate::remote::is_remote_path(&project_path) {
-        if let Some((endpoint, inner_path)) = crate::remote::parse_remote_path(&project_path) {
-            return crate::remote::load_remote_sessions(
-                endpoint,
-                "claude",
-                inner_path,
-                exclude_sidechain,
-            )
-            .await;
-        }
-    }
-
-    let (effective_path, rewrite) = snapshot_effective_path(&project_path);
+    crate::sources::require_history_path(&project_path)?;
     tauri::async_runtime::spawn_blocking(move || {
-        let mut live_sessions = load_project_sessions_blocking(effective_path, exclude_sidechain);
-        if let Some((snapshot_prefix, original_prefix)) = rewrite {
-            for session in &mut live_sessions {
-                rewrite_session_to_original(session, &snapshot_prefix, &original_prefix);
-            }
-        }
-        crate::cache::sync_and_save_sessions(&project_path, "claude", &live_sessions)
+        load_project_sessions_blocking(project_path, exclude_sidechain)
     })
     .await
     .map(Ok)
@@ -1468,7 +1385,7 @@ pub async fn load_project_sessions(
 /// Infallible: a session file that cannot be read is skipped rather than
 /// failing the load. The command's `Result` is the IPC contract and stays; the
 /// `#[tauri::command]` attribute was hiding this from clippy.
-pub(crate) fn load_project_sessions_blocking(
+fn load_project_sessions_blocking(
     project_path: String,
     exclude_sidechain: Option<bool>,
 ) -> Vec<ClaudeSession> {
@@ -1971,42 +1888,21 @@ fn parse_line_simd(
 #[tauri::command]
 #[allow(unsafe_code)] // Required for mmap performance optimization
 pub async fn load_session_messages(session_path: String) -> Result<Vec<ClaudeMessage>, String> {
-    if crate::remote::is_remote_path(&session_path) {
-        if let Some((endpoint, inner_path)) = crate::remote::parse_remote_path(&session_path) {
-            return crate::remote::load_remote_messages(endpoint, "claude", inner_path).await;
-        }
-    }
-
+    crate::sources::require_history_path(&session_path)?;
     #[cfg(debug_assertions)]
     let start_time = std::time::Instant::now();
 
-    // Filesystem first: read the CCHV-owned copy when one covers this file.
-    // The chain, subagents, and message bytes all resolve inside the snapshot;
-    // the SQLite cache key stays the original path so the external contract
-    // (and the legacy offline fallback) is unchanged.
-    let (effective_session_path, _) = snapshot_effective_path(&session_path);
     // Resolve any cross-file continuation chain (see `chain.rs`) and load
     // every file in it, oldest first, so a session that Claude Code split
     // across files after running out of context still reads as one
     // conversation. For the common case (no chain) this is just `[session_path]`.
-    let chain = super::chain::resolve_session_chain(Path::new(&effective_session_path));
+    let chain = super::chain::resolve_session_chain(Path::new(&session_path));
     let mut messages: Vec<ClaudeMessage> = Vec::new();
     for (index, path) in chain.iter().enumerate() {
         let is_leaf = index + 1 == chain.len();
         match load_all_messages_from_file(path) {
             Ok(file_messages) => messages.extend(file_messages),
-            Err(error) if is_leaf => {
-                if let Ok(conn) = crate::cache::open_connection() {
-                    if let Ok(Some(cached_messages)) =
-                        crate::cache::get_cached_session_messages(&conn, &session_path, "claude")
-                    {
-                        if !cached_messages.is_empty() {
-                            return Ok(cached_messages);
-                        }
-                    }
-                }
-                return Err(error);
-            }
+            Err(error) if is_leaf => return Err(error),
             Err(error) => {
                 // A predecessor can disappear while Claude Code is rotating
                 // files. Preserve the readable part of the conversation and
@@ -2019,9 +1915,6 @@ pub async fn load_session_messages(session_path: String) -> Result<Vec<ClaudeMes
             }
         }
     }
-
-    // Persist to local SQLite cache so session is permanently preserved
-    crate::cache::cache_messages(&session_path, "claude", &messages);
 
     #[cfg(debug_assertions)]
     {
@@ -2164,12 +2057,25 @@ fn opencode_subagents(session_path: &str) -> Vec<SubagentSession> {
 /// Returns subagent sessions for a given parent session file.
 #[tauri::command]
 pub async fn get_session_subagents(session_path: String) -> Result<Vec<SubagentSession>, String> {
+    crate::sources::require_history_path(&session_path)?;
     use crate::utils::find_subagent_files;
 
-    if crate::remote::is_remote_path(&session_path) {
-        if let Some((endpoint, inner_path)) = crate::remote::parse_remote_path(&session_path) {
-            return crate::remote::get_remote_session_subagents(endpoint, inner_path).await;
-        }
+    // Database handles carry source identity. Resolve it before provider dispatch,
+    // and scope discovery to that source's mirror rather than the default source.
+    if session_path.starts_with("source:") {
+        let (source, inner) = crate::sources::resolve(&session_path)?;
+        return Ok(crate::sources::sync_scope(source.current.clone(), || {
+            let mut children = if inner.starts_with("opencode://") {
+                opencode_subagents(&inner)
+            } else {
+                // Other URI providers do not currently expose child-session discovery.
+                Vec::new()
+            };
+            for child in &mut children {
+                child.file_path = crate::sources::qualify(&source, &child.file_path);
+            }
+            children
+        }));
     }
 
     // OpenCode keeps subagent runs as child rows in SQLite rather than as
@@ -2179,10 +2085,9 @@ pub async fn get_session_subagents(session_path: String) -> Result<Vec<SubagentS
         return Ok(opencode_subagents(&session_path));
     }
 
-    let (effective_session_path, rewrite) = snapshot_effective_path(&session_path);
-    let path = PathBuf::from(&effective_session_path);
+    let path = PathBuf::from(&session_path);
     if !path.is_absolute() {
-        return Ok(Vec::new());
+        return Err("session_path must be an absolute path".to_string());
     }
     let subagent_files = find_subagent_files(&path);
 
@@ -2216,16 +2121,9 @@ pub async fn get_session_subagents(session_path: String) -> Result<Vec<SubagentS
         let tool_use_id = read_subagent_tool_use_id(&meta_path);
         let workflow_run_id = workflow_run_id_for(&sa_path);
 
-        let file_path = sa_path.to_string_lossy().to_string();
-        let file_path = match &rewrite {
-            Some((snapshot_prefix, original_prefix)) => {
-                rewrite_snapshot_prefix(&file_path, snapshot_prefix, original_prefix)
-            }
-            None => file_path,
-        };
         sessions.push(SubagentSession {
             agent_id,
-            file_path,
+            file_path: sa_path.to_string_lossy().to_string(),
             message_count,
             file_size,
             first_message_time: first_time,
@@ -2412,6 +2310,7 @@ pub fn get_session_message_offset(
     message_uuid: String,
     exclude_sidechain: Option<bool>,
 ) -> Result<Option<usize>, String> {
+    crate::sources::require_history_path(&session_path)?;
     let file =
         fs::File::open(&session_path).map_err(|e| format!("Failed to open session file: {e}"))?;
 
@@ -2544,56 +2443,18 @@ pub async fn load_session_messages_paginated(
     limit: usize,
     exclude_sidechain: Option<bool>,
 ) -> Result<MessagePage, String> {
-    if crate::remote::is_remote_path(&session_path) {
-        if let Some((endpoint, inner_path)) = crate::remote::parse_remote_path(&session_path) {
-            return crate::remote::load_remote_messages_paginated(
-                endpoint,
-                "claude",
-                inner_path,
-                offset,
-                limit,
-                exclude_sidechain,
-            )
-            .await;
-        }
-    }
-
+    crate::sources::require_history_path(&session_path)?;
     #[cfg(debug_assertions)]
     let start_time = std::time::Instant::now();
 
     let exclude = exclude_sidechain.unwrap_or(false);
-    let (effective_session_path, _) = snapshot_effective_path(&session_path);
-    let chain = super::chain::resolve_session_chain(Path::new(&effective_session_path));
+    let chain = super::chain::resolve_session_chain(Path::new(&session_path));
 
     let page = if chain.len() <= 1 {
         // Common case: no cross-file continuation. Same algorithm and
         // performance characteristics as before this feature existed.
-        let window_res = load_message_window_from_file(
-            Path::new(&effective_session_path),
-            offset,
-            limit,
-            exclude,
-        );
-        let (messages, total_count, _) = match window_res {
-            Ok(w) => w,
-            Err(e) => {
-                if let Ok(conn) = crate::cache::open_connection() {
-                    if let Ok(Some(cached_page)) =
-                        crate::cache::get_cached_session_messages_paginated(
-                            &conn,
-                            &session_path,
-                            "claude",
-                            offset,
-                            limit,
-                            exclude_sidechain,
-                        )
-                    {
-                        return Ok(cached_page);
-                    }
-                }
-                return Err(e);
-            }
-        };
+        let (messages, total_count, _) =
+            load_message_window_from_file(Path::new(&session_path), offset, limit, exclude)?;
         let next_offset = offset + messages.len();
         MessagePage {
             messages,
@@ -2673,6 +2534,7 @@ pub async fn get_session_message_count(
     session_path: String,
     exclude_sidechain: Option<bool>,
 ) -> Result<usize, String> {
+    crate::sources::require_history_path(&session_path)?;
     let exclude = exclude_sidechain.unwrap_or(false);
     let chain = super::chain::resolve_session_chain(Path::new(&session_path));
 
@@ -2736,7 +2598,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_load_session_messages_basic() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         let content = format!(
@@ -2757,7 +2621,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_load_session_messages_excludes_summary() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         let content = format!(
@@ -2782,7 +2648,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_load_session_messages_empty_file() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
         let file_path = create_test_jsonl_file(&temp_dir, "empty.jsonl", "");
 
@@ -2793,7 +2661,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_load_session_messages_with_empty_lines() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         let content = format!(
@@ -2811,7 +2681,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_load_session_messages_file_not_found() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let result = load_session_messages("/nonexistent/path/file.jsonl".to_string()).await;
 
         assert!(result.is_err());
@@ -2819,7 +2691,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_load_session_messages_with_malformed_json() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         // First line is valid, second is malformed
@@ -2840,7 +2714,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_load_session_messages_paginated_basic() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         // Create 5 messages
@@ -2870,7 +2746,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_load_session_messages_paginated_merges_continuation_chain() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
         let older_content = format!(
             "{}\n{}\n",
@@ -2914,7 +2792,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_load_session_messages_paginated_offset() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         let mut content = String::new();
@@ -2944,7 +2824,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_load_session_messages_paginated_exclude_sidechain() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         let content = r#"{"uuid":"uuid-1","sessionId":"session-1","timestamp":"2025-06-26T10:00:00Z","type":"user","message":{"role":"user","content":"Hello"},"isSidechain":false}
@@ -2969,7 +2851,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_get_session_message_count() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         let mut content = String::new();
@@ -2995,7 +2879,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_get_session_message_count_exclude_sidechain() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         let content = r#"{"uuid":"uuid-1","sessionId":"session-1","timestamp":"2025-06-26T10:00:00Z","type":"user","message":{"role":"user","content":"Hello"},"isSidechain":false}
@@ -3020,7 +2906,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_get_session_message_offset_basic() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         let mut content = String::new();
@@ -3058,7 +2946,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_get_session_message_offset_skips_invisible_lines() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         // sidechain + summary lines must not shift the offset when excluded
@@ -3086,7 +2976,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_load_project_sessions_basic() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         let content = format!(
@@ -3109,7 +3001,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_load_project_sessions_prefers_jsonl_cwd_for_project_name() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
         let project_dir = temp_dir.path().join("-home-cym-claude-prompt-design");
         std::fs::create_dir_all(&project_dir).unwrap();
@@ -3143,7 +3037,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_load_project_sessions_prefers_verified_folder_over_stale_cwd() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
         // The folder name must decode to a directory that really exists. This
         // borrowed `/usr/lib`, which Windows does not have (#541); it is built
@@ -3185,7 +3081,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_load_project_sessions_with_summary() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         let content = format!(
@@ -3212,7 +3110,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_load_project_sessions_multiple_files() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         // Create first session file
@@ -3243,7 +3143,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_load_project_sessions_page_uses_cache_and_offsets() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         let sessions = [
@@ -3311,7 +3213,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_load_project_sessions_page_rejects_invalid_project_path() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let empty = load_project_sessions_page("  ".to_string(), None, None, None).await;
         assert_eq!(empty.err().unwrap(), "project_path is required");
 
@@ -3324,7 +3228,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_load_project_sessions_page_skips_invalid_candidates() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         let valid_1 = create_test_jsonl_file(
@@ -3382,7 +3288,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_load_project_sessions_page_total_stays_cumulative_without_disk_cache() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         let valid_1 = create_test_jsonl_file(
@@ -3434,7 +3342,9 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_load_project_sessions_page_ignores_symlinked_jsonl_outside_project() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
         let outside_dir = TempDir::new().unwrap();
         let outside_file = create_test_jsonl_file(
@@ -3463,7 +3373,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_load_project_sessions_exclude_sidechain() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         let content = r#"{"uuid":"uuid-1","sessionId":"session-1","timestamp":"2025-06-26T10:00:00Z","type":"user","message":{"role":"user","content":"Hello"},"isSidechain":false}
@@ -3489,7 +3401,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_load_project_sessions_with_tool_use() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         let content = r#"{"uuid":"uuid-1","sessionId":"session-1","timestamp":"2025-06-26T10:00:00Z","type":"user","message":{"role":"user","content":"Read file"}}
@@ -3509,7 +3423,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_load_project_sessions_empty_directory() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         let result =
@@ -3520,7 +3436,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_incremental_parsing_on_file_append() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         use std::io::Write;
 
         let temp_dir = TempDir::new().unwrap();
@@ -3559,7 +3477,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_message_with_missing_uuid_generates_new_one() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         // Message without uuid
@@ -3581,7 +3501,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_message_with_missing_session_id() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         // Message without sessionId
@@ -3601,7 +3523,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_assistant_message_with_usage_stats() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         let content = r#"{"uuid":"uuid-1","sessionId":"session-1","timestamp":"2025-06-26T10:00:00Z","type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Hello!"}],"id":"msg_123","model":"claude-opus-4-20250514","stop_reason":"end_turn","usage":{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":20,"cache_read_input_tokens":10}}}
@@ -3631,7 +3555,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_session_summary_fallback_first_user_message() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         // Session with no summary but has user messages
@@ -3653,7 +3579,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_session_summary_fallback_first_assistant_text() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         // Session with no summary, no user messages, but has assistant text
@@ -3674,7 +3602,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_session_summary_fallback_last_user_message() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         // Session with command message (not genuine text), followed by real user message
@@ -3697,7 +3627,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_session_summary_fallback_incremental_preserves_values() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         // Initial content with user message
@@ -3744,7 +3676,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_extract_assistant_text_with_string_content() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         // Assistant message with string content (not array)
@@ -3768,7 +3702,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_extract_assistant_text_min_length() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         // Assistant message with very short text (< 10 chars, should be ignored)
@@ -3794,7 +3730,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_should_extract_rename_from_system_message() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         let content = format!(
@@ -3815,7 +3753,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_should_use_last_rename_when_multiple() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         let content = format!(
@@ -3837,7 +3777,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_should_prioritize_rename_over_other_summaries() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         let content = format!(
@@ -3860,7 +3802,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_should_fallback_to_existing_summary() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         // No rename message — should use first user content as summary
@@ -3881,7 +3825,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_should_not_count_system_as_message() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         let content = format!(
@@ -3903,7 +3849,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_should_ignore_empty_rename() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         let content = format!(
@@ -3925,7 +3873,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_extract_rename_from_content() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         // Valid rename
         let content = serde_json::json!(
             "<local-command-stdout>Session renamed to: MyProject</local-command-stdout>"
@@ -3960,7 +3910,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_phase2_rename_beyond_metadata_lines() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         // Build a fixture with > METADATA_PHASE_LINES (100) to force Phase 2 parsing
@@ -4000,7 +3952,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_incremental_append_then_rename() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
         let file_path = temp_dir.path().join("test.jsonl");
 
@@ -4052,7 +4006,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_should_extract_rename_from_branch_custom_title() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         let content = format!(
@@ -4077,7 +4033,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_should_use_last_naming_event_regardless_of_kind() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         // /branch (custom-title) happens, then a later /rename overrides it
@@ -4101,7 +4059,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_should_ignore_empty_custom_title() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         let content = format!(
@@ -4122,7 +4082,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_try_extract_custom_title() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         assert_eq!(
             try_extract_custom_title("custom-title", Some("MyTitle")),
             Some("MyTitle".to_string())
@@ -4139,7 +4101,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_phase2_custom_title_beyond_metadata_lines() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         // Build a fixture with > METADATA_PHASE_LINES (100) to force Phase 2 parsing
@@ -4180,7 +4144,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_incremental_append_then_custom_title() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
         let file_path = temp_dir.path().join("test.jsonl");
 
@@ -4226,6 +4192,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn workflow_run_id_for_detects_workflow_layout_only() {
         assert_eq!(
             workflow_run_id_for(Path::new(
@@ -4241,6 +4208,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn read_subagent_tool_use_id_reads_meta_json() {
         let dir = TempDir::new().unwrap();
         let meta = dir.path().join("agent-x.meta.json");
@@ -4256,6 +4224,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn read_subagent_tool_use_id_none_when_missing_invalid_or_empty() {
         let dir = TempDir::new().unwrap();
         // Missing file.
@@ -4279,6 +4248,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    #[serial_test::serial]
     fn read_subagent_tool_use_id_rejects_symlink() {
         let dir = TempDir::new().unwrap();
         let real = dir.path().join("real.meta.json");

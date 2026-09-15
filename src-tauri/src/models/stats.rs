@@ -190,7 +190,9 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    #[serial_test::serial]
     fn test_session_token_stats_serialization() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let stats = SessionTokenStats {
             session_id: "session-123".to_string(),
             project_name: "my-project".to_string(),
@@ -216,7 +218,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_daily_stats_default() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let stats = DailyStats::default();
         assert_eq!(stats.date, "");
         assert_eq!(stats.total_tokens, 0);
@@ -224,7 +228,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_project_stats_summary_default() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let summary = ProjectStatsSummary::default();
         assert_eq!(summary.project_name, "");
         assert_eq!(summary.total_sessions, 0);
@@ -232,7 +238,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_token_distribution_default() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let dist = TokenDistribution::default();
         assert_eq!(dist.input, 0);
         assert_eq!(dist.output, 0);
@@ -242,7 +250,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_model_stats_legacy_payload_without_provider_id() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let stats: ModelStats = serde_json::from_value(json!({
             "model_name": "legacy-model",
             "message_count": 1,

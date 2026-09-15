@@ -110,6 +110,7 @@ const PresetItem: React.FC<PresetItemProps> = React.memo(
   ({ preset, isReadOnly, onApplyHere, onApplyTo, onEdit, onDuplicate, onDelete }) => {
     const { t } = useTranslation();
     const { summary } = preset;
+    const localReadOnly = useAppStore((s) => s.isServerReadOnly);
 
     return (
       <TooltipProvider delayDuration={400}>
@@ -121,7 +122,7 @@ const PresetItem: React.FC<PresetItemProps> = React.memo(
 
             {/* Action icons - visible on hover */}
             <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity duration-100">
-              <Tooltip>
+              {!isReadOnly && <Tooltip>
                 <TooltipTrigger asChild>
                   <button
                     onClick={onApplyHere}
@@ -134,9 +135,9 @@ const PresetItem: React.FC<PresetItemProps> = React.memo(
                 <TooltipContent side="top" className="text-xs">
                   {t("settingsManager.presets.applyHere")}
                 </TooltipContent>
-              </Tooltip>
+              </Tooltip>}
 
-              <Tooltip>
+              {!isReadOnly && <Tooltip>
                 <TooltipTrigger asChild>
                   <button
                     onClick={onApplyTo}
@@ -149,9 +150,9 @@ const PresetItem: React.FC<PresetItemProps> = React.memo(
                 <TooltipContent side="top" className="text-xs">
                   {t("settingsManager.presets.applyTo")}
                 </TooltipContent>
-              </Tooltip>
+              </Tooltip>}
 
-              {!isReadOnly && (
+              {!localReadOnly && (
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <button
@@ -242,6 +243,8 @@ export const PresetPanel: React.FC = () => {
     deletePreset,
     duplicatePreset,
   } = useUnifiedPresets();
+
+  const localReadOnly = useAppStore((s) => s.isServerReadOnly);
 
   // Dialog state
   const [dialogMode, setDialogMode] = useState<DialogMode | null>(null);
@@ -557,7 +560,12 @@ export const PresetPanel: React.FC = () => {
       return;
     }
 
-    // 2. Now apply both (safe to proceed since parsing succeeded)
+    if (isReadOnly) return;
+    if (Object.keys(servers).length > 0) {
+      setApplyError("This preset includes MCP configuration. Select the MCP scope and review it separately before applying; no changes were made.");
+      return;
+    }
+    // Apply settings only to the selected, revision-checked scope.
     try {
       const scope = activeScope === "managed" ? "user" : activeScope;
 
@@ -618,6 +626,10 @@ export const PresetPanel: React.FC = () => {
         return;
       }
 
+      if (isReadOnly) return;
+      if (Object.keys(serversRaw).length > 0) {
+        throw new Error("This preset includes MCP configuration. Review it in the MCP scope separately; no changes were made.");
+      }
       // All parsing succeeded — now apply side effects
       if (Object.keys(settings).length > 0) {
         await saveSettings(settings, targetScope, targetProject);
@@ -683,7 +695,7 @@ export const PresetPanel: React.FC = () => {
         )}
 
         {/* Save button */}
-        {!isReadOnly && hasContent && (
+        {!localReadOnly && (
           <div className="pt-2 border-t border-border/30 mt-2">
             <Button
               variant="ghost"
@@ -692,7 +704,7 @@ export const PresetPanel: React.FC = () => {
               onClick={() => openDialog("create")}
             >
               <Package className="w-3.5 h-3.5 mr-2" />
-              {t("settingsManager.presets.saveCurrentConfig")}
+              {hasContent ? t("settingsManager.presets.saveCurrentConfig") : "Create local preset"}
             </Button>
           </div>
         )}

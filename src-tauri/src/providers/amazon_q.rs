@@ -1,6 +1,6 @@
 //! Amazon Q Developer CLI provider (`q chat`).
 //!
-//! Reads `dirs::data_local_dir()/amazon-q/data.sqlite3`, table
+//! Reads `crate::sources::data_local_dir()/amazon-q/data.sqlite3`, table
 //! `conversations (key TEXT PRIMARY KEY, value TEXT)` where `key` is the working
 //! directory and `value` is a serialized `ConversationState` — i.e. exactly ONE
 //! conversation per cwd (the `q chat --resume` state). This is the v1 schema;
@@ -18,11 +18,12 @@ const SCHEME: &str = "amazonq://";
 const SUMMARY_MAX_CHARS: usize = 100;
 
 fn get_db_path() -> Option<PathBuf> {
-    Some(
-        dirs::data_local_dir()?
-            .join("amazon-q")
-            .join("data.sqlite3"),
-    )
+    let paths = super::collection::home_paths(super::ProviderId::AmazonQ);
+    let base = paths
+        .iter()
+        .find(|p| p.join("data.sqlite3").is_file())
+        .or_else(|| paths.first())?;
+    Some(base.join("data.sqlite3"))
 }
 
 /// Detect an Amazon Q CLI installation.
@@ -288,6 +289,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn parse_history_maps_amazon_q_conversation() {
         let conn = fixture_db();
         let (_, value) = scan_rows(&conn)
@@ -307,6 +309,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn project_metadata_skips_empty_and_counts() {
         let conn = fixture_db();
         let rows = scan_rows(&conn);
@@ -328,6 +331,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn db_path_uses_amazon_q_under_data_local_dir() {
         // Sanity: path ends with the expected segments (don't assert the root,
         // which is host-specific).

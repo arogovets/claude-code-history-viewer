@@ -38,7 +38,7 @@ pub fn get_antigravity_root() -> Option<PathBuf> {
     // Sandboxed helper, not `dirs::home_dir()`: on Windows the latter goes to
     // the known-folder API and ignores `HOME`, so a test pointing `HOME` at a
     // fixture was silently scanning the developer's real one (#551).
-    crate::utils::home_dir().map(|h| h.join(".gemini").join("antigravity"))
+    crate::sources::home_dir().map(|h| h.join(".gemini").join("antigravity"))
 }
 
 /// Resolves the antigravity root directory, with fallback discovery logic.
@@ -107,23 +107,25 @@ pub fn get_antigravity_rpc_cache_root(root: &Path) -> PathBuf {
 
 /// Discovers external state directories across platform-specific config locations.
 ///
-/// On macOS searches `~/Library/Application Support`; on Windows `dirs::data_dir()`;
+/// On macOS searches `~/Library/Application Support`; on Windows `crate::sources::data_dir()`;
 /// on Linux checks `~/.config` and platform config dirs. Looks for directories
 /// containing a `monitor-state.json` file in their global storage subdirectory.
 fn discover_external_state_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     let bases = if cfg!(target_os = "macos") {
-        crate::utils::home_dir()
+        crate::sources::home_dir()
             .map(|home| vec![home.join("Library").join("Application Support")])
             .unwrap_or_default()
     } else if cfg!(target_os = "windows") {
-        dirs::data_dir().map(|dir| vec![dir]).unwrap_or_default()
+        crate::sources::data_dir()
+            .map(|dir| vec![dir])
+            .unwrap_or_default()
     } else {
         let mut candidates = Vec::new();
-        if let Some(config_dir) = dirs::config_dir() {
+        if let Some(config_dir) = crate::sources::config_dir() {
             candidates.push(config_dir);
         }
-        if let Some(home) = crate::utils::home_dir() {
+        if let Some(home) = crate::sources::home_dir() {
             let fallback = home.join(".config");
             if !candidates.iter().any(|candidate| candidate == &fallback) {
                 candidates.push(fallback);
@@ -677,7 +679,20 @@ fn build_state_from_token_monitor_sources(root: &Path) -> Result<AntigravityStat
         // data location: rpc_dir when token files come from rpc-cache,
         // session_dir for filesystem-only sessions whose rpc_dir does
         // not exist on disk.
-        let storage_dir = if has_rpc_artifact {
+        // Keep the user-facing session path on the brain directory whenever
+        // its plaintext transcript exists. The rpc-cache contains token
+        // counters, but choosing it here would make the provider render the
+        // synthetic usage view instead of the actual conversation.
+        let transcript_logs = candidate.session_dir.join(".system_generated").join("logs");
+        let has_transcript = ["transcript_full.jsonl", "transcript.jsonl"]
+            .iter()
+            .map(|name| transcript_logs.join(name))
+            .any(|path| {
+                std::fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_file())
+            });
+        let storage_dir = if has_transcript {
+            candidate.session_dir.clone()
+        } else if has_rpc_artifact {
             rpc_dir.clone()
         } else {
             candidate.session_dir.clone()
@@ -1024,7 +1039,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_merge_states_active_overrides_archive() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let mut archive_sessions = HashMap::new();
         archive_sessions.insert(
             "sess-001".to_string(),
@@ -1052,7 +1069,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_merge_states_preserves_archive_only_sessions() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let mut archive_sessions = HashMap::new();
         archive_sessions.insert(
             "old-sess".to_string(),
@@ -1069,14 +1088,18 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_merge_states_empty() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let merged = merge_states(vec![], None);
         assert!(merged.sessions.is_empty());
         assert!(merged.last_poll_at.is_none());
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_merge_states_preserves_active_last_poll_at() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let archive = AntigravityState {
             last_poll_at: None,
             sessions: HashMap::new(),
@@ -1091,7 +1114,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_merge_states_no_active_drops_archive_last_poll_at() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         // Archive states intentionally don't carry their own poll time,
         // so a merge without an active state results in `None`.
         let archive = AntigravityState {
@@ -1103,7 +1128,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_compute_project_summary_counts() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let mut sessions = HashMap::new();
         sessions.insert(
             "s1".to_string(),
@@ -1126,7 +1153,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_compute_project_summary_sorted_by_tokens() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let mut sessions = HashMap::new();
         sessions.insert(
             "a".to_string(),
@@ -1152,7 +1181,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_load_state_file_invalid_json() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("bad.json");
         std::fs::write(&path, "not valid json").unwrap();
@@ -1161,7 +1192,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_load_state_file_valid() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("monitor-state.json");
         let state = AntigravityState::default();
@@ -1173,7 +1206,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_load_archive_states_filters_correctly() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let dir = TempDir::new().unwrap();
         let root = dir.path();
 
@@ -1192,6 +1227,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn test_load_antigravity_state_impl_missing_dir() {
         let _home = crate::test_utils::SandboxHome::new();
@@ -1201,7 +1237,9 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    #[serial_test::serial]
     fn test_load_active_state_rejects_symlink() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let dir = TempDir::new().unwrap();
         // Real, valid state file lives outside the root we'll scan from.
         let target = dir.path().join("real-state.json");
@@ -1220,7 +1258,9 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    #[serial_test::serial]
     fn test_load_archive_states_rejects_symlinked_archive() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let dir = TempDir::new().unwrap();
         let target = dir.path().join("real-archive.json");
         let state = AntigravityState::default();
@@ -1242,6 +1282,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn test_antigravity_root_from_path_returns_none_when_marker_absent() {
         let _home = crate::test_utils::SandboxHome::new();
@@ -1262,6 +1303,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn test_antigravity_root_from_path_finds_marker_in_parent() {
         let _home = crate::test_utils::SandboxHome::new();
@@ -1279,7 +1321,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_build_state_includes_filesystem_only_brain_session() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         // Regression: a brain/ candidate that has token-bearing files
         // but no rpc-cache directory was previously dropped on the
         // floor. It should be synthesized from the filesystem source.
@@ -1306,7 +1350,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_scan_brain_candidates_rejects_invalid_session_id() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let dir = TempDir::new().unwrap();
         let root = dir.path();
 
@@ -1332,7 +1378,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_load_antigravity_state_impl_falls_back_to_rpc_cache() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let dir = TempDir::new().unwrap();
         let root = dir.path();
         let rpc_dir = root
@@ -1360,6 +1408,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     #[serial]
     async fn test_get_antigravity_project_summary_uses_explicit_root_path() {
         let _home = crate::test_utils::SandboxHome::new();

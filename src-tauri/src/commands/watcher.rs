@@ -55,41 +55,8 @@ pub async fn start_file_watcher(
     claude_folder_path: String,
     custom_claude_paths: Option<Vec<super::multi_provider::CustomClaudePathParam>>,
 ) -> Result<String, String> {
-    let base_path = PathBuf::from(&claude_folder_path);
-    let projects_path = base_path.join("projects");
-
-    // Reject symlinks to prevent symlink attacks
-    let base_meta = std::fs::symlink_metadata(&base_path)
-        .map_err(|e| format!("Cannot read metadata for base path: {e}"))?;
-    if base_meta.file_type().is_symlink() {
-        return Err("Claude folder path must not be a symlink".to_string());
-    }
-
-    let projects_meta = std::fs::symlink_metadata(&projects_path)
-        .map_err(|e| format!("Cannot read metadata for projects path: {e}"))?;
-    if projects_meta.file_type().is_symlink() {
-        return Err("Projects directory must not be a symlink".to_string());
-    }
-
-    // Canonicalize and verify path traversal safety
-    let canonical_base = std::fs::canonicalize(&base_path)
-        .map_err(|e| format!("Failed to canonicalize base path: {e}"))?;
-    let canonical_projects = std::fs::canonicalize(&projects_path)
-        .map_err(|e| format!("Failed to canonicalize projects path: {e}"))?;
-
-    if !canonical_projects.starts_with(&canonical_base) {
-        return Err("Projects path escapes the allowed base directory".to_string());
-    }
-
-    // Verify it is a directory
-    if !canonical_projects.is_dir() {
-        return Err(format!(
-            "Projects path is not a directory: {}",
-            canonical_projects.display()
-        ));
-    }
-
-    // Create a debounced watcher
+    let _ = (claude_folder_path, custom_claude_paths);
+    let sources = crate::sources::list()?;
     let app_handle_clone = app_handle.clone();
     let mut debouncer = new_debouncer(
         Duration::from_millis(500),
@@ -99,43 +66,16 @@ pub async fn start_file_watcher(
                     handle_file_event(&app_handle_clone, &event);
                 }
             }
-            Err(error) => {
-                log::error!("File watcher error: {error:?}");
-            }
+            Err(error) => log::error!("File watcher error: {error:?}"),
         },
     )
     .map_err(|e| format!("Failed to create file watcher: {e}"))?;
-
-    // Start watching the canonicalized projects directory recursively
-    debouncer
-        .watcher()
-        .watch(&canonical_projects, RecursiveMode::Recursive)
-        .map_err(|e| format!("Failed to watch directory: {e}"))?;
-    prime_watch_signatures(&canonical_projects);
-
-    // Also watch custom Claude directories if provided
-    if let Some(custom_paths) = custom_claude_paths {
-        for custom in &custom_paths {
-            let custom_base = PathBuf::from(&custom.path);
-            match crate::utils::validate_custom_claude_path(&custom_base) {
-                Ok(canonical_projects) => {
-                    if debouncer
-                        .watcher()
-                        .watch(&canonical_projects, RecursiveMode::Recursive)
-                        .is_ok()
-                    {
-                        prime_watch_signatures(&canonical_projects);
-                        log::info!(
-                            "File watcher added custom path: {}",
-                            canonical_projects.display()
-                        );
-                    }
-                }
-                Err(e) => {
-                    log::warn!("Skipping invalid custom watch path: {e}");
-                }
-            }
-        }
+    for source in sources {
+        debouncer
+            .watcher()
+            .watch(&source.current, RecursiveMode::Recursive)
+            .map_err(|e| format!("Failed to watch mirror {}: {e}", source.id))?;
+        prime_watch_signatures(&source.current);
     }
 
     // Store the debouncer in app state to prevent it from being dropped
@@ -143,7 +83,7 @@ pub async fn start_file_watcher(
     let mut watcher = watcher_state.lock().unwrap();
     *watcher = Some(debouncer);
 
-    log::info!("File watcher started for: {}", canonical_projects.display());
+    log::info!("File watcher started for collected mirrors");
     Ok("watcher-started".to_string())
 }
 
@@ -676,7 +616,9 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
+    #[serial_test::serial]
     fn test_extract_paths() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let path = PathBuf::from("/Users/test/.claude/projects/my-project/session.jsonl");
         let result = extract_paths(&path);
 
@@ -688,7 +630,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_extract_paths_nested() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let path = PathBuf::from("/Users/test/.claude/projects/my-project/subfolder/session.jsonl");
         let result = extract_paths(&path);
 
@@ -700,7 +644,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_extract_paths_invalid() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let path = PathBuf::from("/Users/test/session.jsonl");
         let result = extract_paths(&path);
 
@@ -708,7 +654,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_to_file_watch_event_ignores_unchanged_content_signature() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp = TempDir::new().unwrap();
         // Nothing here wants the home directory, but `to_file_watch_event`
         // resolves it while classifying the path. Point it at this test's own
@@ -746,7 +694,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_extract_codex_paths() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let path = PathBuf::from("/Users/test/.codex/sessions/2025/10/rollout-abc.jsonl");
         let result = extract_codex_paths(&path).unwrap();
 
@@ -755,8 +705,10 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn test_extract_pi_store_paths_matches_direct_session_files_only() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp = TempDir::new().unwrap();
         let root = temp.path().join("agent").join("sessions");
         let project = root.join("--Users-jack-my-proj");
@@ -785,7 +737,9 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    #[serial_test::serial]
     fn test_extract_pi_store_paths_rejects_symlinked_project_dir() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         use std::os::unix::fs as unix_fs;
 
         let temp = TempDir::new().unwrap();
@@ -805,7 +759,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_extract_kimi_context_paths() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp = TempDir::new().unwrap();
         let old_kimi_home = std::env::var_os("KIMI_HOME");
         std::env::set_var("KIMI_HOME", temp.path());
@@ -849,8 +805,10 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn test_extract_kimi_state_paths() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp = TempDir::new().unwrap();
         let old_kimi_home = std::env::var_os("KIMI_HOME");
         std::env::set_var("KIMI_HOME", temp.path());
@@ -894,8 +852,10 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn test_extract_kimi_paths_from_custom_home() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp = TempDir::new().unwrap();
         let old_kimi_home = std::env::var_os("KIMI_HOME");
         std::env::set_var("KIMI_HOME", temp.path());
@@ -940,7 +900,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_extract_opencode_session_paths() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let path = PathBuf::from(
             "/Users/test/.local/share/opencode/storage/session/project_1/session_1.json",
         );
@@ -951,7 +913,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_extract_opencode_message_paths_with_manifest_lookup() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp = TempDir::new().unwrap();
         let storage = temp.path().join("storage");
         let session_dir = storage.join("session").join("project_1");
@@ -975,8 +939,10 @@ mod tests {
     /// Before the LRU fix this used a plain `HashMap`, so `len()` would equal
     /// the full insert count (10,100) and this assertion would fail.
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn test_opencode_cache_is_bounded() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let cache = OPENCODE_SESSION_PROJECT_CACHE.get_or_init(create_opencode_cache);
         let mut guard = cache.lock().unwrap();
         guard.clear();

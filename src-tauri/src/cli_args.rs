@@ -64,12 +64,14 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn space_form_returns_value() {
         let args = argv(&["app", "--port", "3001"]);
         assert_eq!(extract_flag_value(&args, "--port"), Some("3001".into()));
     }
 
     #[test]
+    #[serial_test::serial]
     fn equals_form_returns_value() {
         let args = argv(&["app", "--host=127.0.0.1"]);
         assert_eq!(
@@ -79,24 +81,28 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn absent_flag_returns_none() {
         let args = argv(&["app", "--other"]);
         assert_eq!(extract_flag_value(&args, "--port"), None);
     }
 
     #[test]
+    #[serial_test::serial]
     fn flag_without_value_returns_none() {
         let args = argv(&["app", "--port"]);
         assert_eq!(extract_flag_value(&args, "--port"), None);
     }
 
     #[test]
+    #[serial_test::serial]
     fn flag_followed_by_other_flag_returns_none() {
         let args = argv(&["app", "--port", "--host"]);
         assert_eq!(extract_flag_value(&args, "--port"), None);
     }
 
     #[test]
+    #[serial_test::serial]
     fn empty_equals_form_returns_none() {
         // Regression: the previous `lib.rs::parse_cli_flag` returned `Some("")` here.
         let args = argv(&["app", "--port="]);
@@ -104,6 +110,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn round_trip_port() {
         assert_eq!(
             extract_flag_value(&argv(&["--port=8080"]), "--port"),
@@ -116,6 +123,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn round_trip_host() {
         assert_eq!(
             extract_flag_value(&argv(&["--host=0.0.0.0"]), "--host"),
@@ -124,6 +132,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn round_trip_dist() {
         assert_eq!(
             extract_flag_value(&argv(&["--dist", "/tmp/dist"]), "--dist"),
@@ -132,6 +141,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn round_trip_token() {
         assert_eq!(
             extract_flag_value(&argv(&["--token=abc123"]), "--token"),
@@ -140,6 +150,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn has_explicit_empty_flag_detects_equals_form() {
         assert!(has_explicit_empty_flag(
             &argv(&["app", "--token="]),
@@ -148,6 +159,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn has_explicit_empty_flag_detects_bare_flag_at_end() {
         assert!(has_explicit_empty_flag(
             &argv(&["app", "--token"]),
@@ -156,6 +168,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn has_explicit_empty_flag_detects_flag_followed_by_other_flag() {
         assert!(has_explicit_empty_flag(
             &argv(&["app", "--token", "--no-auth"]),
@@ -164,6 +177,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn has_explicit_empty_flag_false_when_flag_absent() {
         assert!(!has_explicit_empty_flag(
             &argv(&["app", "--serve"]),
@@ -172,6 +186,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn has_explicit_empty_flag_false_when_flag_has_value() {
         assert!(!has_explicit_empty_flag(
             &argv(&["app", "--token", "abc"]),

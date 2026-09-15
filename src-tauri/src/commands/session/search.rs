@@ -467,6 +467,7 @@ pub async fn search_messages(
     filters: serde_json::Value,
     limit: Option<usize>,
 ) -> Result<Vec<ClaudeMessage>, String> {
+    crate::sources::require_history_path(&claude_path)?;
     tauri::async_runtime::spawn_blocking(move || {
         search_messages_blocking(claude_path, query, filters, limit)
     })
@@ -671,7 +672,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_search_messages_basic() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
         let projects_dir = temp_dir.path().join("projects");
         let project_dir = projects_dir.join("test-project");
@@ -702,7 +705,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_search_messages_matches_tool_use_result() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         // Regression for #394: a query that appears ONLY in toolUseResult
         // (e.g. command output / file contents) must be found by global search,
         // mirroring the in-session FlexSearch index.
@@ -741,7 +746,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_search_messages_case_insensitive() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
         let projects_dir = temp_dir.path().join("projects");
         let project_dir = projects_dir.join("test-project");
@@ -770,7 +777,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_search_messages_no_results() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
         let projects_dir = temp_dir.path().join("projects");
         let project_dir = projects_dir.join("test-project");
@@ -798,7 +807,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_search_messages_empty_projects_dir() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
         // Don't create projects directory
 
@@ -815,7 +826,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_search_messages_invalid_date_filter_returns_error() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         let result = search_messages(
@@ -881,10 +894,12 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     /// Core invalidation behavior: an unchanged file is served from cache
     /// (no re-scan), an appended file is re-scanned, and the merged result
     /// after the append equals a cold scan.
     async fn test_search_cache_rescans_only_appended_file() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let (temp_dir, file_a, file_b) = two_file_fixture("cacheProbe42");
 
         let first = run_search(&temp_dir, "cacheProbe42").await;
@@ -943,9 +958,11 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     /// A change to an unrelated file evicts nothing: only the changed file
     /// is re-scanned, even when it never matched the query.
     async fn test_search_unrelated_file_change_does_not_evict() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let (temp_dir, file_a, file_b) = two_file_fixture("evictProbe7");
 
         // Third file that does NOT match the query.
@@ -994,9 +1011,11 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     /// A temp+rename rewrite can keep the same (size, mtime) signature —
     /// explicit eviction must force a re-scan of that file only.
     async fn test_evict_file_forces_rescan_without_signature_change() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let (temp_dir, file_a, file_b) = two_file_fixture("evictExplicit3");
 
         let first = run_search(&temp_dir, "evictExplicit3").await;
@@ -1014,9 +1033,11 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     /// Filters and limit are applied at serve time over cached raw matches:
     /// changing them must not trigger any re-scan.
     async fn test_search_filter_and_limit_changes_reuse_cached_matches() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let (temp_dir, file_a, file_b) = two_file_fixture("filterProbe9");
 
         let unfiltered = run_search(&temp_dir, "filterProbe9").await;
@@ -1062,9 +1083,11 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     /// Deleted files drop out of the merged result and new files are picked
     /// up, while untouched files stay cached.
     async fn test_search_detects_deleted_and_new_files() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let (temp_dir, file_a, file_b) = two_file_fixture("lifecycleProbe3");
 
         let first = run_search(&temp_dir, "lifecycleProbe3").await;

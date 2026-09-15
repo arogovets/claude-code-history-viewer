@@ -26,7 +26,7 @@ pub fn detect() -> Option<ProviderInfo> {
 }
 
 pub fn get_base_path() -> Option<String> {
-    if let Ok(env_val) = std::env::var("VIBE_HOME") {
+    if let Ok(env_val) = crate::sources::env_var("VIBE_HOME") {
         let path = PathBuf::from(&env_val);
         let absolute_path = if path.is_absolute() {
             path
@@ -39,7 +39,7 @@ pub fn get_base_path() -> Option<String> {
         }
     }
 
-    let default = crate::utils::home_dir()?.join(".vibe");
+    let default = crate::sources::home_dir()?.join(".vibe");
     if default.exists() {
         let normalized = default.canonicalize().unwrap_or(default);
         Some(normalized.to_string_lossy().to_string())
@@ -756,6 +756,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn scan_projects_groups_sessions_by_working_directory() {
         let temp = TempDir::new().expect("temp dir");
         let (cwd, _) = write_fixture(temp.path());
@@ -769,6 +770,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn load_sessions_and_messages_parse_openai_format() {
         let temp = TempDir::new().expect("temp dir");
         let (cwd, session_dir) = write_fixture(temp.path());
@@ -791,6 +793,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn get_base_path_honors_vibe_home() {
         let temp = TempDir::new().expect("temp dir");
         let vibe_home = temp.path().join(".vibe");
@@ -812,6 +815,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     /// A corrupt line in messages.jsonl must be skipped, not fail the load —
     /// crashed Vibe sessions can leave a truncated final line.
     fn load_messages_skips_malformed_jsonl_lines() {
@@ -838,6 +842,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    #[serial_test::serial]
     /// A symlinked session directory must be rejected by the path guard.
     fn load_messages_rejects_symlinked_session_dir() {
         use std::os::unix::fs as unix_fs;
@@ -863,6 +868,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     /// Pasted/attached images render: inline sources decode from the record,
     /// file sources are read from the session directory, and paths escaping
     /// the session dir are skipped (issue #438 follow-up).

@@ -70,7 +70,7 @@ impl PiStore {
     /// Store root: `~/<dot_dir>/agent/sessions`.
     fn sessions_root(&self) -> Option<PathBuf> {
         Some(
-            crate::utils::home_dir()?
+            crate::sources::home_dir()?
                 .join(self.dot_dir)
                 .join("agent")
                 .join("sessions"),
@@ -741,6 +741,7 @@ mod tests {
     );
 
     #[test]
+    #[serial_test::serial]
     fn session_meta_extracts_cwd_count_summary() {
         let m = session_meta(SESSION).unwrap();
         assert_eq!(m.id, "sess-1");
@@ -765,6 +766,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn parse_messages_maps_records_to_normalized_messages() {
         let msgs = parse_messages(SESSION, "pi");
         // header/model_change/thinking_level_change are skipped.
@@ -806,6 +808,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn convert_content_item_kinds() {
         assert!(convert_content_item(&json!({"type": "unknownKind"})).is_none());
         assert_eq!(
@@ -822,6 +825,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn assistant_blocks_appends_error_indication() {
         let msg = json!({
             "role": "assistant",
@@ -839,6 +843,7 @@ mod tests {
     /// just the default `~/.pi/agent/sessions` — the real project path comes
     /// from the header `cwd`, never the escaped directory name.
     #[test]
+    #[serial_test::serial]
     fn scan_projects_in_reads_arbitrary_fixture_root() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let root = tmp.path().join("not-home").join("sessions");
@@ -857,6 +862,7 @@ mod tests {
     /// fixture store that `$HOME` is pointed at, proving the store resolution
     /// works without requiring the real `~/.pi/agent/sessions`.
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn load_messages_succeeds_for_fixture_path_under_home_override() {
         let home = crate::test_utils::SandboxHome::new();
@@ -878,6 +884,7 @@ mod tests {
     /// `load_sessions` likewise must work against a literal fixture directory
     /// path under the `$HOME`-resolved sessions root.
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn load_sessions_succeeds_for_fixture_dir_under_home_override() {
         let home = crate::test_utils::SandboxHome::new();
@@ -902,6 +909,7 @@ mod tests {
     /// well-formed directory/file otherwise — this is the actual security
     /// property `validate_under_root` provides.
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn load_rejects_paths_outside_sessions_root() {
         let home = tempfile::tempdir().expect("tempdir");

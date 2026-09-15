@@ -46,6 +46,7 @@ export interface GitCommit {
 export type ProjectPathStatus = "unavailable";
 
 export interface ClaudeProject {
+  source_id?: string;
   name: string;
   /** Claude session storage path (e.g., "~/.claude/projects/-Users-jack-client-my-project") */
   path: string;
@@ -85,17 +86,14 @@ export interface ClaudeSession {
   provider?: ProviderId;
   /** Storage type (json, jsonl, sqlite) */
   storage_type?: "json" | "jsonl" | "sqlite";
-  /**
-   * Originating client/surface for the session. Raw value from the JSONL
-   * `entrypoint` field. Known values:
-   *   * Claude:  "cli" / "claude-vscode" / "claude-desktop"
-   *   * Copilot: "copilot-cli" / "copilot-desktop" / "copilot-vscode"
-   * Undefined for providers that don't stamp the field, or older sessions.
-   */
+  /** Originating Claude Code client (raw JSONL `entrypoint` value). */
   entrypoint?: string;
+  /** Whether the session file is currently available on the source host/filesystem */
+  is_available?: boolean;
 }
 
 export interface SessionPage {
+  offline?: boolean;
   sessions: ClaudeSession[];
   total: number;
   offset: number;
@@ -103,6 +101,12 @@ export interface SessionPage {
   nextOffset: number;
   hasMore: boolean;
 }
+
+export interface LocatedSession {
+  project: ClaudeProject;
+  session: ClaudeSession;
+}
+
 
 // ============================================================================
 // Search Filters

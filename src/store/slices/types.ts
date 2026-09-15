@@ -98,6 +98,7 @@ export interface AppStoreState {
   claudePath: string;
   projects: ClaudeProject[];
   selectedProject: ClaudeProject | null;
+  sessionsOffline: boolean;
   sessions: ClaudeSession[];
   sessionsTotal: number;
   sessionsOffset: number;

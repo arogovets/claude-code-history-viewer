@@ -27,7 +27,7 @@ pub fn detect() -> Option<ProviderInfo> {
 }
 
 pub fn get_base_path() -> Option<String> {
-    if let Ok(env_val) = std::env::var("GROK_HOME") {
+    if let Ok(env_val) = crate::sources::env_var("GROK_HOME") {
         let path = PathBuf::from(&env_val);
         let absolute_path = if path.is_absolute() {
             path
@@ -40,7 +40,7 @@ pub fn get_base_path() -> Option<String> {
         }
     }
 
-    let default = crate::utils::home_dir()?.join(".grok");
+    let default = crate::sources::home_dir()?.join(".grok");
     if default.exists() {
         let normalized = default.canonicalize().unwrap_or(default);
         Some(normalized.to_string_lossy().to_string())
@@ -923,6 +923,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn decode_cwd_dirname_percent_decodes_paths() {
         assert_eq!(
             decode_cwd_dirname("%2FUsers%2Flucashr%2FDownloads"),
@@ -931,6 +932,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn get_base_path_prefers_grok_home() {
         let temp = TempDir::new().unwrap();
@@ -942,6 +944,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn get_base_path_returns_none_when_default_dir_absent() {
         // The sandbox guarantees the default dir is absent, so the assertion
@@ -954,6 +957,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn scan_load_and_search_fixture_session() {
         let temp = TempDir::new().unwrap();
@@ -1014,6 +1018,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn convert_chat_message_maps_tool_result_and_backend_call() {
         let mut counter = 0u64;
         let tool_result = json!({

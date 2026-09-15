@@ -57,7 +57,7 @@ pub fn detect() -> Option<ProviderInfo> {
 
 /// Base path for Cursor Agent transcripts: `~/.cursor/projects`.
 pub fn get_base_path() -> Option<String> {
-    let home = crate::utils::home_dir()?;
+    let home = crate::sources::home_dir()?;
     let projects = home.join(".cursor").join("projects");
     if projects.is_dir() {
         Some(projects.to_string_lossy().to_string())
@@ -711,6 +711,7 @@ mod tests {
     // ---------------------------------------------------------------------------
 
     #[test]
+    #[serial_test::serial]
     fn scan_lists_only_projects_with_transcripts() {
         let tmp = TempDir::new().unwrap();
         let base = tmp.path();
@@ -724,6 +725,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn extract_session_info_derives_id_count_and_title() {
         let tmp = TempDir::new().unwrap();
         let base = tmp.path();
@@ -743,6 +745,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn parse_transcript_maps_roles_with_deterministic_uuids() {
         let messages = parse_transcript(SAMPLE, "uuid-1", "2026-06-20T00:00:00Z");
         assert_eq!(messages.len(), 2);
@@ -765,6 +768,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn parse_transcript_skips_blank_and_non_turn_lines() {
         let data = format!(
             "\n  \n{SAMPLE}{}",
@@ -775,6 +779,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn summarize_strips_wrapper_and_truncates() {
         assert_eq!(
             summarize("<user_query>hello world</user_query>"),
@@ -792,6 +797,7 @@ mod tests {
 
     /// `clean_user_text` strips the `<user_query>` wrapper and drops the trailing `<context>` blob.
     #[test]
+    #[serial_test::serial]
     fn clean_user_text_strips_wrapper_and_context() {
         let input = "<user_query>do something useful</user_query><context>lots of verbose context here</context>";
         let result = clean_user_text(input);
@@ -802,6 +808,7 @@ mod tests {
 
     /// `clean_user_text` passes non-wrapped assistant text through unchanged.
     #[test]
+    #[serial_test::serial]
     fn clean_user_text_no_wrapper_passthrough() {
         let input = "Here is the fix for your bug.";
         assert_eq!(clean_user_text(input), input);
@@ -809,6 +816,7 @@ mod tests {
 
     /// A message consisting entirely of redacted blocks must be skipped.
     #[test]
+    #[serial_test::serial]
     fn redacted_only_message_is_skipped() {
         // Explicit redaction type.
         let explicit =
@@ -826,6 +834,7 @@ mod tests {
 
     /// A message where only *some* blocks are redacted must still be shown.
     #[test]
+    #[serial_test::serial]
     fn mixed_redacted_message_is_kept() {
         let line = r#"{"role":"assistant","message":{"content":[{"type":"redacted","data":"[REDACTED]"},{"type":"text","text":"Here is what I found."}]}}"#;
         let messages = parse_transcript(line, "s", "");
@@ -840,6 +849,7 @@ mod tests {
 
     /// `tool_result` and `command_output` blocks must appear in the rendered message.
     #[test]
+    #[serial_test::serial]
     fn tool_result_and_command_output_extracted() {
         // JSONL: one compact JSON object per line (parse_transcript splits on
         // newlines, so the transcript line must not be pretty-printed).

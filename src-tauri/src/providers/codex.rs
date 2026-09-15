@@ -38,7 +38,7 @@ pub fn detect() -> Option<ProviderInfo> {
 /// Get the Codex base path
 pub fn get_base_path() -> Option<String> {
     // Check $CODEX_HOME first
-    if let Ok(codex_home) = std::env::var("CODEX_HOME") {
+    if let Ok(codex_home) = crate::sources::env_var("CODEX_HOME") {
         let path = PathBuf::from(&codex_home);
         if path.exists() {
             return Some(codex_home);
@@ -46,7 +46,7 @@ pub fn get_base_path() -> Option<String> {
     }
 
     // Default: ~/.codex
-    let home = crate::utils::home_dir()?;
+    let home = crate::sources::home_dir()?;
     let codex_path = home.join(".codex");
     if codex_path.exists() {
         Some(codex_path.to_string_lossy().to_string())
@@ -2028,6 +2028,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn map_exec_command_to_bash() {
         assert_eq!(map_codex_tool_name("exec_command"), "Bash");
         assert_eq!(map_codex_tool_name("shell"), "Bash");
@@ -2036,6 +2037,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn normalize_bash_input_maps_cmd_to_command() {
         let mut input = json!({ "cmd": "pwd && ls -la" });
         normalize_tool_input("Bash", &mut input);
@@ -2046,6 +2048,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn normalize_bash_input_maps_command_array_to_string() {
         let mut input = json!({ "command": ["bash", "-lc", "pwd"] });
         normalize_tool_input("Bash", &mut input);
@@ -2056,6 +2059,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn normalize_tool_output_extracts_wrapped_output() {
         let wrapped = "Chunk ID: abc\nWall time: 0.01 seconds\nOutput:\nhello\nworld";
         let out = normalize_tool_output(Value::String(wrapped.to_string()));
@@ -2063,6 +2067,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn normalize_tool_output_extracts_json_output_field() {
         let out = normalize_tool_output(Value::String(
             r#"{"output":"done","metadata":{"exit_code":0}}"#.to_string(),
@@ -2071,6 +2076,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn parse_nested_token_count_totals() {
         let payload = json!({
             "type": "token_count",
@@ -2085,6 +2091,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn normalize_custom_tool_input_wraps_apply_patch_text() {
         let mut input = Value::String("*** Begin Patch".to_string());
         normalize_custom_tool_input("apply_patch", &mut input);
@@ -2095,6 +2102,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn normalize_web_search_input_extracts_query_and_type() {
         let input = normalize_web_search_input(json!({
             "type": "search",
@@ -2113,6 +2121,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn convert_content_array_maps_input_image_to_image() {
         let converted = convert_codex_content_array(Some(&json!([
             {
@@ -2137,6 +2146,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn convert_custom_tool_call_to_tool_use() {
         let mut counter = 0u64;
         let msg = convert_codex_item(
@@ -2174,6 +2184,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn convert_parallel_agent_function_calls_preserves_protocol_fields() {
         let fixtures = [
             (
@@ -2220,6 +2231,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn convert_custom_tool_call_output_to_tool_result() {
         let mut counter = 0u64;
         let msg = convert_codex_item(
@@ -2256,6 +2268,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn convert_web_search_call_to_web_search_tool_use() {
         let mut counter = 0u64;
         let msg = convert_codex_item(
@@ -2294,6 +2307,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn merge_tool_result_into_previous_tool_use_message() {
         let mut messages = vec![build_codex_message(
             "assistant-1".to_string(),
@@ -2341,6 +2355,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn build_codex_message_sets_tool_use_from_content() {
         let msg = build_codex_message(
             "assistant-1".to_string(),
@@ -2368,6 +2383,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn convert_task_started_event_to_progress_message() {
         let mut counter = 0u64;
         let msg = convert_codex_event(
@@ -2392,6 +2408,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn convert_context_compacted_event_to_system_message() {
         let mut counter = 0u64;
         let msg = convert_codex_event(
@@ -2409,6 +2426,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn convert_agent_reasoning_event_to_thinking_message() {
         let mut counter = 0u64;
         let msg = convert_codex_event(
@@ -2436,6 +2454,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn convert_agent_reasoning_event_skips_empty_text() {
         let mut counter = 0u64;
         let msg = convert_codex_event(
@@ -2453,6 +2472,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn convert_agent_message_event_not_handled() {
         // agent_message events are skipped in load_messages() to avoid
         // duplicating response_item messages. convert_codex_event should
@@ -2471,6 +2491,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn convert_user_message_event_not_handled() {
         // user_message events are skipped in load_messages() to avoid
         // duplicating response_item messages. convert_codex_event should
@@ -2489,6 +2510,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn convert_compacted_line_to_system_message() {
         let mut counter = 0u64;
         let msg = convert_codex_compacted(
@@ -2513,6 +2535,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn load_messages_parses_codex_rollout_end_to_end() {
         let tmp = TempDir::new().expect("temp dir should be created");
@@ -2707,6 +2730,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn load_messages_skips_duplicate_event_msg_for_user_and_agent() {
         // Codex logs user/assistant text in both response_item (type=message)
@@ -2826,6 +2850,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn load_messages_dedup_multi_turn_conversation() {
         // Simulates a realistic multi-turn Codex conversation where each
@@ -2953,6 +2978,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn load_sessions_includes_archived_sessions() {
         let tmp = TempDir::new().expect("temp dir should be created");
@@ -3030,6 +3056,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn missing_cwd_sessions_load_from_unknown_project() {
         let tmp = TempDir::new().expect("temp dir should be created");
@@ -3080,6 +3107,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn load_sessions_uses_codex_native_title_from_state_db() {
         let tmp = TempDir::new().expect("temp dir should be created");
@@ -3119,6 +3147,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn rename_session_title_updates_codex_state_db_and_resets_to_first_prompt() {
         let tmp = TempDir::new().expect("temp dir should be created");
@@ -3181,6 +3210,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn delete_session_title_removes_only_the_matching_thread_row() {
         let tmp = TempDir::new().expect("temp dir should be created");
@@ -3241,6 +3271,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn delete_session_title_is_noop_without_state_db() {
         let tmp = TempDir::new().expect("temp dir should be created");
@@ -3270,6 +3301,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn load_messages_accepts_archived_session_path() {
         let tmp = TempDir::new().expect("temp dir should be created");
@@ -3362,6 +3394,7 @@ mod tests {
     const ENV_CONTEXT_BLOCK: &str = "<environment_context>\n  <cwd>/tmp/proj</cwd>\n  <shell>powershell</shell>\n  <current_date>2026-05-13</current_date>\n  <timezone>Asia/Shanghai</timezone>\n</environment_context>";
 
     #[test]
+    #[serial_test::serial]
     fn project_scan_info_uses_lightweight_metadata() {
         let info = run_extract_project_scan_info_on_lines(vec![
             session_meta_line(),
@@ -3410,6 +3443,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn json_field_matcher_accepts_whitespace_around_colon() {
         let line = br#"{ "type" : "response_item", "payload": { "type" : "message" } }"#;
 
@@ -3422,6 +3456,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     /// First user message is an auto-injected `<environment_context>` block;
     /// second user message is a real prompt — the summary should be the
     /// real prompt, not the env-context block.
@@ -3446,6 +3481,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     /// First user message is a real prompt — extractor must not regress
     /// pre-existing behaviour for sessions without an env-context wrapper.
     fn extract_session_info_uses_first_real_user_prompt() {
@@ -3460,6 +3496,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     /// Session contains only auto-injected wrapper messages and no real
     /// prompt — summary stays None, matching legacy empty-session behaviour.
     fn extract_session_info_env_context_only_yields_no_summary() {
@@ -3486,6 +3523,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     /// `codex fork` creates the new rollout with its own `session_meta` first,
     /// then replays the source rollout verbatim — including the source's
     /// `session_meta` line. The first meta is the file's identity; later metas
@@ -3504,6 +3542,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     /// Messages replayed after the source's `session_meta` line in a forked
     /// rollout must carry the forked file's own session id, not the source's.
     fn parse_rollout_file_keeps_first_session_meta_id_on_forked_rollout() {
@@ -3555,6 +3594,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn search_prioritizes_conversation_text_over_tool_matches() {
         let tmp = TempDir::new().expect("temp dir should be created");
@@ -3605,6 +3645,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn search_prefilter_matches_ascii_case_insensitively() {
         assert!(bytes_contain_query_case_insensitive(
             br#"{"text":"Windows Wallpaper Engine"}"#,
@@ -3621,6 +3662,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn search_prefilter_matches_json_escaped_text() {
         let tmp = TempDir::new().expect("temp dir should be created");
         let rollout_path = tmp.path().join("rollout-escaped.jsonl");
@@ -3637,6 +3679,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn search_ignores_developer_instruction_matches() {
         let tmp = TempDir::new().expect("temp dir should be created");
@@ -3674,6 +3717,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn search_applies_role_and_project_filters_before_limit() {
         let tmp = TempDir::new().expect("temp dir should be created");
@@ -3732,6 +3776,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     /// Newer Codex builds can leave rollouts with no `session_meta` line at
     /// all (issue #451 follow-up). Identity must then come from fallbacks:
     /// cwd from the LAST `turn_context` (a fork replays the source's turn
@@ -3759,6 +3804,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     /// `session_meta`, when present, still wins over any `turn_context` fallback.
     fn extract_session_info_prefers_session_meta_over_turn_context() {
         let tmp = TempDir::new().expect("temp dir should be created");
@@ -3782,6 +3828,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     /// Messages in a meta-less rollout carry the filename-derived session id.
     fn parse_rollout_file_uses_filename_session_id_without_meta() {
         let tmp = TempDir::new().expect("temp dir should be created");
@@ -3802,6 +3849,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     /// Codex compresses old rollouts to `.jsonl.zst`; they must stay
     /// discoverable and parseable, and a compressed file whose plain twin
     /// exists must be skipped (the plain one is the materialized, current
@@ -3843,6 +3891,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     /// Filename-derived session ids also work for compressed rollouts, whose
     /// `file_stem` still carries a ".jsonl" tail.
     fn session_id_from_rollout_filename_handles_zst() {

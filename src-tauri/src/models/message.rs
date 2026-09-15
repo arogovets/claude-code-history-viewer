@@ -227,7 +227,9 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    #[serial_test::serial]
     fn test_token_usage_serialization() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let usage = TokenUsage {
             input_tokens: Some(100),
             output_tokens: Some(200),
@@ -251,7 +253,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_token_usage_provider_aliases() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let usage: TokenUsage = serde_json::from_value(json!({
             "inputTokens": 100,
             "output": 200,
@@ -295,7 +299,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_token_usage_with_none_values() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let json_str = r#"{"input_tokens": 100}"#;
         let usage: TokenUsage = serde_json::from_str(json_str).unwrap();
 
@@ -305,7 +311,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_message_content_user() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let json_str = r#"{
             "role": "user",
             "content": "Hello, Claude!"
@@ -319,7 +327,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_message_content_assistant_with_metadata() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let json_str = r#"{
             "role": "assistant",
             "content": [{"type": "text", "text": "Hello!"}],
@@ -341,7 +351,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_raw_log_entry_user_message() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let json_str = r#"{
             "uuid": "test-uuid-123",
             "parentUuid": "parent-uuid-456",
@@ -364,7 +376,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_raw_log_entry_summary() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let json_str = r#"{
             "type": "summary",
             "summary": "This is a summary of the conversation",
@@ -381,7 +395,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_raw_log_entry_with_tool_use() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let json_str = r#"{
             "uuid": "test-uuid",
             "sessionId": "session-123",
@@ -402,7 +418,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_claude_message_serialization() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let message = ClaudeMessage {
             uuid: "msg-uuid-123".to_string(),
             parent_uuid: Some("parent-uuid".to_string()),
@@ -447,7 +465,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_claude_message_with_optional_fields_skipped() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let message = ClaudeMessage {
             uuid: "uuid".to_string(),
             parent_uuid: None,
@@ -495,7 +515,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_message_page_serialization() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let page = MessagePage {
             messages: vec![],
             total_count: 100,
@@ -512,7 +534,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_content_array_parsing() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let json_str = r#"{
             "role": "assistant",
             "content": [
@@ -529,7 +553,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_tool_use_result_file_read() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let json_str = r#"{
             "uuid": "uuid-123",
             "sessionId": "session",
@@ -555,7 +581,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_system_message_stop_hook_summary() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let json_str = r#"{
             "uuid": "sys-uuid-123",
             "sessionId": "session-1",
@@ -583,7 +611,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_system_message_turn_duration() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let json_str = r#"{
             "uuid": "sys-uuid-456",
             "sessionId": "session-1",
@@ -600,7 +630,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_system_message_microcompact_boundary() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let json_str = r#"{
             "uuid": "sys-uuid-789",
             "sessionId": "session-1",

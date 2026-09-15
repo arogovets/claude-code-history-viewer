@@ -1,7 +1,7 @@
 //! `llm` provider (Simon Willison's `llm` CLI, `github.com/simonw/llm`).
 //!
 //! Reads the `SQLite` log at `<app-dir>/logs.db` where `<app-dir>` =
-//! `click.get_app_dir("io.datasette.llm")` (which matches `dirs::config_dir()`
+//! `click.get_app_dir("io.datasette.llm")` (which matches `crate::sources::config_dir()`
 //! on every OS) — overridable via `LLM_USER_PATH`. Logging is on by default.
 //!
 //! `llm` has no project/`cwd` concept, so everything is surfaced under one
@@ -26,13 +26,17 @@ const PROJECT_KEY: &str = "__all__";
 const NO_CONVERSATION: &str = "__none__";
 
 fn get_db_path() -> Option<PathBuf> {
-    if let Ok(p) = std::env::var("LLM_USER_PATH") {
-        let p = p.trim();
-        if !p.is_empty() {
-            return Some(PathBuf::from(p).join("logs.db"));
+    if let Ok(p) = crate::sources::env_var("LLM_USER_PATH") {
+        if !p.trim().is_empty() {
+            return Some(PathBuf::from(p.trim()).join("logs.db"));
         }
     }
-    Some(dirs::config_dir()?.join("io.datasette.llm").join("logs.db"))
+    let paths = super::collection::home_paths(super::ProviderId::Llm);
+    let base = paths
+        .iter()
+        .find(|p| p.join("logs.db").is_file())
+        .or_else(|| paths.first())?;
+    Some(base.join("logs.db"))
 }
 
 /// Detect an `llm` installation (only when the logs DB exists).
@@ -397,6 +401,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn scan_single_project_counts_messages() {
         let conn = fixture_db();
         let projects = scan_in_conn(&conn).unwrap();
@@ -411,6 +416,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn load_sessions_groups_conversations_and_orphans() {
         let conn = fixture_db();
         let sessions = load_sessions_conn(&conn).unwrap();
@@ -430,6 +436,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn load_messages_makes_user_assistant_pairs_with_usage() {
         let conn = fixture_db();
         let msgs = load_messages_conn(&conn, "c1").unwrap();
@@ -445,6 +452,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn load_messages_orphan_bucket_selects_null_conversation() {
         let conn = fixture_db();
         let msgs = load_messages_conn(&conn, NO_CONVERSATION).unwrap();
@@ -455,6 +463,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn search_matches_prompt_or_response_and_tags_project() {
         let conn = fixture_db();
         let results = search_conn(&conn, "LOGIN", 10).unwrap();
@@ -468,6 +477,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn timestamps_are_normalized_to_utc() {
         assert_eq!(
             normalize_utc_ts("2026-06-20T10:00:00"),

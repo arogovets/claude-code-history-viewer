@@ -58,12 +58,8 @@ export const createGlobalStatsSlice: StateCreator<
   // from only processing the providers the user has selected.
   loadGlobalStats: async () => {
     const requestId = nextRequestId("globalStats");
-    const { claudePath, activeProviders, dateFilter } = get();
-    if (!claudePath) return;
+    const { activeProviders, dateFilter } = get();
 
-    // Custom Claude directories must be aggregated into the global summary too,
-    // matching the project list and search (#362).
-    const customClaudePaths = get().userMetadata?.settings?.customClaudePaths;
 
     set({ isLoadingGlobalStats: true });
     get().setError(null);
@@ -87,21 +83,21 @@ export const createGlobalStatsSlice: StateCreator<
       );
       const [summary, conversationSummary] = await Promise.all([
         fetchGlobalStatsSummary(
-          claudePath,
+          "",
           "billing_total",
           activeProviders,
           startDate,
           endDate,
-          customClaudePaths,
+          undefined,
         ),
         canLoadConversationSummary
           ? fetchGlobalStatsSummary(
-              claudePath,
+              "",
               "conversation_only",
               activeProviders,
               startDate,
               endDate,
-              customClaudePaths,
+              undefined,
             ).catch((error) => {
               if (requestId !== getRequestId("globalStats")) {
                 return null;

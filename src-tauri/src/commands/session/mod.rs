@@ -11,7 +11,6 @@ mod chain;
 mod delete;
 mod edits;
 mod load;
-mod locate;
 mod rename;
 mod resume;
 mod search;
@@ -21,7 +20,6 @@ pub use chain::{resolve_session_chain, superseded_chain_paths};
 pub use delete::*;
 pub use edits::*;
 pub use load::*;
-pub use locate::*;
 pub use rename::*;
 pub use resume::*;
 pub use search::*;
@@ -33,7 +31,7 @@ pub use search::*;
 /// per-module constants across seventeen providers, and a copy kept here would
 /// silently fall behind the next one added — the failure mode being a provider
 /// that works on desktop and is rejected over `--serve`.
-#[cfg(feature = "webui-server")]
+#[cfg(all(feature = "webui-server", test))]
 fn uri_parts(path: &std::path::Path) -> Option<(String, String)> {
     let raw = path.to_string_lossy();
     let (scheme, rest) = raw.split_once("://")?;
@@ -51,7 +49,7 @@ fn uri_parts(path: &std::path::Path) -> Option<(String, String)> {
 ///
 /// Desktop builds do not need this guard — those paths flow from
 /// `scan_projects` / `load_sessions` output, never raw user input.
-#[cfg(feature = "webui-server")]
+#[cfg(all(feature = "webui-server", test))]
 pub(crate) fn is_safe_session_path(path: &std::path::Path) -> Result<(), String> {
     use std::path::PathBuf;
 
@@ -209,6 +207,7 @@ mod tests {
     // candidate path canonicalizes to the symlink target, so the allowlist
     // entries must be canonicalized too or valid sessions are rejected.
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn accepts_session_under_symlinked_claude_root() {
         // Built inside the guard's home. It used to create its own `TempDir`
@@ -236,6 +235,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn rejects_session_outside_allowlist() {
         let _home = crate::test_utils::SandboxHome::new();
@@ -260,6 +260,7 @@ mod tests {
     /// parent that does not exist, and rejected them as "Invalid path", which
     /// broke every guarded `WebUI` endpoint for those providers under `--serve`.
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn accepts_provider_uri_session_paths() {
         let _home = crate::test_utils::SandboxHome::new();
@@ -278,6 +279,7 @@ mod tests {
     /// A URI is waved past the filesystem allowlist, so it must not be able to
     /// smuggle a traversal through it.
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn rejects_traversal_inside_a_provider_uri() {
         let _home = crate::test_utils::SandboxHome::new();
@@ -293,6 +295,7 @@ mod tests {
 
     // Kimi sessions live under ~/.kimi/sessions (or $KIMI_HOME) — #349.
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn test_safe_session_path_allows_kimi_sessions() {
         // The guard owns `HOME`; the fixture goes inside it. This used to
@@ -317,6 +320,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn test_safe_session_path_allows_custom_kimi_home() {
         let _home = crate::test_utils::SandboxHome::new();
@@ -367,6 +371,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn safe_session_path_allows_codex_home_sessions() {
         let _home = crate::test_utils::SandboxHome::new();
@@ -383,6 +388,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn safe_session_path_allows_codex_home_archived_sessions() {
         let _home = crate::test_utils::SandboxHome::new();
@@ -397,4 +403,9 @@ mod tests {
 
         assert!(is_safe_session_path(&session_file).is_ok());
     }
+}
+
+#[cfg(all(feature = "webui-server", not(test)))]
+pub(crate) fn is_safe_session_path(path: &std::path::Path) -> Result<(), String> {
+    crate::sources::require_history_path(&path.to_string_lossy())
 }

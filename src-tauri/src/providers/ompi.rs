@@ -74,6 +74,7 @@ mod tests {
     /// the `ompi` provider id — the only two things this thin module adds
     /// over the shared Pi core.
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn ompi_reads_omp_store_and_stamps_provider_id() {
         let home = crate::test_utils::SandboxHome::new();

@@ -57,8 +57,6 @@ export interface PreloadDependencies {
    * resolver without maintaining a request token.
    */
   isCurrent?: () => boolean;
-  /** Optional fast session locator (e.g. backend SQLite index lookup). */
-  locateSession?: (sessionId: string) => Promise<{ project: ClaudeProject; session: ClaudeSession } | null>;
 }
 
 /**
@@ -209,7 +207,6 @@ async function resolveUuid(
   uuid: string,
   projects: ClaudeProject[],
   isCurrent: () => boolean,
-  locateSession?: (sessionId: string) => Promise<{ project: ClaudeProject; session: ClaudeSession } | null>,
 ): Promise<SessionPickerCandidate | null> {
   const { excludeSidechain, sessions, selectedProject } = useAppStore.getState();
 
@@ -217,19 +214,6 @@ async function resolveUuid(
   if (selectedProject) {
     const session = matchByUuid(sessions, uuid);
     if (session) return { project: selectedProject, session };
-  }
-
-  // 1. Fast backend locate_session if provided
-  if (locateSession) {
-    try {
-      const located = await locateSession(uuid);
-      if (located?.project && located?.session) {
-        if (!isCurrent() || useAppStore.getState().selectedSession) return null;
-        return { project: located.project, session: located.session };
-      }
-    } catch (err) {
-      console.warn("locateSession failed, falling back to batch scan:", err);
-    }
   }
 
   for (const project of projects) {
@@ -250,7 +234,6 @@ async function resolvePath(
   absPath: string,
   projects: ClaudeProject[],
   isCurrent: () => boolean,
-  locateSession?: (sessionId: string) => Promise<{ project: ClaudeProject; session: ClaudeSession } | null>,
 ): Promise<SessionPickerCandidate | null> {
   const { excludeSidechain, sessions, selectedProject } = useAppStore.getState();
 
@@ -258,19 +241,6 @@ async function resolvePath(
   if (selectedProject) {
     const session = matchByPath(sessions, absPath);
     if (session) return { project: selectedProject, session };
-  }
-
-  // 1. Fast backend locate_session if provided
-  if (locateSession) {
-    try {
-      const located = await locateSession(absPath);
-      if (located?.project && located?.session) {
-        if (!isCurrent() || useAppStore.getState().selectedSession) return null;
-        return { project: located.project, session: located.session };
-      }
-    } catch (err) {
-      console.warn("locateSession failed, falling back to batch scan:", err);
-    }
   }
 
   for (const project of projects) {
@@ -292,19 +262,22 @@ async function resolveFolder(
   projects: ClaudeProject[],
   isCurrent: () => boolean,
 ): Promise<SessionPickerCandidate | null> {
+  // Folder name matches the project directory name, not the full path.
+  const lower = folderName.toLowerCase();
   const target = projects.find((p) => {
     // `path` is the sesslog project directory: /Users/.../.claude/projects/<folder>
     const parts = p.path.split(/[\\/]/);
     const name = parts[parts.length - 1] ?? "";
-    return name.toLowerCase() === folderName.toLowerCase();
+    return name.toLowerCase() === lower;
   });
   if (!target || !isCurrent()) return null;
+
+  if (useAppStore.getState().selectedSession) return null;
 
   try {
     const { excludeSidechain } = useAppStore.getState();
     const sessions = await loadSessionsFor(target, excludeSidechain);
     if (!isCurrent() || useAppStore.getState().selectedSession) return null;
-    if (sessions.length === 0) return null;
     // Pick the most recently modified session as the "default" for a folder hint.
     const sorted = [...sessions].sort((a, b) => {
       const at = a.last_modified ?? "";
@@ -352,7 +325,7 @@ export async function preloadSessionFromCli(
   deps: PreloadDependencies,
 ): Promise<{ handled: boolean; matched: boolean }> {
   const isCurrent = () => deps.isCurrent?.() ?? true;
-  if (!isCurrent() || useAppStore.getState().selectedSession) {
+  if (!isCurrent()) {
     return { handled: true, matched: false };
   }
 
@@ -364,14 +337,14 @@ export async function preloadSessionFromCli(
   // Dispatch per kind.
   if (hint.kind === "uuid") {
     return commitSingleMatch(
-      await resolveUuid(hint.value, deps.projects, isCurrent, deps.locateSession),
+      await resolveUuid(hint.value, deps.projects, isCurrent),
       deps,
       isCurrent,
     );
   }
   if (hint.kind === "path") {
     return commitSingleMatch(
-      await resolvePath(hint.value, deps.projects, isCurrent, deps.locateSession),
+      await resolvePath(hint.value, deps.projects, isCurrent),
       deps,
       isCurrent,
     );

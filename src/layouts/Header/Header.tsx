@@ -9,6 +9,8 @@ import {
   Columns,
   Search,
   Archive,
+  LayoutGrid,
+  FolderOpen,
 } from "lucide-react";
 
 import { TooltipButton } from "@/shared/TooltipButton";
@@ -41,6 +43,8 @@ export const Header = ({ analyticsActions, analyticsComputed, updater }: HeaderP
   const { openModal } = useModal();
 
   const {
+    analytics,
+    setAnalyticsCurrentView,
     selectedProject,
     selectedSession,
     isLoadingProjects,
@@ -213,6 +217,21 @@ export const Header = ({ analyticsActions, analyticsComputed, updater }: HeaderP
         >
           <Search className="w-5 h-5" />
         </button>
+
+        <NavButton
+          icon={LayoutGrid}
+          label={t("kanban.title")}
+          isActive={analytics.currentView === "kanban"}
+          onClick={() => setAnalyticsCurrentView("kanban")}
+        />
+        {selectedProject && (
+          <NavButton
+            icon={FolderOpen}
+            label={t("kanban.projectDetails")}
+            isActive={analytics.currentView === "projectDetails"}
+            onClick={() => setAnalyticsCurrentView("projectDetails")}
+          />
+        )}
 
         {/* Global refresh */}
         <TooltipButton

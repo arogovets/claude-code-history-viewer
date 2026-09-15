@@ -257,46 +257,20 @@ pub fn search(query: &str, limit: usize) -> Result<Vec<ClaudeMessage>, String> {
 fn get_all_base_paths() -> Vec<(PathBuf, String)> {
     let mut paths = Vec::new();
 
-    let editors: &[(&str, &str)] = &[
-        ("Code", "VS Code"),
-        ("Cursor", "Cursor"),
-        ("Code - Insiders", "VS Code Insiders"),
-        ("Codium", "VSCodium"),
-    ];
-
-    if let Some(home) = crate::utils::home_dir() {
-        let app_support = home.join("Library/Application Support");
-
-        for (editor_dir, editor_label) in editors {
-            let global_storage = app_support.join(editor_dir).join("User/globalStorage");
-            if !global_storage.is_dir() {
-                continue;
-            }
-
-            for (ext_id, ext_name) in EXTENSIONS {
-                let ext_path = global_storage.join(ext_id);
-                if ext_path.is_dir() && !is_symlink(&ext_path) {
-                    let label = format!("{ext_name} ({editor_label})");
-                    paths.push((ext_path, label));
-                }
-            }
+    for global_storage in super::collection::home_paths(super::ProviderId::Cline) {
+        if !global_storage.is_dir() || is_symlink(&global_storage) {
+            continue;
         }
-    }
-
-    // Linux: ~/.config/<editor>/User/globalStorage/
-    #[cfg(target_os = "linux")]
-    if let Some(config) = dirs::config_dir() {
-        for (editor_dir, editor_label) in editors {
-            let global_storage = config.join(editor_dir).join("User/globalStorage");
-            if !global_storage.is_dir() {
-                continue;
-            }
-            for (ext_id, ext_name) in EXTENSIONS {
-                let ext_path = global_storage.join(ext_id);
-                if ext_path.is_dir() && !is_symlink(&ext_path) {
-                    let label = format!("{ext_name} ({editor_label})");
-                    paths.push((ext_path, label));
-                }
+        let editor_label = global_storage
+            .parent()
+            .and_then(Path::parent)
+            .and_then(Path::file_name)
+            .unwrap_or_default()
+            .to_string_lossy();
+        for (ext_id, ext_name) in EXTENSIONS {
+            let ext_path = global_storage.join(ext_id);
+            if ext_path.is_dir() && !is_symlink(&ext_path) {
+                paths.push((ext_path, format!("{ext_name} ({editor_label})")));
             }
         }
     }
@@ -722,7 +696,9 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    #[serial_test::serial]
     fn test_convert_say_text() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let msg = json!({
             "ts": 1700000000000u64,
             "type": "say",
@@ -736,7 +712,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_convert_say_tool() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let msg = json!({
             "ts": 1700000000000u64,
             "type": "say",
@@ -753,7 +731,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_convert_say_command() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let msg = json!({
             "ts": 1700000000000u64,
             "type": "say",
@@ -768,7 +748,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_convert_say_reasoning() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let msg = json!({
             "ts": 1700000000000u64,
             "type": "say",
@@ -783,7 +765,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_convert_say_error() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let msg = json!({
             "ts": 1700000000000u64,
             "type": "say",
@@ -797,7 +781,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_convert_ask_followup() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let msg = json!({
             "ts": 1700000000000u64,
             "type": "ask",
@@ -810,7 +796,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_skip_api_metadata() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let msg = json!({
             "ts": 1700000000000u64,
             "type": "say",
@@ -822,7 +810,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_map_cline_tool_names() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         assert_eq!(map_cline_tool_name("readFile"), "Read");
         assert_eq!(map_cline_tool_name("editedExistingFile"), "Write");
         assert_eq!(map_cline_tool_name("searchFiles"), "Grep");
@@ -831,14 +821,18 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_ms_to_iso() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let result = ms_to_iso(1700000000000);
         assert!(result.starts_with("2023-11-14T"));
         assert!(result.ends_with('Z'));
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_parse_project_path() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let (base, cwd) =
             parse_project_path("cline:///path/to/globalStorage:/Users/jack/project").unwrap();
         assert_eq!(base, PathBuf::from("/path/to/globalStorage"));
@@ -846,7 +840,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_task_cwd_field_fallback() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         // Cline uses cwdOnTaskInitialization
         assert_eq!(
             task_cwd(&json!({"cwdOnTaskInitialization": "/c"})),
@@ -864,7 +860,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_load_task_history_from_kilo_global_state() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         use rusqlite::params;
 
         let tmp = tempfile::TempDir::new().unwrap();
@@ -911,7 +909,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_load_task_history_no_index_is_empty() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let tmp = tempfile::TempDir::new().unwrap();
         let ext_dir = tmp.path().join("globalStorage").join("kilocode.kilo-code");
         fs::create_dir_all(&ext_dir).unwrap();
@@ -920,7 +920,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_truncate_chars_is_utf8_safe() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         // Regression: `&task[..100]` byte-slicing panicked on multibyte text
         // (byte 100 falls mid-character for 3-byte CJK). Char-based never does.
         let cjk = "한".repeat(150);
@@ -940,7 +942,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_task_label_field_fallback() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         assert_eq!(
             task_label(&json!({ "modelId": "claude" })).as_deref(),
             Some("claude")
@@ -958,7 +962,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_session_summary() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         // Non-empty task -> truncated task (char-safe), label ignored.
         assert_eq!(
             session_summary("hello", Some("claude".into())).as_deref(),

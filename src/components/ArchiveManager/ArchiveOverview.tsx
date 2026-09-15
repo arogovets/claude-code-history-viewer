@@ -26,12 +26,15 @@ import {
 import { useAppStore } from '@/store/useAppStore';
 import { formatBytes } from '@/utils/formatters';
 import { api } from '@/services/api';
+import { useAnalyticsNavigation } from '@/hooks/analytics/useAnalyticsNavigation';
+import type { ProviderSettingsState } from '@/types/providerSettings';
 import { archiveApi } from '@/services/archiveApi';
 import type { ClaudeSession } from '@/types';
 import { toast } from 'sonner';
 
 export const ArchiveOverview: React.FC = () => {
   const { t } = useTranslation();
+  const { switchToSettings } = useAnalyticsNavigation();
   const {
     archive,
     projects,
@@ -113,19 +116,20 @@ export const ArchiveOverview: React.FC = () => {
     return { mainExpiring: main, subagentExpiring: sub };
   }, [expiringSessions]);
 
-  // Load cleanupPeriodDays from ~/.claude/settings.json on mount
+  // Provider cleanup policy belongs to the selected source, never the CCHV host.
   useEffect(() => {
-    (async () => {
-      try {
-        const raw = await api<string>('get_settings_by_scope', { scope: 'user' });
-        const parsed = JSON.parse(raw);
-        const v = parsed?.cleanupPeriodDays;
-        if (typeof v === 'number' && v >= 1 && v <= 365) {
-          setCleanupDays(v);
-        }
-      } catch { /* use default 30 */ }
-    })();
-  }, []);
+    let active = true;
+    setCleanupDays(30);
+    if (selectedProject?.source_id) {
+      api<ProviderSettingsState>('read_provider_settings', { selection: {
+        sourceId: selectedProject.source_id, provider: 'claude', scope: 'user', projectPath: null,
+      } }).then((state) => {
+        const value = state.content ? JSON.parse(state.content).cleanupPeriodDays : null;
+        if (active && typeof value === 'number' && value >= 1 && value <= 365) setCleanupDays(value);
+      }).catch(() => {});
+    }
+    return () => { active = false; };
+  }, [selectedProject?.source_id]);
 
   // Load data on mount
   useEffect(() => {
@@ -145,21 +149,8 @@ export const ArchiveOverview: React.FC = () => {
     reloadExpiring();
   }, [reloadExpiring]);
 
-  const handleOpenSettings = useCallback(async () => {
-    // UX4+EC3: Re-fetch latest cleanupDays when opening settings
-    try {
-      const raw = await api<string>('get_settings_by_scope', { scope: 'user' });
-      const parsed = JSON.parse(raw);
-      const v = parsed?.cleanupPeriodDays;
-      if (typeof v === 'number' && v >= 1 && v <= 365) {
-        setCleanupDays(v);
-        setDraftCleanup(String(v));
-      } else {
-        setDraftCleanup(String(cleanupDays));
-      }
-    } catch {
-      setDraftCleanup(String(cleanupDays));
-    }
+  const handleOpenSettings = useCallback(() => {
+    setDraftCleanup(String(cleanupDays));
     setDraftThreshold(String(thresholdDays));
     setIsSettingsOpen(true);
   }, [thresholdDays, cleanupDays]);
@@ -179,29 +170,18 @@ export const ArchiveOverview: React.FC = () => {
   const handleSaveSettings = useCallback(async () => {
     if (!canSave) return;
     try {
-      // Save cleanupPeriodDays to ~/.claude/settings.json if changed
-      if (parsedCleanup !== cleanupDays) {
-        const raw = await api<string>('get_settings_by_scope', { scope: 'user' });
-        const settings = JSON.parse(raw);
-        settings.cleanupPeriodDays = parsedCleanup;
-        await api('save_settings', {
-          scope: 'user',
-          content: JSON.stringify(settings, null, 2),
-        });
-      }
       // Save thresholdDays to localStorage
       if (parsedThreshold !== thresholdDays) {
         try { localStorage.setItem('archive.thresholdDays', String(parsedThreshold)); }
         catch { /* storage full or unavailable */ }
       }
       setThresholdDays(parsedThreshold);
-      setCleanupDays(parsedCleanup);
       setIsSettingsOpen(false);
       toast.success(t('archive.overview.settings.saved'));
     } catch {
       toast.error(t('archive.overview.settings.saveFailed'));
     }
-  }, [canSave, parsedThreshold, parsedCleanup, thresholdDays, cleanupDays, t]);
+  }, [canSave, parsedThreshold, thresholdDays, t]);
 
   const handleArchiveSession = async (
     session: typeof archive.expiringSessions[0],
@@ -332,6 +312,17 @@ export const ArchiveOverview: React.FC = () => {
           <AlertDescription>{archive.expiringError}</AlertDescription>
         </Alert>
       )}
+
+      {/* Permanent Database Retention Guarantee */}
+      <Alert className="border-emerald-500/30 bg-emerald-500/5 text-emerald-600 dark:text-emerald-400">
+        <ShieldCheck className="h-4 w-4 text-emerald-500" />
+        <AlertTitle className="font-semibold text-emerald-600 dark:text-emerald-400">
+          {t('archive.overview.retentionGuarantee.title')}
+        </AlertTitle>
+        <AlertDescription className="text-xs text-muted-foreground mt-1">
+          {t('archive.overview.retentionGuarantee.description')}
+        </AlertDescription>
+      </Alert>
 
       {/* Cleanup Warning + Settings button */}
       <Alert>
@@ -690,12 +681,14 @@ export const ArchiveOverview: React.FC = () => {
 
           <div className="space-y-4 py-2">
             <div className="space-y-2">
+              <Button variant="link" onClick={() => { setIsSettingsOpen(false); switchToSettings(); }}>Edit source cleanup policy in Settings Manager</Button>
               <Label htmlFor={`${settingsId}-cleanup`} className="text-sm">
                 {t('archive.overview.settings.cleanupDays')}
               </Label>
               <div className="flex items-center gap-2">
                 <Input
                   id={`${settingsId}-cleanup`}
+                  readOnly
                   type="number"
                   min={1}
                   max={365}

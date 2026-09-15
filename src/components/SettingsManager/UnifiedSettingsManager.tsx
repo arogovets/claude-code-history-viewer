@@ -9,27 +9,17 @@
  */
 
 import * as React from "react";
-import { useTranslation } from "react-i18next";
 import { api } from "@/services/api";
 import { Button } from "@/components/ui/button";
-import { LoadingState } from "@/components/ui/loading";
-import { Card } from "@/components/ui/card";
-import { RefreshCw, FolderTree, Archive, ChevronRight } from "lucide-react";
-import { useMCPServers } from "@/hooks/useMCPServers";
 import { useAnalyticsNavigation } from "@/hooks/analytics/useAnalyticsNavigation";
 import { useAppStore } from "@/store/useAppStore";
-import type {
-  AllSettingsResponse,
-  SettingsScope,
-  ClaudeCodeSettings,
-  MCPServerConfig,
-  MCPSource,
-} from "@/types";
-import { SettingsSidebar } from "./sidebar/SettingsSidebar";
+import type { AllSettingsResponse, SettingsScope, ClaudeCodeSettings, MCPServerConfig, MCPSource } from "@/types";
+import { mappedProjectPath } from "@/utils/providerSettings";
+import type { FilesystemSource } from "@/types/filesystemSources";
+import type { ProviderSettingsSpec, ProviderSettingsState, ProviderSettingsSelection } from "@/types/providerSettings";
 import { SettingsEditorPane } from "./editor/SettingsEditorPane";
-import { SettingsDiagnosticsPanel } from "./dialogs/SettingsDiagnosticsPanel";
-import { CustomDirectoriesSection } from "./sections/CustomDirectoriesSection";
-import { WslSection } from "./sections/WslSection";
+import { PresetPanel } from "./sidebar/PresetPanel";
+import { SourcesDirectoriesSection } from "./sections/SourcesDirectoriesSection";
 
 export type ActivePanel = "editor" | "diagnostics";
 
@@ -39,6 +29,7 @@ export type ActivePanel = "editor" | "diagnostics";
 
 interface UnifiedSettingsManagerProps {
   projectPath?: string;
+  sourceId?: string;
   className?: string;
 }
 
@@ -94,253 +85,144 @@ export const useSettingsManager = () => {
 // Main Component
 // ============================================================================
 
-export const UnifiedSettingsManager: React.FC<UnifiedSettingsManagerProps> = ({
-  projectPath: initialProjectPath,
-  className,
-}) => {
-  const { t } = useTranslation();
+export const UnifiedSettingsManager: React.FC<UnifiedSettingsManagerProps> = ({ projectPath, sourceId: initialSourceId, className }) => {
   const { switchToArchive } = useAnalyticsNavigation();
-  const serverReadOnly = useAppStore((state) => state.isServerReadOnly);
-
-  // Settings state
-  const [allSettings, setAllSettings] = React.useState<AllSettingsResponse | null>(null);
-  const [activeScope, setActiveScope] = React.useState<SettingsScope>("user");
-  const [isLoading, setIsLoading] = React.useState(true);
+  const [sources, setSources] = React.useState<FilesystemSource[]>([]);
+  const [providers, setProviders] = React.useState<ProviderSettingsSpec[]>([]);
+  const [sourceId, setSourceId] = React.useState(initialSourceId ?? "");
+  const [projectInput, setProjectInput] = React.useState(projectPath ?? "");
+  const [chosenProject, setChosenProject] = React.useState(projectPath ?? "");
+  const [provider, setProvider] = React.useState("claude");
+  const [scope, setScope] = React.useState("user");
+  const [refreshKey, refresh] = React.useReducer((n: number) => n + 1, 0);
   const [error, setError] = React.useState<string | null>(null);
-
-  // Project path state - allows changing project within the component
-  const [projectPath, setProjectPath] = React.useState<string | undefined>(initialProjectPath);
-
-  // Panel state
-  const [activePanel, setActivePanel] = React.useState<ActivePanel>("editor");
-  const [isCustomDirsExpanded, setIsCustomDirsExpanded] = React.useState(false);
-  const [isWslExpanded, setIsWslExpanded] = React.useState(false);
-
-  // Pending changes state (shared across components for dirty tracking)
-  const [pendingSettings, setPendingSettings] = React.useState<ClaudeCodeSettings | null>(null);
-
-  // Sync with initial prop if it changes
   React.useEffect(() => {
-    setProjectPath(initialProjectPath);
-  }, [initialProjectPath]);
-
-  // MCP servers hook
-  const {
-    userClaudeJson: mcpUserClaudeJson,
-    localClaudeJson: mcpLocalClaudeJson,
-    userSettings: mcpUserSettings,
-    userMcpFile: mcpUserMcpFile,
-    projectMcpFile: mcpProjectMcpFile,
-    saveMCPServers,
-  } = useMCPServers(projectPath);
-
-  // Load settings
-  const loadSettings = React.useCallback(async () => {
-    try {
-      setIsLoading(true);
-      setError(null);
-      const settingsResult = await api<AllSettingsResponse>("get_all_settings", { projectPath });
-      setAllSettings(settingsResult);
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setIsLoading(false);
-    }
-  }, [projectPath]);
-
-  React.useEffect(() => {
-    loadSettings();
-  }, [loadSettings]);
-
-  // Parse current settings
-  const currentSettings: ClaudeCodeSettings = React.useMemo(() => {
-    const content = allSettings?.[activeScope] ?? null;
-    if (!content) return {};
-    try {
-      return JSON.parse(content) as ClaudeCodeSettings;
-    } catch {
-      return {};
-    }
-  }, [allSettings, activeScope]);
-
-  // Save settings (optionally to a specific target scope and project)
-  const saveSettings = React.useCallback(
-    async (newSettings: ClaudeCodeSettings, targetScope?: SettingsScope, targetProjectPath?: string) => {
-      const scope = targetScope ?? activeScope;
-      const effectiveProjectPath = targetProjectPath ?? projectPath;
-      if (scope !== "user" && !effectiveProjectPath) {
-        throw new Error("Project path is required for non-user scope settings");
-      }
-      try {
-        await api("save_settings", {
-          scope,
-          content: JSON.stringify(newSettings, null, 2),
-          projectPath: scope !== "user" ? effectiveProjectPath : undefined,
-        });
-        await loadSettings();
-      } catch (err) {
-        console.error("Failed to save settings:", err);
-        throw err;
-      }
-    },
-    [activeScope, projectPath, loadSettings]
-  );
-
-  const isReadOnly = serverReadOnly || activeScope === "managed";
-
-  // Check if there are unsaved changes
-  const hasUnsavedChanges = React.useMemo(() => {
-    if (!pendingSettings) return false;
-    return JSON.stringify(pendingSettings) !== JSON.stringify(currentSettings);
-  }, [pendingSettings, currentSettings]);
-
-  // Reset pending settings when scope changes
-  React.useEffect(() => {
-    setPendingSettings(null);
-  }, [activeScope]);
-
-  // Context value
-  const contextValue: SettingsManagerContextValue = React.useMemo(
-    () => ({
-      allSettings,
-      activeScope,
-      setActiveScope,
-      currentSettings,
-      isReadOnly,
-      projectPath,
-      setProjectPath,
-      activePanel,
-      setActivePanel,
-      pendingSettings,
-      setPendingSettings,
-      hasUnsavedChanges,
-      mcpServers: {
-        userClaudeJson: mcpUserClaudeJson,
-        localClaudeJson: mcpLocalClaudeJson,
-        userSettings: mcpUserSettings,
-        userMcpFile: mcpUserMcpFile,
-        projectMcpFile: mcpProjectMcpFile,
-      },
-      saveMCPServers,
-      loadSettings,
-      saveSettings,
-    }),
-    [
-      allSettings,
-      activeScope,
-      currentSettings,
-      isReadOnly,
-      projectPath,
-      activePanel,
-      pendingSettings,
-      hasUnsavedChanges,
-      mcpUserClaudeJson,
-      mcpLocalClaudeJson,
-      mcpUserSettings,
-      mcpUserMcpFile,
-      mcpProjectMcpFile,
-      saveMCPServers,
-      loadSettings,
-      saveSettings,
-    ]
-  );
-
-  // Available scopes
-  const availableScopes = React.useMemo(() => {
-    if (!allSettings) {
-      return { user: false, project: false, local: false, managed: false };
-    }
-    return {
-      user: allSettings.user !== null,
-      project: allSettings.project !== null,
-      local: allSettings.local !== null,
-      managed: allSettings.managed !== null,
-    };
-  }, [allSettings]);
-
-  return (
-    <SettingsManagerContext.Provider value={contextValue}>
-      <div className={`flex flex-col ${className || ""}`}>
-        {/* Archive Manager Link (mobile access point) */}
-        <button
-          type="button"
-          onClick={switchToArchive}
-          className="flex items-center gap-3 p-3 mb-4 rounded-lg border border-border/50 bg-card hover:bg-muted/50 transition-colors text-left w-full md:hidden"
-        >
-          <div className="w-8 h-8 rounded-md bg-accent/10 flex items-center justify-center shrink-0">
-            <Archive className="w-4 h-4 text-accent" />
-          </div>
-          <div className="min-w-0 flex-1">
-            <p className="text-sm font-medium">{t("archive.settings.link")}</p>
-            <p className="text-xs text-muted-foreground">{t("archive.settings.linkDescription")}</p>
-          </div>
-          <ChevronRight className="w-4 h-4 text-muted-foreground shrink-0" />
-        </button>
-
-        {/* Header */}
-        <div className="flex flex-wrap items-center justify-between gap-2 mb-4 shrink-0">
-          <h2 className="text-xl font-semibold">{t("settingsManager.title")}</h2>
-          <div className="flex items-center gap-2">
-            <Button
-              variant={activePanel === "diagnostics" ? "secondary" : "ghost"}
-              size="sm"
-              onClick={() => setActivePanel(activePanel === "diagnostics" ? "editor" : "diagnostics")}
-              className={activePanel === "diagnostics" ? "shadow-sm ring-1 ring-ring/20" : ""}
-            >
-              <FolderTree className="h-4 w-4 mr-2" />
-              <span className="hidden sm:inline">{t("settingsManager.diagnostics.button")}</span>
-            </Button>
-            <Button variant="ghost" size="sm" onClick={loadSettings}>
-              <RefreshCw className="h-4 w-4 mr-2" />
-              <span className="hidden sm:inline">{t("common.refresh")}</span>
-            </Button>
-          </div>
-        </div>
-
-        {/* Content */}
-        {isLoading ? (
-          <LoadingState
-            isLoading={isLoading}
-            error={error}
-            loadingMessage={t("settingsManager.loading")}
-            spinnerSize="lg"
-          />
-        ) : error ? (
-          <LoadingState
-            isLoading={false}
-            error={error}
-          />
-        ) : (
-          <div className="flex flex-col gap-4 flex-1 min-h-0">
-            {/* Custom Directories — app-level setting, independent of Claude Code scope */}
-            <Card className="shrink-0">
-              <CustomDirectoriesSection
-                isExpanded={isCustomDirsExpanded}
-                onToggle={(open) => setIsCustomDirsExpanded(open)}
-                readOnly={serverReadOnly}
-              />
-            </Card>
-
-            {/* WSL Settings — Windows Tauri only, hidden on other platforms */}
-            <Card className="shrink-0">
-              <WslSection
-                isExpanded={isWslExpanded}
-                onToggle={(open) => setIsWslExpanded(open)}
-                readOnly={serverReadOnly}
-              />
-            </Card>
-
-            {/* Claude Code Settings */}
-            <div className="flex flex-col md:flex-row gap-4 flex-1 min-h-0">
-              {/* Left Sidebar */}
-              <SettingsSidebar availableScopes={availableScopes} />
-
-              {/* Main Content Area */}
-              {activePanel === "editor" ? <SettingsEditorPane /> : <SettingsDiagnosticsPanel />}
-            </div>
-          </div>
-        )}
-      </div>
-    </SettingsManagerContext.Provider>
-  );
+    let active = true;
+    Promise.all([api<FilesystemSource[]>("list_filesystem_sources"), api<ProviderSettingsSpec[]>("list_provider_settings")])
+      .then(([nextSources, nextProviders]) => {
+        if (!active) return;
+        setSources(nextSources); setProviders(nextProviders);
+        setSourceId((id) => nextSources.some((s) => s.id === id) ? id : nextSources[0]?.id ?? "");
+      }).catch((reason: unknown) => { if (active) setError(String(reason)); });
+    return () => { active = false; };
+  }, [refreshKey]);
+  const selected = providers.find((p) => p.provider === provider);
+  const source = sources.find((s) => s.id === sourceId);
+  const mirroredProject = source ? mappedProjectPath(source, chosenProject) : null;
+  const selection = { sourceId, provider, scope, projectPath: mirroredProject };
+  const projectScope = selected?.settings.scopes.find((s) => s.id === scope)?.base === "project";
+  return <div className={`space-y-4 ${className ?? ""}`}>
+    <div className="flex justify-between items-center"><h2 className="text-xl font-semibold">Source provider settings</h2>
+      <Button variant="ghost" onClick={switchToArchive}>Archive Manager</Button></div>
+    <div className="flex flex-wrap gap-3">
+      <label>Source<select aria-label="Source" className="block bg-background border rounded p-2" value={sourceId} onChange={(e) => setSourceId(e.target.value)}>
+        {sources.map((source) => <option key={source.id} value={source.id}>{source.label} ({source.id})</option>)}
+      </select></label>
+      <label>Provider<select aria-label="Provider" className="block bg-background border rounded p-2" value={provider} onChange={(e) => { setProvider(e.target.value); setScope("user"); }}>
+        {providers.map((p) => <option key={p.provider} value={p.provider}>{p.provider === "claude" ? "Claude Code" : p.provider === "codex" ? "Codex" : p.provider === "antigravity" ? "Antigravity" : p.provider === "opencode" ? "OpenCode" : p.provider}</option>)}
+      </select></label>
+      <label>Scope<select aria-label="Scope" className="block bg-background border rounded p-2" value={scope} onChange={(e) => setScope(e.target.value)}>
+        {selected?.settings.scopes.map((s) => <option key={s.id} value={s.id}>{s.label}{s.editable ? "" : " · read-only"}</option>)}
+      </select></label>
+      <Button variant="outline" onClick={refresh}>Refresh sources</Button>
+    </div>
+    {projectScope && <div className="space-y-2">
+      <label className="block">Project directory<input aria-label="Project directory" className="block w-full bg-background border rounded p-2" value={projectInput} onChange={(e) => setProjectInput(e.target.value)} /></label>
+      <Button variant="outline" onClick={() => setChosenProject(projectInput)}>Select project</Button>
+      <p className="text-sm text-muted-foreground">The directory must map through this source’s recorded mounts. Missing or ambiguous mappings are read-only.</p>
+    </div>}
+    {error && <p role="alert">{error}</p>}
+    {sourceId && selected ? <SourceEditor key={JSON.stringify(selection)} selection={selection} refreshKey={refreshKey} />
+      : <><p>No registered sources with provider settings are available.</p><LocalPresetLibrary /></>}
+    <details className="border rounded p-3"><summary>Source and directory inventory</summary><SourcesDirectoriesSection refreshKey={refreshKey} /></details>
+  </div>;
 };
+
+function SourceEditor({ selection, refreshKey }: { selection: ProviderSettingsSelection; refreshKey: number }) {
+  const serverReadOnly = useAppStore((s) => s.isServerReadOnly);
+  const [state, setState] = React.useState<ProviderSettingsState | null>(null);
+  const [text, setText] = React.useState("");
+  const [error, setError] = React.useState<string | null>(null);
+  const [busy, setBusy] = React.useState(false);
+  const [pendingSettings, setPendingSettings] = React.useState<ClaudeCodeSettings | null>(null);
+  const [generation, setGeneration] = React.useState(0);
+  const mounted = React.useRef(true);
+  const sequence = React.useRef(0);
+  React.useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  const accept = (next: ProviderSettingsState) => {
+    setState(next); setText(next.content ?? ""); setPendingSettings(null); setGeneration((n) => n + 1);
+  };
+  const loadSettings = React.useCallback(async () => {
+    const attempt = ++sequence.current;
+    setBusy(true); setState(null); setError(null);
+    try {
+      const next = await api<ProviderSettingsState>("read_provider_settings", { selection });
+      if (mounted.current && attempt === sequence.current) accept(next);
+    } catch (reason) { if (mounted.current && attempt === sequence.current) setError(String(reason)); }
+    finally { if (mounted.current && attempt === sequence.current) setBusy(false); }
+  }, [selection.sourceId, selection.provider, selection.scope, selection.projectPath]); // eslint-disable-line react-hooks/exhaustive-deps
+  React.useEffect(() => { void loadSettings(); }, [loadSettings, refreshKey]);
+  const isReadOnly = serverReadOnly || busy || !state?.write_enabled || !state.online || !state.live;
+  const apply = async (content: string) => {
+    if (isReadOnly || !state?.revision) throw new Error("Refresh an online, write-enabled source before applying");
+    setBusy(true); setError(null);
+    try {
+      const next = await api<ProviderSettingsState>("apply_provider_settings", { request: { selection, revision: state.revision, content } });
+      if (mounted.current) accept(next);
+    } catch (reason) {
+      if (mounted.current) { setError(String(reason)); setState((s) => s ? { ...s, write_enabled: false } : s); }
+      throw reason;
+    } finally { if (mounted.current) setBusy(false); }
+  };
+  const activeScope: SettingsScope = selection.scope.startsWith("managed") ? "managed"
+    : selection.scope === "project" ? "project" : selection.scope === "local" ? "local" : "user";
+  const visual = selection.provider === "claude" && ["user", "project", "local", "managed_macos", "managed_linux"].includes(selection.scope);
+  const currentSettings: ClaudeCodeSettings = visual && state?.content ? JSON.parse(state.content) : {};
+  const allSettings: AllSettingsResponse = { user: null, project: null, local: null, managed: null, [activeScope]: visual ? state?.content ?? null : null };
+  const saveSettings = async (value: ClaudeCodeSettings, targetScope?: SettingsScope, targetProject?: string) => {
+    if (!visual || (targetScope && targetScope !== activeScope) || (targetProject && targetProject !== selection.projectPath)) {
+      throw new Error("Select the target source and scope, then refresh and review before applying a preset");
+    }
+    await apply(JSON.stringify(value));
+  };
+  const context: SettingsManagerContextValue = {
+    allSettings, activeScope, setActiveScope: () => {}, currentSettings, isReadOnly: isReadOnly || !visual,
+    projectPath: selection.projectPath ?? undefined, setProjectPath: () => {}, activePanel: "editor", setActivePanel: () => {},
+    pendingSettings, setPendingSettings, hasUnsavedChanges: !!pendingSettings && JSON.stringify(pendingSettings) !== JSON.stringify(currentSettings),
+    mcpServers: { userClaudeJson: {}, localClaudeJson: {}, userSettings: {}, userMcpFile: {}, projectMcpFile: {} },
+    saveMCPServers: async () => { throw new Error("Select the MCP scope above to review and apply MCP configuration"); },
+    loadSettings, saveSettings,
+  };
+  return <SettingsManagerContext.Provider value={context}>
+    <section className="space-y-3" aria-label="Provider configuration">
+      <div className="flex gap-3 items-center"><Button onClick={() => void loadSettings()} disabled={busy}>Refresh settings</Button>
+        {busy && <span role="status">Reading authoritative settings…</span>}</div>
+      {state && <div role="status" className="border rounded p-3 text-sm space-y-1">
+        <p>{state.configuration_required ? "Source configuration incomplete" : state.online ? "Host online" : "Host offline"} · {state.live ? "Live" : state.snapshot_at ? "Snapshot" : "No snapshot"} · {isReadOnly ? "Write disabled" : "Write enabled"}</p>
+        {state.snapshot_at && <p>Snapshot: {new Date(state.snapshot_at).toLocaleString()}</p>}
+        {state.origin_path && <p className="break-all">{state.origin_path}</p>}
+        {state.reason && <p>{state.reason}</p>}
+      </div>}
+      {error && <p role="alert" className="text-destructive">{error}</p>}
+      <p className="text-sm text-muted-foreground">Secrets are hidden. Redacted values and omitted fields preserve existing values. Apply merges changes; it does not delete omitted fields. Offline edits are never queued.</p>
+      {state?.content != null && (visual
+        ? <SettingsEditorPane key={generation} sourceScoped />
+        : <><label className="block">Configuration ({state.format})<textarea aria-label="Configuration" className="block w-full min-h-80 p-3 bg-background border rounded font-mono text-sm" value={text} readOnly={isReadOnly} onChange={(e) => setText(e.target.value)} /></label>
+          {!isReadOnly && <Button onClick={() => void apply(text).catch(() => {})} disabled={text === state.content}>Apply</Button>}</>)}
+    </section>
+    {<details className="border rounded p-3 mt-4"><summary>CCHV presets · stored locally</summary>
+      <p className="text-sm text-muted-foreground my-2">Preset storage is independent of source availability. Applying a preset requires a live, writable target scope.</p><PresetPanel /></details>}
+  </SettingsManagerContext.Provider>;
+}
+
+function LocalPresetLibrary() {
+  const [pendingSettings, setPendingSettings] = React.useState<ClaudeCodeSettings | null>(null);
+  const context: SettingsManagerContextValue = {
+    allSettings: null, activeScope: "user", setActiveScope: () => {}, currentSettings: {}, isReadOnly: true,
+    setProjectPath: () => {}, activePanel: "editor", setActivePanel: () => {}, pendingSettings, setPendingSettings,
+    hasUnsavedChanges: false, mcpServers: { userClaudeJson: {}, localClaudeJson: {}, userSettings: {}, userMcpFile: {}, projectMcpFile: {} },
+    saveMCPServers: async () => { throw new Error("Select a live provider scope before applying"); },
+    saveSettings: async () => { throw new Error("Select a live provider scope before applying"); }, loadSettings: async () => {},
+  };
+  return <SettingsManagerContext.Provider value={context}><details className="border rounded p-3"><summary>CCHV presets · stored locally</summary><PresetPanel /></details></SettingsManagerContext.Provider>;
+}

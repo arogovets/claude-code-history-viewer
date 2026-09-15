@@ -82,11 +82,13 @@ const { useAppStoreMock } = vi.hoisted(() => {
   type StoreMock = {
     (selector?: (state: typeof state) => unknown): unknown;
     getState: () => typeof state;
+    subscribe: () => () => void;
   };
 
   const storeMock = ((selector?: (state: typeof state) => unknown) =>
     typeof selector === "function" ? selector(state) : state) as StoreMock;
   storeMock.getState = () => state;
+  storeMock.subscribe = () => () => {};
 
   return {
     appStoreState: state,

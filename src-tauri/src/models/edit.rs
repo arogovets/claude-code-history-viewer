@@ -38,7 +38,9 @@ mod tests {
     use super::*;
 
     #[test]
+    #[serial_test::serial]
     fn test_recent_file_edit_serialization() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let edit = RecentFileEdit {
             file_path: "/path/to/file.rs".to_string(),
             timestamp: "2025-06-26T10:00:00Z".to_string(),
@@ -69,7 +71,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_recent_file_edit_write_operation() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let edit = RecentFileEdit {
             file_path: "/path/to/new_file.rs".to_string(),
             timestamp: "2025-06-26T10:00:00Z".to_string(),
@@ -93,7 +97,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_recent_edits_result_serialization() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let result = RecentEditsResult {
             files: vec![
                 RecentFileEdit {
@@ -138,7 +144,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_recent_edits_result_empty() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let result = RecentEditsResult {
             files: vec![],
             total_edits_count: 0,

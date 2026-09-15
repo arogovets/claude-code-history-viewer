@@ -153,8 +153,18 @@ const MOCK_PROJECT = {
   provider: "claude",
 };
 
+// In-memory organization for VITE_MOCK browser development (reset on server restart).
+let mockKanban: import("./src/types/kanban").KanbanData = { revision: 0, boards: [] };
+
 /** API route handlers */
 const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
+  load_kanban: () => mockKanban,
+  save_kanban: (args) => {
+    const data = args.data as typeof mockKanban;
+    if (data.revision !== mockKanban.revision) throw new Error("Boards changed in another window. Reload boards and try again.");
+    mockKanban = { ...data, revision: data.revision + 1 };
+    return mockKanban;
+  },
   get_claude_folder_path: () => "/mock/.claude",
   validate_claude_folder: () => true,
   scan_projects: () => [MOCK_PROJECT],
@@ -162,6 +172,7 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
   detect_providers: () => [{ id: "claude", name: "Claude Code", is_available: true, session_count: 1 }],
   load_project_sessions: () => [MOCK_SESSION],
   load_provider_sessions: () => [MOCK_SESSION],
+  load_provider_sessions_page: () => ({ sessions: [MOCK_SESSION], total: 1, nextOffset: 1, hasMore: false }),
   load_session_messages: () => MOCK_MESSAGES,
   load_provider_messages: () => MOCK_MESSAGES,
   search_messages: () => [],

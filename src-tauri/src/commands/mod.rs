@@ -11,7 +11,6 @@ pub mod project;
 pub mod session;
 pub mod settings;
 pub mod stats;
-pub mod sync_transport;
 pub mod unified_presets;
 pub mod update;
 pub mod watcher;

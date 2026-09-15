@@ -17,6 +17,9 @@ use tauri::State;
 /// - `codex://<cwd>` virtual project keys
 /// - `opencode://<project_id>` virtual project keys
 pub(crate) fn validate_project_metadata_key(project_path: &str) -> Result<(), String> {
+    if project_path.starts_with("source:") {
+        return crate::sources::resolve(project_path).map(|_| ());
+    }
     if let Some(cwd) = project_path.strip_prefix("codex://") {
         if !cwd.trim().is_empty() {
             return Ok(());
@@ -331,6 +334,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_get_metadata_folder() {
         let (_guard, _temp) = setup_test_env();
         let folder = get_metadata_folder().unwrap();
@@ -338,6 +342,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_ensure_metadata_folder() {
         let (_guard, _temp) = setup_test_env();
         let folder = ensure_metadata_folder().unwrap();
@@ -345,6 +350,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_atomic_write() {
         let (_guard, temp) = setup_test_env();
 
@@ -376,18 +382,24 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_validate_project_metadata_key_absolute_path() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         assert!(validate_project_metadata_key(&crate::test_utils::abs("tmp/project")).is_ok());
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_validate_project_metadata_key_virtual_provider_paths() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         assert!(validate_project_metadata_key("codex:///Users/test/workspace").is_ok());
         assert!(validate_project_metadata_key("opencode://project_123").is_ok());
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_validate_project_metadata_key_rejects_invalid_values() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         assert!(validate_project_metadata_key("relative/path").is_err());
         assert!(validate_project_metadata_key("codex://").is_err());
         assert!(validate_project_metadata_key("opencode://../etc").is_err());

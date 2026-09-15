@@ -110,6 +110,7 @@ export type {
   ClaudeProject,
   ClaudeSession,
   SessionPage,
+  LocatedSession,
   SearchFilters,
 } from "./core/session";
 

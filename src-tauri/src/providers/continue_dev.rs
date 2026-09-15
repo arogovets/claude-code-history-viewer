@@ -133,14 +133,14 @@ pub(crate) fn detect_for(f: &Family) -> Option<ProviderInfo> {
 /// The family's global directory (env override or `~/<home_subdir>`).
 fn global_dir_for(f: &Family) -> Option<PathBuf> {
     if let Some(env) = f.global_dir_env {
-        if let Ok(dir) = std::env::var(env) {
+        if let Ok(dir) = crate::sources::env_var(env) {
             let dir = dir.trim();
             if !dir.is_empty() {
                 return Some(PathBuf::from(dir));
             }
         }
     }
-    Some(crate::utils::home_dir()?.join(f.home_subdir))
+    Some(crate::sources::home_dir()?.join(f.home_subdir))
 }
 
 /// Base path (`<global-dir>/sessions`); `None` unless the directory exists.
@@ -639,6 +639,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn scan_groups_sessions_by_workspace() {
         let tmp = TempDir::new().unwrap();
         let base = tmp.path();
@@ -663,6 +664,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn pearai_family_tags_provider_and_scheme() {
         let tmp = TempDir::new().unwrap();
         let base = tmp.path();
@@ -675,6 +677,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn parse_workspace_filtering_and_titles() {
         let mut docs: Vec<SessionDoc> = [SESSION_A, SESSION_B, SESSION_C]
             .iter()
@@ -696,6 +699,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn parse_maps_roles_with_deterministic_uuids_and_passthrough_content() {
         let doc =
             parse_session_doc(SESSION_A, "continue", "fallback", "2026-06-21T00:00:00Z").unwrap();
@@ -714,12 +718,14 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn parse_honors_given_provider_id() {
         let doc = parse_session_doc(SESSION_A, "pearai", "fallback", "").unwrap();
         assert_eq!(doc.messages[0].provider.as_deref(), Some("pearai"));
     }
 
     #[test]
+    #[serial_test::serial]
     fn parse_includes_system_and_uses_fallback_session_id() {
         let doc = parse_session_doc(SESSION_B, "continue", "file-stem-id", "").unwrap();
         assert_eq!(doc.session_id, "sess-b");
@@ -733,6 +739,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn parse_skips_invalid_and_non_chat_roles() {
         let data = r#"{
             "sessionId": "x",
@@ -749,12 +756,14 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn parse_rejects_non_object_json() {
         assert!(parse_session_doc("[]", "continue", "x", "").is_none());
         assert!(parse_session_doc("not json", "continue", "x", "").is_none());
     }
 
     #[test]
+    #[serial_test::serial]
     fn session_files_excludes_index_and_non_json() {
         let tmp = TempDir::new().unwrap();
         let base = tmp.path();
@@ -768,6 +777,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn extract_text_handles_string_and_parts() {
         assert_eq!(
             extract_text(&Value::String("hello".into())).as_deref(),
@@ -783,6 +793,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn summarize_truncates_long_prompts() {
         assert_eq!(summarize("  fix   the bug  "), "fix the bug");
         let long = "x".repeat(200);

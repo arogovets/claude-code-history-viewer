@@ -1,0 +1,631 @@
+{
+  "version": 1,
+  "providers": [
+    {
+      "provider": "aider",
+      "home_paths": [],
+      "project_paths": [
+        ".aider.chat.history.md"
+      ]
+    },
+    {
+      "provider": "amazonq",
+      "home_paths": [
+        {
+          "path": "Library/Application Support/amazon-q",
+          "kind": "directory"
+        },
+        {
+          "path": ".local/share/amazon-q",
+          "kind": "directory"
+        },
+        {
+          "path": "AppData/Local/amazon-q",
+          "kind": "directory"
+        }
+      ],
+      "project_paths": []
+    },
+    {
+      "provider": "antigravity",
+      "home_paths": [
+        {
+          "path": ".gemini",
+          "kind": "directory"
+        },
+        {
+          "path": "Library/Application Support/Antigravity/logs",
+          "kind": "directory"
+        },
+        {
+          "path": ".local/share/Antigravity/logs",
+          "kind": "directory"
+        },
+        {
+          "path": "AppData/Local/Antigravity/logs",
+          "kind": "directory"
+        }
+      ],
+      "project_paths": [],
+      "settings": {
+        "scopes": [
+          {
+            "id": "user",
+            "label": "CLI settings",
+            "path": ".gemini/antigravity-cli/settings.json",
+            "base": "home",
+            "format": "json",
+            "editable": true
+          },
+          {
+            "id": "mcp",
+            "label": "Global MCP",
+            "path": ".gemini/config/mcp_config.json",
+            "base": "home",
+            "format": "json",
+            "editable": true
+          },
+          {
+            "id": "project_mcp",
+            "label": "Project MCP",
+            "path": ".agents/mcp_config.json",
+            "base": "project",
+            "format": "json",
+            "editable": true
+          },
+          {
+            "id": "legacy_mcp",
+            "label": "Legacy IDE MCP",
+            "path": ".gemini/antigravity/mcp_config.json",
+            "base": "home",
+            "format": "json",
+            "editable": true
+          }
+        ]
+      }
+    },
+    {
+      "provider": "claude",
+      "home_paths": [
+        {
+          "path": ".claude",
+          "kind": "directory"
+        }
+      ],
+      "project_paths": [],
+      "settings": {
+        "scopes": [
+          {
+            "id": "user",
+            "label": "User settings",
+            "path": ".claude/settings.json",
+            "base": "home",
+            "format": "json",
+            "editable": true
+          },
+          {
+            "id": "mcp",
+            "label": "MCP",
+            "path": ".claude.json",
+            "base": "home",
+            "format": "json",
+            "editable": true
+          },
+          {
+            "id": "user_mcp",
+            "label": "MCP (legacy file)",
+            "path": ".claude/.mcp.json",
+            "base": "home",
+            "format": "json",
+            "editable": true
+          },
+          {
+            "id": "project",
+            "label": "Project settings",
+            "path": ".claude/settings.json",
+            "base": "project",
+            "format": "json",
+            "editable": true
+          },
+          {
+            "id": "local",
+            "label": "Local project settings",
+            "path": ".claude/settings.local.json",
+            "base": "project",
+            "format": "json",
+            "editable": true
+          },
+          {
+            "id": "project_mcp",
+            "label": "Project MCP",
+            "path": ".mcp.json",
+            "base": "project",
+            "format": "json",
+            "editable": true
+          },
+          {
+            "id": "managed_macos",
+            "label": "Managed settings (macOS)",
+            "path": "/Library/Application Support/ClaudeCode/managed-settings.json",
+            "base": "absolute",
+            "format": "json",
+            "editable": false
+          },
+          {
+            "id": "managed_linux",
+            "label": "Managed settings (Linux)",
+            "path": "/etc/claude-code/managed-settings.json",
+            "base": "absolute",
+            "format": "json",
+            "editable": false
+          }
+        ]
+      }
+    },
+    {
+      "provider": "cline",
+      "home_paths": [
+        {
+          "path": "Library/Application Support/Code/User/globalStorage",
+          "kind": "directory"
+        },
+        {
+          "path": "Library/Application Support/Code - Insiders/User/globalStorage",
+          "kind": "directory"
+        },
+        {
+          "path": "Library/Application Support/VSCodium/User/globalStorage",
+          "kind": "directory"
+        },
+        {
+          "path": "Library/Application Support/Codium/User/globalStorage",
+          "kind": "directory"
+        },
+        {
+          "path": "Library/Application Support/Cursor/User/globalStorage",
+          "kind": "directory"
+        },
+        {
+          "path": ".config/Code/User/globalStorage",
+          "kind": "directory"
+        },
+        {
+          "path": ".config/Code - Insiders/User/globalStorage",
+          "kind": "directory"
+        },
+        {
+          "path": ".config/VSCodium/User/globalStorage",
+          "kind": "directory"
+        },
+        {
+          "path": ".config/Codium/User/globalStorage",
+          "kind": "directory"
+        },
+        {
+          "path": ".config/Cursor/User/globalStorage",
+          "kind": "directory"
+        },
+        {
+          "path": "AppData/Roaming/Code/User/globalStorage",
+          "kind": "directory"
+        },
+        {
+          "path": "AppData/Roaming/Code - Insiders/User/globalStorage",
+          "kind": "directory"
+        },
+        {
+          "path": "AppData/Roaming/VSCodium/User/globalStorage",
+          "kind": "directory"
+        },
+        {
+          "path": "AppData/Roaming/Codium/User/globalStorage",
+          "kind": "directory"
+        },
+        {
+          "path": "AppData/Roaming/Cursor/User/globalStorage",
+          "kind": "directory"
+        }
+      ],
+      "project_paths": []
+    },
+    {
+      "provider": "codebuddy",
+      "home_paths": [
+        {
+          "path": ".codebuddy",
+          "kind": "directory"
+        }
+      ],
+      "project_paths": []
+    },
+    {
+      "provider": "codex",
+      "home_paths": [
+        {
+          "path": ".codex",
+          "kind": "directory"
+        }
+      ],
+      "project_paths": [],
+      "settings": {
+        "scopes": [
+          {
+            "id": "user",
+            "label": "config.toml",
+            "path": ".codex/config.toml",
+            "base": "home",
+            "format": "toml",
+            "editable": true
+          },
+          {
+            "id": "project",
+            "label": "Project config.toml",
+            "path": ".codex/config.toml",
+            "base": "project",
+            "format": "toml",
+            "editable": true
+          }
+        ]
+      }
+    },
+    {
+      "provider": "continue",
+      "home_paths": [
+        {
+          "path": ".continue",
+          "kind": "directory"
+        }
+      ],
+      "project_paths": []
+    },
+    {
+      "provider": "copilot",
+      "home_paths": [
+        {
+          "path": ".copilot",
+          "kind": "directory"
+        },
+        {
+          "path": "Library/Application Support/Code/User",
+          "kind": "directory"
+        },
+        {
+          "path": "Library/Application Support/Code - Insiders/User",
+          "kind": "directory"
+        },
+        {
+          "path": "Library/Application Support/VSCodium/User",
+          "kind": "directory"
+        },
+        {
+          "path": ".config/Code/User",
+          "kind": "directory"
+        },
+        {
+          "path": ".config/Code - Insiders/User",
+          "kind": "directory"
+        },
+        {
+          "path": ".config/VSCodium/User",
+          "kind": "directory"
+        },
+        {
+          "path": "AppData/Roaming/Code/User",
+          "kind": "directory"
+        },
+        {
+          "path": "AppData/Roaming/Code - Insiders/User",
+          "kind": "directory"
+        },
+        {
+          "path": "AppData/Roaming/VSCodium/User",
+          "kind": "directory"
+        }
+      ],
+      "project_paths": []
+    },
+    {
+      "provider": "crush",
+      "home_paths": [],
+      "project_paths": [
+        ".crush/***"
+      ]
+    },
+    {
+      "provider": "cursor",
+      "home_paths": [
+        {
+          "path": "Library/Application Support/Cursor/User",
+          "kind": "directory"
+        },
+        {
+          "path": ".config/Cursor/User",
+          "kind": "directory"
+        },
+        {
+          "path": "AppData/Roaming/Cursor/User",
+          "kind": "directory"
+        }
+      ],
+      "project_paths": []
+    },
+    {
+      "provider": "cursor-agent",
+      "home_paths": [
+        {
+          "path": ".cursor",
+          "kind": "directory"
+        }
+      ],
+      "project_paths": []
+    },
+    {
+      "provider": "deepseek",
+      "home_paths": [
+        {
+          "path": ".dsh",
+          "kind": "directory"
+        }
+      ],
+      "project_paths": []
+    },
+    {
+      "provider": "forgecode",
+      "home_paths": [
+        {
+          "path": ".forge",
+          "kind": "directory"
+        }
+      ],
+      "project_paths": []
+    },
+    {
+      "provider": "gemini",
+      "home_paths": [
+        {
+          "path": ".gemini",
+          "kind": "directory"
+        }
+      ],
+      "project_paths": []
+    },
+    {
+      "provider": "goose",
+      "home_paths": [
+        {
+          "path": ".local/share/goose",
+          "kind": "directory"
+        },
+        {
+          "path": "Library/Application Support/Block/goose",
+          "kind": "directory"
+        },
+        {
+          "path": "Library/Application Support/goose",
+          "kind": "directory"
+        },
+        {
+          "path": "AppData/Local/goose",
+          "kind": "directory"
+        },
+        {
+          "path": "AppData/Roaming/Block/goose/data",
+          "kind": "directory"
+        }
+      ],
+      "project_paths": []
+    },
+    {
+      "provider": "grok",
+      "home_paths": [
+        {
+          "path": ".grok",
+          "kind": "directory"
+        }
+      ],
+      "project_paths": []
+    },
+    {
+      "provider": "kimi",
+      "home_paths": [
+        {
+          "path": ".kimi",
+          "kind": "directory"
+        },
+        {
+          "path": ".kimi-code",
+          "kind": "directory"
+        }
+      ],
+      "project_paths": []
+    },
+    {
+      "provider": "kiro",
+      "home_paths": [
+        {
+          "path": "Library/Application Support/kiro-cli",
+          "kind": "directory"
+        },
+        {
+          "path": ".local/share/kiro-cli",
+          "kind": "directory"
+        },
+        {
+          "path": "AppData/Local/kiro-cli",
+          "kind": "directory"
+        }
+      ],
+      "project_paths": []
+    },
+    {
+      "provider": "llm",
+      "home_paths": [
+        {
+          "path": "Library/Application Support/io.datasette.llm",
+          "kind": "directory"
+        },
+        {
+          "path": ".config/io.datasette.llm",
+          "kind": "directory"
+        },
+        {
+          "path": "AppData/Roaming/io.datasette.llm",
+          "kind": "directory"
+        }
+      ],
+      "project_paths": []
+    },
+    {
+      "provider": "ompi",
+      "home_paths": [
+        {
+          "path": ".omp",
+          "kind": "directory"
+        }
+      ],
+      "project_paths": []
+    },
+    {
+      "provider": "opencode",
+      "home_paths": [
+        {
+          "path": ".local/share/opencode",
+          "kind": "directory"
+        }
+      ],
+      "project_paths": [],
+      "settings": {
+        "scopes": [
+          {
+            "id": "user",
+            "label": "config (JSON)",
+            "path": ".config/opencode/opencode.json",
+            "base": "home",
+            "format": "json",
+            "editable": true
+          },
+          {
+            "id": "user_jsonc",
+            "label": "config (JSONC)",
+            "path": ".config/opencode/opencode.jsonc",
+            "base": "home",
+            "format": "jsonc",
+            "editable": true
+          },
+          {
+            "id": "project",
+            "label": "Project config",
+            "path": "opencode.json",
+            "base": "project",
+            "format": "json",
+            "editable": true
+          },
+          {
+            "id": "project_jsonc",
+            "label": "Project config (JSONC)",
+            "path": "opencode.jsonc",
+            "base": "project",
+            "format": "jsonc",
+            "editable": true
+          }
+        ]
+      }
+    },
+    {
+      "provider": "openhands",
+      "home_paths": [
+        {
+          "path": ".openhands",
+          "kind": "directory"
+        }
+      ],
+      "project_paths": []
+    },
+    {
+      "provider": "openinterpreter",
+      "home_paths": [
+        {
+          "path": ".openinterpreter",
+          "kind": "directory"
+        }
+      ],
+      "project_paths": []
+    },
+    {
+      "provider": "pearai",
+      "home_paths": [
+        {
+          "path": ".pearai",
+          "kind": "directory"
+        }
+      ],
+      "project_paths": []
+    },
+    {
+      "provider": "pi",
+      "home_paths": [
+        {
+          "path": ".pi",
+          "kind": "directory"
+        }
+      ],
+      "project_paths": []
+    },
+    {
+      "provider": "qwen",
+      "home_paths": [
+        {
+          "path": ".qwen",
+          "kind": "directory"
+        }
+      ],
+      "project_paths": []
+    },
+    {
+      "provider": "trae",
+      "home_paths": [
+        {
+          "path": "Library/Application Support/Trae/User",
+          "kind": "directory"
+        },
+        {
+          "path": ".config/Trae/User",
+          "kind": "directory"
+        },
+        {
+          "path": "AppData/Roaming/Trae/User",
+          "kind": "directory"
+        }
+      ],
+      "project_paths": []
+    },
+    {
+      "provider": "vibe",
+      "home_paths": [
+        {
+          "path": ".vibe",
+          "kind": "directory"
+        }
+      ],
+      "project_paths": []
+    },
+    {
+      "provider": "zed",
+      "home_paths": [
+        {
+          "path": "Library/Application Support/Zed",
+          "kind": "directory"
+        },
+        {
+          "path": "AppData/Local/Zed",
+          "kind": "directory"
+        },
+        {
+          "path": ".local/share/zed",
+          "kind": "directory"
+        }
+      ],
+      "project_paths": []
+    }
+  ]
+}

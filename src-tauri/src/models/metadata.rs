@@ -174,6 +174,10 @@ impl SessionMetadata {
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectMetadata {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub links: Vec<String>,
     /// Whether the project is hidden from the sidebar
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hidden: Option<bool>,
@@ -190,7 +194,11 @@ pub struct ProjectMetadata {
 impl ProjectMetadata {
     /// Check if metadata has any values set
     pub fn is_empty(&self) -> bool {
-        self.hidden.is_none() && self.alias.is_none() && self.parent_project.is_none()
+        self.hidden.is_none()
+            && self.alias.is_none()
+            && self.parent_project.is_none()
+            && self.description.is_none()
+            && self.links.is_empty()
     }
 }
 
@@ -248,27 +256,6 @@ pub struct UserSettings {
     /// Providers explicitly discovered by the user and allowed to scan on startup
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub discovered_provider_ids: Vec<String>,
-
-    /// Remote hosts running CCHV server to aggregate
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub remote_hosts: Vec<RemoteHostConfig>,
-}
-
-/// Remote host configuration for multi-machine history aggregation
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct RemoteHostConfig {
-    pub id: String,
-    pub name: String,
-    pub endpoint: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub auth_token: Option<String>,
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-}
-
-fn default_true() -> bool {
-    true
 }
 
 #[cfg(test)]
@@ -276,7 +263,9 @@ mod tests {
     use super::*;
 
     #[test]
+    #[serial_test::serial]
     fn test_new_metadata() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let metadata = UserMetadata::new();
         assert_eq!(metadata.version, METADATA_SCHEMA_VERSION);
         assert!(metadata.sessions.is_empty());
@@ -284,7 +273,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_get_session_mut_creates_entry() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let mut metadata = UserMetadata::new();
         let session = metadata.get_session_mut("test-session");
         session.custom_name = Some("Test Name".to_string());
@@ -297,7 +288,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_is_project_hidden_explicit() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let mut metadata = UserMetadata::new();
         let project = metadata.get_project_mut("my-project");
         project.hidden = Some(true);
@@ -307,7 +300,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_is_project_hidden_pattern() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let mut metadata = UserMetadata::new();
         metadata
             .settings
@@ -320,7 +315,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_glob_pattern_matching() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         assert!(UserMetadata::matches_glob_pattern("abc", "abc"));
         assert!(UserMetadata::matches_glob_pattern("abc", "a*"));
         assert!(UserMetadata::matches_glob_pattern("abc", "*c"));
@@ -331,7 +328,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_session_metadata_is_empty() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let empty = SessionMetadata::default();
         assert!(empty.is_empty());
 
@@ -343,7 +342,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_serialization_roundtrip() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let mut metadata = UserMetadata::new();
         let session = metadata.get_session_mut("session-1");
         session.custom_name = Some("My Session".to_string());
@@ -360,7 +361,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_wsl_settings_roundtrip() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let mut metadata = UserMetadata::new();
         metadata.settings.wsl = Some(WslSettings {
             enabled: true,
@@ -377,14 +380,18 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_wsl_settings_defaults_when_absent() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let json = r#"{"sessions":{},"projects":{},"settings":{}}"#;
         let metadata: UserMetadata = serde_json::from_str(json).unwrap();
         assert!(metadata.settings.wsl.is_none());
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_discovered_provider_ids_roundtrip() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let mut metadata = UserMetadata::new();
         metadata.settings.discovered_provider_ids = vec!["codex".to_string(), "gemini".to_string()];
 

@@ -17,7 +17,6 @@ import {
   type FullAppStore,
   createEmptySearchState,
 } from "./types";
-import { getWslSearchableProviderIds, hasNonDefaultProvider } from "../../utils/providers";
 import { applyMessageDisplayFilter } from "../../components/MessageViewer/helpers/messageDisplayFilter";
 
 // ============================================================================
@@ -88,39 +87,17 @@ export const createSearchSlice: StateCreator<
 
   // Global search
   searchMessages: async (query: string, filters: SearchFilters = {}) => {
-    const { claudePath, activeProviders } = get();
-    const hasNonClaudeProviders = hasNonDefaultProvider(activeProviders);
-    const customClaudePaths = get().userMetadata?.settings?.customClaudePaths;
-    const hasCustomPaths = customClaudePaths != null && customClaudePaths.length > 0;
-    const settings = get().userMetadata?.settings;
-    const wslEnabled = settings?.wsl?.enabled ?? false;
-    const hasAlternativeSource = hasNonClaudeProviders || hasCustomPaths || wslEnabled;
-    const nativeClaudePath = claudePath || undefined;
-    const wslProviders = wslEnabled ? getWslSearchableProviderIds(activeProviders) : undefined;
-
-    if (!query.trim() || (!claudePath && !hasAlternativeSource)) {
+    const { activeProviders } = get();
+    if (!query.trim()) {
       set({ searchResults: [], searchQuery: "" });
       return;
     }
 
     set({ searchQuery: query });
     try {
-      const results = (hasNonClaudeProviders || hasCustomPaths || wslEnabled)
-        ? await api<ClaudeMessage[]>("search_all_providers", {
-            claudePath: nativeClaudePath,
-            query,
-            activeProviders,
-            filters,
-            customClaudePaths: hasCustomPaths ? customClaudePaths : undefined,
-            wslEnabled,
-            wslProviders,
-            wslExcludedDistros: settings?.wsl?.excludedDistros ?? [],
-          })
-        : await api<ClaudeMessage[]>("search_messages", {
-            claudePath: nativeClaudePath,
-            query,
-            filters,
-          });
+      const results = await api<ClaudeMessage[]>("search_all_providers", {
+        query, activeProviders, filters,
+      });
       set({ searchResults: results });
     } catch (error) {
       console.error("Failed to search messages:", error);

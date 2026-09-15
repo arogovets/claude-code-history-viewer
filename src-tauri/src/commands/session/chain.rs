@@ -248,6 +248,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn no_chain_for_a_normal_session() {
         let dir = TempDir::new().unwrap();
         let path = write_file(
@@ -260,6 +261,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn resolves_a_two_hop_chain() {
         let dir = TempDir::new().unwrap();
         let older = write_file(
@@ -282,6 +284,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn stops_when_the_parent_uuid_is_nowhere_to_be_found() {
         let dir = TempDir::new().unwrap();
         let newer = write_file(
@@ -299,6 +302,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn invalidates_cache_when_a_missing_predecessor_appears() {
         let dir = TempDir::new().unwrap();
         let newer = write_file(
@@ -323,6 +327,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn stops_at_a_cycle_without_repeating_files() {
         let dir = TempDir::new().unwrap();
         let first = write_file(
@@ -348,6 +353,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn respects_the_maximum_chain_hop_limit() {
         let dir = TempDir::new().unwrap();
         let mut paths = Vec::new();
@@ -371,6 +377,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn superseded_paths_hides_only_non_leaf_files() {
         let dir = TempDir::new().unwrap();
         let older = write_file(

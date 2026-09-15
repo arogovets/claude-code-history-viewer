@@ -148,7 +148,7 @@ export function useFileEditActions(
         setRestoreError(null);
       }, ERROR_MS);
     }
-  }, [filePath, content, onRestored]);
+  }, [filePath, content, onRestored, options.restoreScope]);
 
   return {
     copied,

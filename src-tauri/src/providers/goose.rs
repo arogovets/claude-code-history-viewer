@@ -29,31 +29,24 @@ fn candidate_db_paths() -> Vec<PathBuf> {
     let mut paths = Vec::new();
 
     // GOOSE_PATH_ROOT override → <root>/data/sessions/sessions.db
-    if let Ok(root) = std::env::var("GOOSE_PATH_ROOT") {
+    if let Ok(root) = crate::sources::env_var("GOOSE_PATH_ROOT") {
         let root = root.trim();
         if !root.is_empty() {
             paths.push(PathBuf::from(root).join("data/sessions/sessions.db"));
         }
     }
     // $XDG_DATA_HOME/goose/sessions/sessions.db
-    if let Ok(xdg) = std::env::var("XDG_DATA_HOME") {
+    if let Ok(xdg) = crate::sources::env_var("XDG_DATA_HOME") {
         let xdg = xdg.trim();
         if !xdg.is_empty() {
             paths.push(PathBuf::from(xdg).join("goose/sessions/sessions.db"));
         }
     }
-    if let Some(home) = crate::utils::home_dir() {
-        // XDG default (Linux, and macOS under Goose's etcetera strategy).
-        paths.push(home.join(".local/share/goose/sessions/sessions.db"));
-        // macOS Apple-strategy fallback.
-        #[cfg(target_os = "macos")]
-        paths.push(home.join("Library/Application Support/Block/goose/sessions/sessions.db"));
-    }
-    // Windows: %APPDATA%\Block\goose\data\sessions\sessions.db
-    #[cfg(target_os = "windows")]
-    if let Some(data) = dirs::data_dir() {
-        paths.push(data.join("Block/goose/data/sessions/sessions.db"));
-    }
+    paths.extend(
+        super::collection::home_paths(super::ProviderId::Goose)
+            .into_iter()
+            .map(|p| p.join("sessions/sessions.db")),
+    );
 
     paths
 }
@@ -517,6 +510,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn scan_groups_by_working_dir() {
         let conn = fixture_db();
         let projects = scan_in_conn(&conn).unwrap();
@@ -531,6 +525,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn load_sessions_filters_and_summarizes() {
         let conn = fixture_db();
         let sessions = load_sessions_conn(&conn, "/Users/jack/proj").unwrap();
@@ -551,6 +546,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn load_messages_maps_text_and_tools() {
         let conn = fixture_db();
         let msgs = load_messages_conn(&conn, "s1").unwrap();
@@ -576,6 +572,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn search_matches_content_and_tags_project() {
         let conn = fixture_db();
         let results = search_conn(&conn, "LOGIN", 10).unwrap();
@@ -586,6 +583,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn map_tool_response_error() {
         let item = json!({
             "type": "toolResponse",
@@ -599,6 +597,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn map_thinking_and_skips_unknown() {
         let think = json!({"type":"thinking","thinking":"hmm","signature":"sig"});
         let b = map_content_item(&think).unwrap();
@@ -609,6 +608,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn normalize_ts_and_epoch() {
         assert_eq!(normalize_ts("2026-06-21 10:00:00"), "2026-06-21T10:00:00Z");
         assert_eq!(normalize_ts("2026-06-21T10:00:00Z"), "2026-06-21T10:00:00Z");
@@ -621,6 +621,7 @@ mod tests {
     /// An empty `working_dir` must round-trip: it's grouped under "unknown" in
     /// scan and resolvable by `load_sessions("unknown")`.
     #[test]
+    #[serial_test::serial]
     fn empty_working_dir_rounds_trips_as_unknown() {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
@@ -656,6 +657,7 @@ mod tests {
     /// A NULL `message_id` must get the same UUID from load and search (stable
     /// DB row id), not divergent enumeration indices.
     #[test]
+    #[serial_test::serial]
     fn null_message_id_uuid_is_stable_across_load_and_search() {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(

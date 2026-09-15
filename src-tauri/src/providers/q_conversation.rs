@@ -255,6 +255,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[serial_test::serial]
     fn convert_user_prompt() {
         let user = json!({
             "content": {"Prompt": {"prompt": "hello world"}},
@@ -267,6 +268,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn convert_assistant_response() {
         let asst = json!({"Response": {"message_id": "abc", "content": "Hello!"}});
         let msg = convert_assistant_message("kiro", &asst, "sess-1", 0).unwrap();
@@ -278,6 +280,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn convert_assistant_tool_use_maps_name() {
         let asst = json!({
             "ToolUse": {
@@ -294,6 +297,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn convert_user_tool_results() {
         let user = json!({
             "content": {"ToolUseResults": {"tool_use_results": [
@@ -309,6 +313,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn convert_cancelled_tool_uses_prompt_and_results() {
         let user = json!({
             "content": {"CancelledToolUses": {
@@ -326,6 +331,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn parse_history_walks_user_and_assistant() {
         let value = json!({
             "history": [
@@ -348,6 +354,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn map_tool_names() {
         assert_eq!(map_tool_name("execute_bash"), "Bash");
         assert_eq!(map_tool_name("read_file"), "Read");

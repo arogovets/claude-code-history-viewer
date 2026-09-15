@@ -26,6 +26,7 @@ function createMockProject(overrides: Partial<ClaudeProject> = {}): ClaudeProjec
     message_count: overrides.message_count ?? 10,
     last_modified: overrides.last_modified ?? new Date().toISOString(),
     git_info: overrides.git_info,
+    custom_directory_label: overrides.custom_directory_label,
   };
 }
 
@@ -539,6 +540,31 @@ describe("groupProjectsByDirectory", () => {
     expect(result.groups[0].name).toBe("apps");
     expect(result.groups[0].path).toBe("/Users/jack/code/work/clients/acme/apps");
     expect(result.groups[0].displayPath).toBe("~/code/work/clients/acme/apps");
+  });
+
+  it("should create separate directory groups for sources with clear labels", () => {
+    const projects = [
+      createMockProject({
+        name: "cchv",
+        path: "/path/local",
+        actual_path: "/Users/jack/Dev/cchv",
+      }),
+      createMockProject({
+        name: "Master",
+        path: "/mirrors/work-mac/current/.claude/projects/Master",
+        source_id: "work-mac",
+        actual_path: "/Users/gortamazian/Dev/Master",
+        custom_directory_label: "gortamazian@s-macbook-pro.tail69ac27.ts.net",
+      }),
+    ];
+
+    const result = groupProjectsByDirectory(projects);
+
+    expect(result.groups).toHaveLength(2);
+    const remoteGroup = result.groups.find((g) => g.name.includes("gortamazian"));
+    expect(remoteGroup).toBeDefined();
+    expect(remoteGroup?.name).toBe("Dev (gortamazian)");
+    expect(remoteGroup?.displayPath).toBe("gortamazian: ~/Dev");
   });
 });
 

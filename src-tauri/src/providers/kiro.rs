@@ -20,14 +20,12 @@ pub fn detect() -> Option<ProviderInfo> {
 }
 
 fn get_db_path() -> Option<PathBuf> {
-    // data_local_dir(): macOS ~/Library/Application Support, Linux ~/.local/share,
-    // Windows %LOCALAPPDATA% — matches upstream kiro-cli (dirs::data_local_dir).
-    // (Previously hardcoded Windows to AppData/Roaming, which was wrong.)
-    Some(
-        dirs::data_local_dir()?
-            .join("kiro-cli")
-            .join("data.sqlite3"),
-    )
+    let paths = super::collection::home_paths(super::ProviderId::Kiro);
+    let base = paths
+        .iter()
+        .find(|p| p.join("data.sqlite3").is_file())
+        .or_else(|| paths.first())?;
+    Some(base.join("data.sqlite3"))
 }
 
 fn open_db() -> Result<Connection, String> {

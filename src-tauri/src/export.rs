@@ -779,6 +779,7 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    #[serial_test::serial]
     fn extract_string_content() {
         let blocks = extract_blocks(&json!("hello"));
         assert_eq!(blocks.len(), 1);
@@ -787,12 +788,14 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn extract_object_content_is_empty() {
         assert!(extract_blocks(&json!({"foo": "bar"})).is_empty());
         assert!(extract_blocks(&Value::Null).is_empty());
     }
 
     #[test]
+    #[serial_test::serial]
     fn extract_tool_use_with_input_summary() {
         let content = json!([
             { "type": "tool_use", "name": "Read", "input": { "file_path": "/a/b.rs", "limit": 50 } }
@@ -806,6 +809,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn extract_tool_result_error_prefix_and_truncation() {
         let long = "x".repeat(600);
         let content = json!([
@@ -818,6 +822,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn extract_thinking_and_redacted() {
         let content = json!([
             { "type": "thinking", "thinking": "hmm" },
@@ -830,6 +835,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn extract_mcp_tool_use() {
         let content = json!([
             { "type": "mcp_tool_use", "server_name": "fs", "tool_name": "read", "input": { "p": "x" } }
@@ -839,6 +845,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn is_exportable_filters_sidechain_and_system() {
         assert!(!is_exportable(
             &json!({ "type": "user", "isSidechain": true })
@@ -850,6 +857,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn escape_html_handles_specials() {
         assert_eq!(
             escape_html("<a href=\"x\">&"),
@@ -858,6 +866,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn group_thousands_formats() {
         assert_eq!(group_thousands(0), "0");
         assert_eq!(group_thousands(999), "999");
@@ -866,6 +875,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn render_html_has_structure_and_escapes_title() {
         let messages = vec![
             json!({ "type": "user", "timestamp": "2026-01-01T10:00:00Z", "message": { "role": "user", "content": "Hello **world**" } }),
@@ -883,6 +893,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn render_markdown_neutralizes_raw_html() {
         // comrak with unsafe_ = false drops raw HTML (the TS exporter escapes it
         // to visible text instead). Either way no executable markup survives.
@@ -892,6 +903,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn run_export_html_to_file_round_trip() {
         let dir = tempfile::TempDir::new().unwrap();
         let session = dir.path().join("abc-123.jsonl");
@@ -920,6 +932,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn run_export_json_to_file() {
         let dir = tempfile::TempDir::new().unwrap();
         let session = dir.path().join("s.jsonl");
@@ -945,6 +958,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn run_export_rejects_unknown_format() {
         let args = vec![
             "app".into(),
@@ -957,12 +971,14 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn run_export_missing_value_returns_usage_code() {
         let args = vec!["app".into(), "--export".into()];
         assert_eq!(run_export(&args), 2);
     }
 
     #[test]
+    #[serial_test::serial]
     fn resolve_rejects_non_jsonl_absolute_path() {
         let dir = tempfile::TempDir::new().unwrap();
         let txt = dir.path().join("a.txt");
@@ -971,6 +987,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn resolve_rejects_invalid_session_id() {
         assert!(resolve_session_path("bad id!").is_err());
         assert!(resolve_session_path("../etc/passwd").is_err());
@@ -978,6 +995,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    #[serial_test::serial]
     fn resolve_rejects_symlinked_jsonl() {
         use std::os::unix::fs::symlink;
         let dir = tempfile::TempDir::new().unwrap();

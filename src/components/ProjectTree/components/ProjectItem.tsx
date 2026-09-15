@@ -1,5 +1,7 @@
+import { projectMetadataKey } from "@/types/kanban";
 // src/components/ProjectTree/components/ProjectItem.tsx
 import React from "react";
+import { useAppStore } from "@/store/useAppStore";
 import { AlertCircle, ChevronDown, ChevronRight, Folder, GitBranch } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
@@ -54,13 +56,14 @@ export const ProjectItem: React.FC<ProjectItemProps> = ({
     isAbsolutePath(project.name) ||
     project.name.startsWith("-");
 
-  const displayName = isMain
+  const alias = useAppStore((s) => (s.userMetadata?.projects[projectMetadataKey(project)] ?? s.userMetadata?.projects[project.actual_path])?.alias);
+  const displayName = alias || (isMain
     ? t("project.main", "main")
     : isWorktree
       ? getWorktreeLabel(project.actual_path)
       : shouldPreferPathLeaf
         ? getPathLeaf(actualPath) || project.name
-        : project.name;
+        : project.name);
 
   return (
     <button

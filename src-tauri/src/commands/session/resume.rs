@@ -182,6 +182,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[serial_test::serial]
     fn validator_accepts_supported_resume_shapes() {
         for command in [
             "claude --resume abc_123",
@@ -197,6 +198,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn validator_rejects_arbitrary_executables() {
         for command in [
             "sh",
@@ -213,6 +215,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn validator_rejects_shell_metacharacters() {
         for command in [
             "copilot --resume=x; rm -rf ~",
@@ -229,12 +232,14 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn validator_rejects_overlong_commands() {
         let long = format!("copilot --resume={}", "a".repeat(600));
         assert!(validate_resume_command(&long).is_err());
     }
 
     #[test]
+    #[serial_test::serial]
     fn cwd_validation_rejects_relative_and_missing() {
         assert_eq!(validate_cwd(None), Ok(None));
         assert!(validate_cwd(Some("relative/path".to_string())).is_err());
@@ -245,6 +250,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn windows_builder_returns_expected_invocation() {
         let command = "copilot --resume=abc123";
         assert_eq!(
@@ -266,6 +272,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn macos_builder_escapes_cwd_for_shell_and_applescript() {
         let invocation = macos_invocation("claude --resume abc123", Some("/Users/test/a'b\\c"));
         assert_eq!(
@@ -275,6 +282,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn macos_builder_without_cwd() {
         assert_eq!(
             macos_invocation("claude --resume abc123", None).args[1],
@@ -283,6 +291,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn linux_invocations_list_common_terminals_in_order() {
         let invs = linux_invocations("vibe --resume abc123", Some("/home/test/work"));
         let programs: Vec<&str> = invs.iter().map(|i| i.program.as_str()).collect();
@@ -307,6 +316,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn terminal_invocations_is_nonempty() {
         assert!(!terminal_invocations("kimi -r abc", None).is_empty());
     }

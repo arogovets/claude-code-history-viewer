@@ -1,3 +1,4 @@
+mod common;
 use claude_code_history_viewer_lib::providers;
 use serial_test::serial;
 use std::ffi::OsString;
@@ -90,7 +91,9 @@ fn kimi_provider_loads_messages_without_internal_roles() {
 
 #[test]
 #[serial]
-fn kimi_provider_normalizes_relative_kimi_home_to_absolute_path() {
+fn kimi_provider_ignores_live_home_override_and_uses_mirror() {
+    let mirror = common::MirrorFixture::new();
+    fs::create_dir(mirror.path().join(".kimi")).unwrap();
     let temp_dir = TempDir::new().expect("temp dir should be created");
     let original_cwd = std::env::current_dir().expect("current dir should exist");
     let _cwd_guard = CurrentDirGuard::set(temp_dir.path());
@@ -102,7 +105,7 @@ fn kimi_provider_normalizes_relative_kimi_home_to_absolute_path() {
     assert!(std::path::Path::new(&base_path).is_absolute());
     assert_eq!(
         std::path::PathBuf::from(base_path),
-        temp_dir.path().join(".kimi").canonicalize().unwrap()
+        mirror.path().join(".kimi").canonicalize().unwrap()
     );
 
     std::env::set_current_dir(original_cwd).expect("current dir should be restored");

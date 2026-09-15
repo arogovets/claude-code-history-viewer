@@ -59,7 +59,7 @@ pub(crate) fn default_root() -> Option<PathBuf> {
     // latter goes to the known-folder API and ignores `HOME`, so the tests'
     // fixture home was invisible and every CLI-layout assertion saw an empty
     // scan (#541).
-    crate::utils::home_dir().map(|h| h.join(".gemini").join("antigravity-cli"))
+    crate::sources::home_dir().map(|h| h.join(".gemini").join("antigravity-cli"))
 }
 
 /// All candidate roots for Antigravity conversation stores:
@@ -976,6 +976,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn scan_projects_groups_sessions_by_workspace_from_history_index() {
         let temp = TempDir::new().expect("temp dir");
         let root = cli_root(&temp);
@@ -997,6 +998,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn scan_projects_falls_back_to_single_project_when_index_missing() {
         let temp = TempDir::new().expect("temp dir");
         let root = cli_root(&temp);
@@ -1012,6 +1014,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn load_sessions_uses_index_display_as_title_and_conversation_uuid_as_id() {
         let temp = TempDir::new().expect("temp dir");
         let root = cli_root(&temp);
@@ -1042,6 +1045,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn load_sessions_falls_back_to_first_user_input_for_unindexed_sessions() {
         let temp = TempDir::new().expect("temp dir");
         let root = cli_root(&temp);
@@ -1100,6 +1104,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn load_messages_tolerates_malformed_lines_and_unknown_enums() {
         let temp = TempDir::new().expect("temp dir");
         let root = cli_root(&temp);
@@ -1136,6 +1141,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    #[serial_test::serial]
     /// A symlinked session directory pointing outside the CLI store must be
     /// rejected by the path guard, not read through.
     fn load_messages_rejects_symlinked_session_dir() {
@@ -1158,6 +1164,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn search_matches_transcript_content_and_respects_limit() {
         let temp = TempDir::new().expect("temp dir");
         let root = cli_root(&temp);
@@ -1173,6 +1180,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn load_messages_converts_tool_calls_thinking_and_generic_results() {
         let temp = TempDir::new().expect("temp dir");
         let root = cli_root(&temp);
@@ -1225,6 +1233,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn workspace_inference_from_tool_call_directory() {
         let temp = TempDir::new().expect("temp dir");
         let root = cli_root(&temp);

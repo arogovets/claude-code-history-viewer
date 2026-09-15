@@ -225,7 +225,9 @@ fn to_u32_saturating(value: u64) -> u32 {
 
 /// Returns the platform-specific Antigravity logs root directory.
 fn antigravity_logs_root() -> Option<PathBuf> {
-    dirs::data_dir().map(|dir| dir.join("Antigravity").join("logs"))
+    super::collection::home_paths(super::ProviderId::Antigravity)
+        .into_iter()
+        .find(|p| p.ends_with("Antigravity/logs") && p.is_dir())
 }
 
 /// Maps an Antigravity overlay display string to a canonical tool name.
@@ -834,6 +836,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[serial]
     /// A user may have the desktop Antigravity app AND the antigravity-cli
     /// store: `scan_projects` must surface both layouts, without id
@@ -884,6 +887,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[serial]
     /// `load_messages` must route CLI session paths (under
     /// `~/.gemini/antigravity-cli/brain/`) to the transcript parser instead
@@ -902,6 +906,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[serial]
     /// Content search must cover CLI transcripts too — the desktop layout
     /// only matches session metadata.
@@ -938,7 +943,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_extract_log_tool_names_maps_overlay_actions() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let dir = TempDir::new().unwrap();
         let log_path = dir.path().join("ls-main.log");
         std::fs::write(
@@ -966,7 +973,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_merge_tool_names_into_messages_appends_tool_use_blocks() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let messages = vec![ClaudeMessage {
             uuid: "assistant-1".to_string(),
             parent_uuid: None,
@@ -1020,7 +1029,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_search_matches_session_id() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let dir = TempDir::new().unwrap();
         let cache_root = dir.path().join("rpc-cache").join("v1");
         std::fs::create_dir_all(&cache_root).unwrap();
@@ -1038,7 +1049,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_search_matches_model_name() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let dir = TempDir::new().unwrap();
         let cache_root = dir.path().join("rpc-cache").join("v1");
         std::fs::create_dir_all(&cache_root).unwrap();
@@ -1054,7 +1067,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_search_no_match() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let dir = TempDir::new().unwrap();
         let cache_root = dir.path().join("rpc-cache").join("v1");
         std::fs::create_dir_all(&cache_root).unwrap();
@@ -1068,7 +1083,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_search_respects_max_results() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let dir = TempDir::new().unwrap();
         let cache_root = dir.path().join("rpc-cache").join("v1");
         std::fs::create_dir_all(&cache_root).unwrap();
@@ -1193,6 +1210,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     /// Direct `<session_path>/usage.jsonl` is returned when it exists.
     #[serial]
     fn test_resolve_usage_jsonl_path_prefers_in_session_file() {
@@ -1218,6 +1236,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[cfg(unix)]
     /// A symlinked session directory pointing outside any marker-rooted
     /// antigravity root must NOT resolve to a readable `usage.jsonl`. Pre-fix
@@ -1263,6 +1282,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[cfg(unix)]
     /// A symlinked `usage.jsonl` (file-level, not directory-level) inside a
     /// legitimate session directory must be rejected. `Path::exists()` would
@@ -1292,6 +1312,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[cfg(unix)]
     /// The same symlink-file defense must apply to the rpc-cache fallback so
     /// a symlinked `usage.jsonl` dropped into `<root>/.token-monitor/...`
@@ -1324,6 +1345,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     /// When `<session_path>/usage.jsonl` is absent, fall back to the rpc-cache
     /// location — matching what `load_messages` already does for brain/-only
     /// sessions.
@@ -1351,6 +1373,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     /// Returns `None` when neither the in-session nor the rpc-cache file
     /// exists — callers should treat this as "no records".
     #[serial]

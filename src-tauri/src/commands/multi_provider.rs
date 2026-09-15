@@ -62,21 +62,34 @@ fn compare_global_search_results(
         })
 }
 
+/// Read-only collector inventory; no source-host access.
+#[tauri::command]
+pub async fn list_filesystem_sources() -> Result<Vec<crate::sources::Source>, String> {
+    crate::sources::inventory()
+}
+
 /// Detect all available providers
 #[tauri::command]
 pub async fn detect_providers() -> Result<Vec<providers::ProviderInfo>, String> {
-    Ok(providers::detect_providers())
+    let mut infos: std::collections::BTreeMap<String, providers::ProviderInfo> =
+        std::collections::BTreeMap::new();
+    for source in crate::sources::list()? {
+        for info in crate::sources::sync_scope(source.current, providers::detect_providers) {
+            if info.is_available || !infos.contains_key(&info.id) {
+                infos.insert(info.id.clone(), info);
+            }
+        }
+    }
+    Ok(infos.into_values().collect())
 }
 
 /// Scan projects from all (or selected) providers
-#[tauri::command]
-pub async fn scan_all_projects(
+async fn scan_all_projects_in_source(
     claude_path: Option<String>,
     active_providers: Option<Vec<String>>,
     custom_claude_paths: Option<Vec<CustomClaudePathParam>>,
     wsl_enabled: Option<bool>,
     wsl_excluded_distros: Option<Vec<String>>,
-    include_remote: Option<bool>,
 ) -> Result<Vec<ClaudeProject>, String> {
     let providers_to_scan = active_providers.unwrap_or_else(|| {
         vec![
@@ -115,54 +128,47 @@ pub async fn scan_all_projects(
 
     let mut all_projects = Vec::new();
 
-    // Crash recovery first: index any snapshots finalized before a crash but
-    // never folded into SQLite. Best effort and usually a no-op.
-    crate::storage::index::best_effort_reconcile();
-
-    // Claude (default path) — filesystem first: snapshot, then parse the copy.
-    // The default base is derived from the home directory even when the live
-    // dir is gone, so preserved snapshots remain browsable after deletion.
+    // Claude (default path)
     if providers_to_scan.iter().any(|p| p == "claude") {
-        let claude_base = claude_path
-            .or_else(providers::claude::get_base_path)
-            .or_else(|| {
-                crate::utils::home_dir().map(|h| h.join(".claude").to_string_lossy().to_string())
-            });
+        let claude_base = claude_path.or_else(providers::claude::get_base_path);
         if let Some(base) = claude_base {
-            let mut projects =
-                crate::commands::project::scan_claude_base_with_snapshot(base, None).await;
-            for p in &mut projects {
-                if p.provider.is_none() {
-                    p.provider = Some("claude".to_string());
+            match crate::commands::project::scan_projects(base).await {
+                Ok(mut projects) => {
+                    for p in &mut projects {
+                        if p.provider.is_none() {
+                            p.provider = Some("claude".to_string());
+                        }
+                    }
+                    all_projects.extend(projects);
+                }
+                Err(e) => {
+                    log::warn!("Claude scan failed: {e}");
                 }
             }
-            all_projects.extend(projects);
         }
 
-        // Claude (custom paths) — same snapshot model per custom root. An
-        // invalid/gone custom dir must not drop its preserved snapshots, so a
-        // validation failure only skips the *live* read, never the snapshot.
+        // Claude (custom paths)
         if let Some(ref custom_paths) = custom_claude_paths {
             for custom in custom_paths {
                 let custom_base = std::path::PathBuf::from(&custom.path);
                 if let Err(e) = crate::utils::validate_custom_claude_path(&custom_base) {
-                    log::warn!(
-                        "Custom Claude path unavailable, reading preserved snapshot ({}): {e}",
-                        custom.path
-                    );
+                    log::warn!("Skipping invalid custom Claude path: {e}");
+                    continue;
                 }
-                let mut projects = crate::commands::project::scan_claude_base_with_snapshot(
-                    custom.path.clone(),
-                    custom.label.clone(),
-                )
-                .await;
-                for p in &mut projects {
-                    if p.provider.is_none() {
-                        p.provider = Some("claude".to_string());
+                match crate::commands::project::scan_projects(custom.path.clone()).await {
+                    Ok(mut projects) => {
+                        for p in &mut projects {
+                            if p.provider.is_none() {
+                                p.provider = Some("claude".to_string());
+                            }
+                            p.custom_directory_label.clone_from(&custom.label);
+                        }
+                        all_projects.extend(projects);
                     }
-                    p.custom_directory_label.clone_from(&custom.label);
+                    Err(e) => {
+                        log::warn!("Custom Claude path scan failed ({}): {e}", custom.path);
+                    }
                 }
-                all_projects.extend(projects);
             }
         }
     }
@@ -218,7 +224,16 @@ pub async fn scan_all_projects(
         .map(|(name, scan)| {
             let name = *name;
             let scan = *scan;
-            tauri::async_runtime::spawn_blocking(move || (name, scan()))
+            {
+                let home = crate::sources::home_dir();
+                tauri::async_runtime::spawn_blocking(move || {
+                    let result = match home {
+                        Some(home) => crate::sources::sync_scope(home, scan),
+                        None => Ok(Vec::new()),
+                    };
+                    (name, result)
+                })
+            }
         })
         .collect();
 
@@ -335,39 +350,8 @@ pub async fn scan_all_projects(
         }
     }
 
-    // Remote hosts scanning
-    if include_remote.unwrap_or(true) {
-        let remote_hosts = crate::remote::get_remote_hosts();
-        let remote_handles: Vec<_> = remote_hosts
-            .into_iter()
-            .filter(|h| h.enabled)
-            .map(|host| {
-                let providers = providers_to_scan.clone();
-                tauri::async_runtime::spawn(async move {
-                    crate::remote::scan_remote_projects(&host, &providers).await
-                })
-            })
-            .collect();
-
-        for handle in remote_handles {
-            match handle.await {
-                Ok(Ok(projects)) => all_projects.extend(projects),
-                Ok(Err(e)) => log::warn!("Remote host scan error: {e}"),
-                Err(e) => log::warn!("Remote host scan task failed: {e}"),
-            }
-        }
-    }
-
     // Hide empty containers that have no session files regardless of provider.
     all_projects.retain(|project| project.session_count > 0);
-
-    let provider_scope = if providers_to_scan.len() == 1 {
-        Some(providers_to_scan[0].as_str())
-    } else {
-        None
-    };
-    let mut all_projects =
-        crate::cache::sync_and_save_projects(&all_projects, None, provider_scope);
 
     all_projects.sort_by(|a, b| {
         match (
@@ -384,76 +368,56 @@ pub async fn scan_all_projects(
 }
 
 /// Load sessions for a specific provider's project
-#[tauri::command]
-pub async fn load_provider_sessions(
+async fn load_provider_sessions_in_source(
     provider: String,
     project_path: String,
     exclude_sidechain: Option<bool>,
 ) -> Result<Vec<ClaudeSession>, String> {
-    if crate::remote::is_remote_path(&project_path) {
-        if let Some((endpoint, inner_path)) = crate::remote::parse_remote_path(&project_path) {
-            return crate::remote::load_remote_sessions(
-                endpoint,
-                &provider,
-                inner_path,
-                exclude_sidechain,
-            )
-            .await;
-        }
-    }
-
     let exclude = exclude_sidechain.unwrap_or(false);
 
-    let sessions = match provider.as_str() {
+    match provider.as_str() {
         "claude" => {
-            let mut sessions = crate::commands::session::load_project_sessions(
-                project_path.clone(),
-                Some(exclude),
-            )
-            .await?;
+            let mut sessions =
+                crate::commands::session::load_project_sessions(project_path, Some(exclude))
+                    .await?;
             for s in &mut sessions {
                 if s.provider.is_none() {
                     s.provider = Some("claude".to_string());
                 }
             }
-            sessions
+            Ok(sessions)
         }
-        "codex" => providers::codex::load_sessions(&project_path, exclude)?,
-        "continue" => providers::continue_dev::load_sessions(&project_path, exclude)?,
-        "pearai" => providers::pearai::load_sessions(&project_path, exclude)?,
-        "copilot" => providers::copilot::load_sessions(&project_path, exclude)?,
-        "gemini" => providers::gemini::load_sessions(&project_path, exclude)?,
-        "goose" => providers::goose::load_sessions(&project_path, exclude)?,
-        "grok" => providers::grok::load_sessions(&project_path, exclude)?,
-        "kimi" => providers::kimi::load_sessions(&project_path, exclude)?,
-        "forgecode" => providers::forgecode::load_sessions(&project_path, exclude)?,
-        "opencode" => providers::opencode::load_sessions(&project_path, exclude)?,
-        "openinterpreter" => providers::openinterpreter::load_sessions(&project_path, exclude)?,
-        "pi" => providers::pi::load_sessions(&project_path, exclude)?,
-        "ompi" => providers::ompi::load_sessions(&project_path, exclude)?,
-        "qwen" => providers::qwen::load_sessions(&project_path, exclude)?,
-        "cline" => providers::cline::load_sessions(&project_path, exclude)?,
-        "crush" => providers::crush::load_sessions(&project_path, exclude)?,
-        "cursor" => providers::cursor::load_sessions(&project_path, exclude)?,
-        "cursor-agent" => providers::cursor_agent::load_sessions(&project_path, exclude)?,
-        "aider" => providers::aider::load_sessions(&project_path, exclude)?,
-        "amazonq" => providers::amazon_q::load_sessions(&project_path, exclude)?,
-        "antigravity" => providers::antigravity::load_sessions(&project_path, exclude)?,
-        "deepseek" => providers::deepseek::load_sessions(&project_path, exclude)?,
-        "codebuddy" => providers::codebuddy::load_sessions(&project_path, exclude)?,
-        "kiro" => providers::kiro::load_sessions(&project_path, exclude)?,
-        "llm" => providers::llm::load_sessions(&project_path, exclude)?,
-        "zed" => providers::zed::load_sessions(&project_path, exclude)?,
-        "openhands" => providers::openhands::load_sessions(&project_path, exclude)?,
-        "trae" => providers::trae::load_sessions(&project_path, exclude)?,
-        "vibe" => providers::vibe::load_sessions(&project_path, exclude)?,
-        _ => return Err(format!("Unknown provider: {provider}")),
-    };
-
-    let mut combined_sessions =
-        crate::cache::sync_and_save_sessions(&project_path, &provider, &sessions);
-    sort_sessions_by_recency(&mut combined_sessions);
-    Ok(combined_sessions)
+        "codex" => providers::codex::load_sessions(&project_path, exclude),
+        "continue" => providers::continue_dev::load_sessions(&project_path, exclude),
+        "pearai" => providers::pearai::load_sessions(&project_path, exclude),
+        "copilot" => providers::copilot::load_sessions(&project_path, exclude),
+        "gemini" => providers::gemini::load_sessions(&project_path, exclude),
+        "goose" => providers::goose::load_sessions(&project_path, exclude),
+        "grok" => providers::grok::load_sessions(&project_path, exclude),
+        "kimi" => providers::kimi::load_sessions(&project_path, exclude),
+        "forgecode" => providers::forgecode::load_sessions(&project_path, exclude),
+        "opencode" => providers::opencode::load_sessions(&project_path, exclude),
+        "openinterpreter" => providers::openinterpreter::load_sessions(&project_path, exclude),
+        "pi" => providers::pi::load_sessions(&project_path, exclude),
+        "ompi" => providers::ompi::load_sessions(&project_path, exclude),
+        "qwen" => providers::qwen::load_sessions(&project_path, exclude),
+        "cline" => providers::cline::load_sessions(&project_path, exclude),
+        "crush" => providers::crush::load_sessions(&project_path, exclude),
+        "cursor" => providers::cursor::load_sessions(&project_path, exclude),
+        "cursor-agent" => providers::cursor_agent::load_sessions(&project_path, exclude),
+        "aider" => providers::aider::load_sessions(&project_path, exclude),
+        "amazonq" => providers::amazon_q::load_sessions(&project_path, exclude),
+        "antigravity" => providers::antigravity::load_sessions(&project_path, exclude),
+        "deepseek" => providers::deepseek::load_sessions(&project_path, exclude),
+        "codebuddy" => providers::codebuddy::load_sessions(&project_path, exclude),
+        "kiro" => providers::kiro::load_sessions(&project_path, exclude),
+        "llm" => providers::llm::load_sessions(&project_path, exclude),
+        "zed" => providers::zed::load_sessions(&project_path, exclude),
+        "openhands" => providers::openhands::load_sessions(&project_path, exclude),
+        "trae" => providers::trae::load_sessions(&project_path, exclude),
+        "vibe" => providers::vibe::load_sessions(&project_path, exclude),
+        _ => Err(format!("Unknown provider: {provider}")),
+    }
 }
 
 fn sort_sessions_by_recency(sessions: &mut [ClaudeSession]) {
@@ -475,8 +439,7 @@ fn sort_sessions_by_recency(sessions: &mut [ClaudeSession]) {
 /// Claude uses a cache-aware fast path that avoids parsing every JSONL file.
 /// Other providers keep their existing loaders and only paginate the result for
 /// now, preserving behavior while giving the frontend one API shape.
-#[tauri::command]
-pub async fn load_provider_sessions_page(
+async fn load_provider_sessions_page_in_source(
     provider: String,
     project_path: String,
     exclude_sidechain: Option<bool>,
@@ -485,20 +448,6 @@ pub async fn load_provider_sessions_page(
 ) -> Result<crate::commands::session::SessionPage, String> {
     let offset = offset.unwrap_or(0);
     let limit = limit.unwrap_or(250).clamp(1, 500);
-
-    if crate::remote::is_remote_path(&project_path) {
-        if let Some((endpoint, inner_path)) = crate::remote::parse_remote_path(&project_path) {
-            return crate::remote::load_remote_sessions_page(
-                endpoint,
-                &provider,
-                inner_path,
-                exclude_sidechain,
-                offset,
-                limit,
-            )
-            .await;
-        }
-    }
 
     if provider == "claude" {
         let mut page = crate::commands::session::load_project_sessions_page(
@@ -517,7 +466,7 @@ pub async fn load_provider_sessions_page(
     }
 
     let mut sessions =
-        load_provider_sessions(provider.clone(), project_path.clone(), exclude_sidechain).await?;
+        load_provider_sessions_in_source(provider.clone(), project_path, exclude_sidechain).await?;
     for session in &mut sessions {
         if session.provider.is_none() {
             session.provider = Some(provider.clone());
@@ -528,10 +477,8 @@ pub async fn load_provider_sessions_page(
     let total = sessions.len();
     let page_sessions: Vec<ClaudeSession> = sessions.into_iter().skip(offset).take(limit).collect();
     let next_offset = offset.saturating_add(page_sessions.len());
-    crate::cache::cache_sessions(&project_path, &provider, &page_sessions);
 
     Ok(crate::commands::session::SessionPage {
-        offline: None,
         sessions: page_sessions,
         total,
         offset,
@@ -587,17 +534,10 @@ fn load_non_claude_messages(
 }
 
 /// Load messages from a specific provider's session
-#[tauri::command]
-pub async fn load_provider_messages(
+async fn load_provider_messages_in_source(
     provider: String,
     session_path: String,
 ) -> Result<Vec<ClaudeMessage>, String> {
-    if crate::remote::is_remote_path(&session_path) {
-        if let Some((endpoint, inner_path)) = crate::remote::parse_remote_path(&session_path) {
-            return crate::remote::load_remote_messages(endpoint, &provider, inner_path).await;
-        }
-    }
-
     let messages = if provider == "claude" {
         let mut messages = crate::commands::session::load_session_messages(session_path).await?;
         for m in &mut messages {
@@ -646,8 +586,7 @@ fn paginate_messages_chat_style(
 ///   `tool_result` renderers — a boundary-only artifact.
 /// - Other providers materialize the full session server-side (as they always
 ///   have), merge, then slice — bounding the IPC payload and frontend memory.
-#[tauri::command]
-pub async fn load_provider_messages_paginated(
+async fn load_provider_messages_paginated_in_source(
     provider: String,
     session_path: String,
     offset: Option<usize>,
@@ -658,20 +597,6 @@ pub async fn load_provider_messages_paginated(
     let limit = limit
         .unwrap_or(DEFAULT_MESSAGE_PAGE_SIZE)
         .clamp(1, MAX_MESSAGE_PAGE_LIMIT);
-
-    if crate::remote::is_remote_path(&session_path) {
-        if let Some((endpoint, inner_path)) = crate::remote::parse_remote_path(&session_path) {
-            return crate::remote::load_remote_messages_paginated(
-                endpoint,
-                &provider,
-                inner_path,
-                offset,
-                limit,
-                exclude_sidechain,
-            )
-            .await;
-        }
-    }
 
     if provider == "claude" {
         let mut page = crate::commands::session::load_session_messages_paginated(
@@ -706,26 +631,13 @@ pub async fn load_provider_messages_paginated(
 ///
 /// Offsets are in the same index space as `load_provider_messages_paginated`
 /// for the given provider (pre-merge for claude, post-merge otherwise).
-#[tauri::command]
-pub async fn get_provider_message_offset(
+#[allow(clippy::unused_async)]
+async fn get_provider_message_offset_in_source(
     provider: String,
     session_path: String,
     message_uuid: String,
     exclude_sidechain: Option<bool>,
 ) -> Result<Option<usize>, String> {
-    if crate::remote::is_remote_path(&session_path) {
-        if let Some((endpoint, inner_path)) = crate::remote::parse_remote_path(&session_path) {
-            return crate::remote::get_remote_message_offset(
-                endpoint,
-                &provider,
-                inner_path,
-                &message_uuid,
-                exclude_sidechain,
-            )
-            .await;
-        }
-    }
-
     if provider == "claude" {
         return crate::commands::session::get_session_message_offset(
             session_path,
@@ -743,9 +655,8 @@ pub async fn get_provider_message_offset(
 }
 
 /// Search across all (or selected) providers
-#[tauri::command]
 #[allow(clippy::too_many_arguments)]
-pub async fn search_all_providers(
+async fn search_all_providers_in_source(
     claude_path: Option<String>,
     query: String,
     active_providers: Option<Vec<String>>,
@@ -755,7 +666,6 @@ pub async fn search_all_providers(
     custom_claude_paths: Option<Vec<CustomClaudePathParam>>,
     wsl_enabled: Option<bool>,
     wsl_excluded_distros: Option<Vec<String>>,
-    include_remote: Option<bool>,
 ) -> Result<Vec<ClaudeMessage>, String> {
     let max_results = limit.unwrap_or(100);
     let search_filters =
@@ -1042,6 +952,28 @@ pub async fn search_all_providers(
         }
     }
 
+    if providers_to_search.iter().any(|p| p == "deepseek") {
+        for project in providers::deepseek::scan_projects().unwrap_or_default() {
+            for session in
+                providers::deepseek::load_sessions(&project.path, false).unwrap_or_default()
+            {
+                for mut message in
+                    providers::deepseek::load_messages(&session.file_path).unwrap_or_default()
+                {
+                    if message.content.as_ref().is_some_and(|content| {
+                        crate::utils::search_json_value_case_insensitive(
+                            content,
+                            &query.to_lowercase(),
+                        )
+                    }) {
+                        message.project_name = Some(project.name.clone());
+                        all_results.push(message);
+                    }
+                }
+            }
+        }
+    }
+
     // Aider
     if providers_to_search.iter().any(|p| p == "aider") {
         match providers::aider::search(&query, max_results) {
@@ -1229,24 +1161,6 @@ pub async fn search_all_providers(
         }
     }
 
-    // Remote hosts search
-    if include_remote.unwrap_or(true) {
-        let remote_hosts = crate::remote::get_remote_hosts();
-        for host in remote_hosts.iter().filter(|h| h.enabled) {
-            match crate::remote::search_remote_providers(
-                host,
-                &query,
-                max_results,
-                &providers_to_search,
-            )
-            .await
-            {
-                Ok(results) => all_results.extend(results),
-                Err(e) => log::warn!("Remote search failed for {}: {e}", host.name),
-            }
-        }
-    }
-
     all_results = crate::commands::session::apply_search_filters(all_results, &search_filters);
 
     // Prefer the user's matching prompts, then displayable assistant text,
@@ -1385,6 +1299,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[serial_test::serial]
     fn select_wsl_search_providers_separates_native_and_wsl_sources() {
         let active_providers = vec!["claude".to_string(), "codex".to_string()];
         let requested_wsl_providers = vec!["claude".to_string(), "codex".to_string()];
@@ -1448,6 +1363,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn global_search_ranking_prefers_conversation_roles_over_tool_matches() {
         let mut user = make_message_with_uuid(
             "user-text",
@@ -1487,6 +1403,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn paginate_chat_style_returns_newest_window_first() {
         let messages: Vec<ClaudeMessage> = (1..=5)
             .map(|i| {
@@ -1544,6 +1461,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn paginate_chat_style_empty_input() {
         let page = paginate_messages_chat_style(vec![], 0, 100);
         assert!(page.messages.is_empty());
@@ -1553,9 +1471,18 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn load_provider_messages_paginated_claude_merges_within_window() {
-        let temp_dir = tempfile::TempDir::new().unwrap();
-        let file_path = temp_dir.path().join("session.jsonl");
+        let sandbox = crate::test_utils::SandboxHome::new();
+        let source = sandbox.path().join(".claude-history-viewer/mirrors/test");
+        let current = source.join("current");
+        std::fs::create_dir_all(&current).unwrap();
+        std::fs::write(
+            source.join("source.json"),
+            r#"{"id":"test","label":"Test"}"#,
+        )
+        .unwrap();
+        let file_path = current.join("session.jsonl");
         let content = concat!(
             r#"{"uuid":"uuid-a","sessionId":"s1","timestamp":"2025-06-26T10:00:00Z","type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"call_1","name":"Bash","input":{"command":"pwd"}}]}}"#,
             "\n",
@@ -1601,9 +1528,18 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn get_provider_message_offset_claude_matches_pagination_space() {
-        let temp_dir = tempfile::TempDir::new().unwrap();
-        let file_path = temp_dir.path().join("session.jsonl");
+        let sandbox = crate::test_utils::SandboxHome::new();
+        let source = sandbox.path().join(".claude-history-viewer/mirrors/test");
+        let current = source.join("current");
+        std::fs::create_dir_all(&current).unwrap();
+        std::fs::write(
+            source.join("source.json"),
+            r#"{"id":"test","label":"Test"}"#,
+        )
+        .unwrap();
+        let file_path = current.join("session.jsonl");
         let mut content = String::new();
         for i in 1..=4 {
             content.push_str(&format!(
@@ -1639,6 +1575,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn select_wsl_vscode_base_prefers_stable_but_preserves_fallback() {
         let insiders_only = vec![(
             PathBuf::from(r"\\wsl.localhost\Ubuntu\home\me\.vscode-server-insiders\data\User"),
@@ -1661,6 +1598,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     /// Merge a tool result message into the previous tool-use message when possible.
     fn merge_tool_result_into_previous_tool_use_message() {
         let tool_use = make_message(
@@ -1696,6 +1634,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     /// Split and merge multiple tool results from a single provider message.
     fn merge_multiple_tool_results_from_single_message() {
         let tool_use = make_message(
@@ -1742,6 +1681,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     /// Verify partial merging preserves unmerged and non-tool content.
     fn partial_merge_preserves_unmerged_and_non_tool_content() {
         let tool_use = make_message(
@@ -1800,4 +1740,192 @@ mod tests {
             Some("text")
         );
     }
+}
+
+/// Discover only successfully collected local mirrors. Legacy path arguments
+/// cannot opt back into live source reads.
+#[tauri::command]
+pub async fn scan_all_projects(
+    claude_path: Option<String>,
+    active_providers: Option<Vec<String>>,
+    custom_claude_paths: Option<Vec<CustomClaudePathParam>>,
+    wsl_enabled: Option<bool>,
+    wsl_excluded_distros: Option<Vec<String>>,
+) -> Result<Vec<ClaudeProject>, String> {
+    let _ = (
+        claude_path,
+        custom_claude_paths,
+        wsl_enabled,
+        wsl_excluded_distros,
+    );
+    let mut projects = Vec::new();
+    for source in crate::sources::list()? {
+        let mut found = crate::sources::scope(
+            source.current.clone(),
+            scan_all_projects_in_source(None, active_providers.clone(), None, Some(false), None),
+        )
+        .await?;
+        for project in &mut found {
+            project.custom_directory_label = Some(source.label.clone());
+            project.path = crate::sources::qualify(&source, &project.path);
+        }
+        projects.extend(found);
+    }
+    Ok(projects)
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn search_all_providers(
+    claude_path: Option<String>,
+    query: String,
+    active_providers: Option<Vec<String>>,
+    wsl_providers: Option<Vec<String>>,
+    filters: Option<Value>,
+    limit: Option<usize>,
+    custom_claude_paths: Option<Vec<CustomClaudePathParam>>,
+    wsl_enabled: Option<bool>,
+    wsl_excluded_distros: Option<Vec<String>>,
+) -> Result<Vec<ClaudeMessage>, String> {
+    let _ = (
+        claude_path,
+        wsl_providers,
+        custom_claude_paths,
+        wsl_enabled,
+        wsl_excluded_distros,
+    );
+    let mut results = Vec::new();
+    for source in crate::sources::list()? {
+        let start = results.len();
+        results.extend(
+            crate::sources::scope(
+                source.current.clone(),
+                search_all_providers_in_source(
+                    None,
+                    query.clone(),
+                    active_providers.clone(),
+                    None,
+                    filters.clone(),
+                    limit,
+                    None,
+                    Some(false),
+                    None,
+                ),
+            )
+            .await?,
+        );
+        for message in &mut results[start..] {
+            message.session_id = format!("source:{}|{}", source.id, message.session_id);
+        }
+    }
+    let query_lower = query.to_lowercase();
+    results.sort_by(|a, b| compare_global_search_results(a, b, &query_lower));
+    results.truncate(limit.unwrap_or(100));
+    Ok(results)
+}
+
+#[tauri::command]
+pub async fn load_provider_sessions(
+    provider: String,
+    project_path: String,
+    exclude_sidechain: Option<bool>,
+) -> Result<Vec<ClaudeSession>, String> {
+    let (source, project_path) = crate::sources::resolve(&project_path)?;
+    let result = crate::sources::scope(
+        source.current.clone(),
+        load_provider_sessions_in_source(provider, project_path, exclude_sidechain),
+    )
+    .await?;
+    let mut result = result;
+    for session in &mut result {
+        session.file_path = crate::sources::qualify(&source, &session.file_path);
+        session.session_id = format!("source:{}|{}", source.id, session.session_id);
+    }
+    Ok(result)
+}
+
+#[tauri::command]
+pub async fn load_provider_sessions_page(
+    provider: String,
+    project_path: String,
+    exclude_sidechain: Option<bool>,
+    offset: Option<usize>,
+    limit: Option<usize>,
+) -> Result<crate::commands::session::SessionPage, String> {
+    let (source, project_path) = crate::sources::resolve(&project_path)?;
+    let result = crate::sources::scope(
+        source.current.clone(),
+        load_provider_sessions_page_in_source(
+            provider,
+            project_path,
+            exclude_sidechain,
+            offset,
+            limit,
+        ),
+    )
+    .await?;
+    let mut result = result;
+    for session in &mut result.sessions {
+        session.file_path = crate::sources::qualify(&source, &session.file_path);
+        session.session_id = format!("source:{}|{}", source.id, session.session_id);
+    }
+    Ok(result)
+}
+
+#[tauri::command]
+pub async fn load_provider_messages(
+    provider: String,
+    session_path: String,
+) -> Result<Vec<ClaudeMessage>, String> {
+    let (source, session_path) = crate::sources::resolve(&session_path)?;
+    let result = crate::sources::scope(
+        source.current.clone(),
+        load_provider_messages_in_source(provider, session_path),
+    )
+    .await?;
+    Ok(result)
+}
+
+#[tauri::command]
+pub async fn load_provider_messages_paginated(
+    provider: String,
+    session_path: String,
+    offset: Option<usize>,
+    limit: Option<usize>,
+    exclude_sidechain: Option<bool>,
+) -> Result<MessagePage, String> {
+    let (source, session_path) = crate::sources::resolve(&session_path)?;
+    let result = crate::sources::scope(
+        source.current.clone(),
+        load_provider_messages_paginated_in_source(
+            provider,
+            session_path,
+            offset,
+            limit,
+            exclude_sidechain,
+        ),
+    )
+    .await?;
+    Ok(result)
+}
+
+#[tauri::command]
+pub async fn get_provider_message_offset(
+    provider: String,
+    session_path: String,
+    message_uuid: String,
+    exclude_sidechain: Option<bool>,
+) -> Result<Option<usize>, String> {
+    let (source, session_path) = crate::sources::resolve(&session_path)?;
+    let result = crate::sources::scope(
+        source.current.clone(),
+        get_provider_message_offset_in_source(
+            provider,
+            session_path,
+            message_uuid,
+            exclude_sidechain,
+        ),
+    )
+    .await?;
+    Ok(result)
 }

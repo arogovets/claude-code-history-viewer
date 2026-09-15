@@ -41,14 +41,11 @@ const KEY_PREFIXES: &[&str] = &[
     "memento/icube-ai-chat-storage-",
 ];
 
-/// `<UserData>/Trae/User/workspaceStorage` (`dirs::config_dir()` resolves to
+/// `<UserData>/Trae/User/workspaceStorage` (`crate::sources::config_dir()` resolves to
 /// `~/Library/Application Support` on macOS, `~/.config` on Linux, `%APPDATA%`
 /// on Windows — matching VS Code-family layout).
 fn workspace_storage() -> Option<PathBuf> {
-    let dir = dirs::config_dir()?
-        .join("Trae")
-        .join("User")
-        .join("workspaceStorage");
+    let dir = super::collection::existing_home(super::ProviderId::Trae)?.join("workspaceStorage");
     if dir.is_dir() {
         Some(dir)
     } else {
@@ -525,6 +522,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[serial_test::serial]
     fn extract_sessions_from_list_container() {
         let value = json!({
             "list": [
@@ -553,6 +551,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn extract_sessions_from_object_map_and_ai_role() {
         let value = json!({
             "sessions": {
@@ -569,6 +568,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn message_text_agent_mode_flattens_plan_items() {
         let msg = json!({
             "role": "assistant",
@@ -583,6 +583,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn clean_content_object_summary() {
         assert_eq!(clean_content(&json!("hi")).as_deref(), Some("hi"));
         assert_eq!(
@@ -594,6 +595,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn parse_session_path_splits() {
         let (h, id) = parse_session_path("trae://abc123#sess-1").unwrap();
         assert_eq!(h, "abc123");
@@ -602,6 +604,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn valid_hash_rejects_traversal() {
         assert!(valid_hash("3b1c9f0a2e"));
         assert!(!valid_hash("../../etc"));
@@ -613,6 +616,7 @@ mod tests {
     /// A corrupt workspace state.vscdb must not fail the whole scan — valid
     /// sibling workspaces still come back.
     #[test]
+    #[serial_test::serial]
     fn scan_projects_in_tolerates_corrupt_workspace_db() {
         let tmp = tempfile::TempDir::new().unwrap();
 

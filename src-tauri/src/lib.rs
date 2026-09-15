@@ -1,12 +1,12 @@
-pub mod cache;
 pub mod cli;
 pub mod cli_args;
 pub mod commands;
 pub mod export;
 pub mod models;
+pub mod provider_settings;
 pub mod providers;
-pub mod remote;
-pub mod storage;
+pub mod settings_transport;
+pub mod sources;
 pub mod utils;
 pub mod wsl;
 
@@ -43,13 +43,8 @@ use crate::commands::{
         get_archive_disk_usage, get_archive_sessions, get_expiring_sessions, list_archives,
         load_archive_session_messages, rename_archive,
     },
-    claude_settings::{
-        get_all_mcp_servers, get_all_settings, get_claude_json_config, get_mcp_servers,
-        get_settings_by_scope, read_text_file, save_mcp_servers, save_screenshot, save_settings,
-        write_text_file,
-    },
+    claude_settings::{read_text_file, save_screenshot, write_text_file},
     feedback::{get_system_info, open_github_issues, send_feedback},
-    kanban::{load_kanban, save_kanban},
     mcp_presets::{delete_mcp_preset, get_mcp_preset, load_mcp_presets, save_mcp_preset},
     metadata::{
         get_metadata_folder_path, get_session_display_name, is_project_hidden, load_user_metadata,
@@ -57,9 +52,9 @@ use crate::commands::{
         MetadataState,
     },
     multi_provider::{
-        detect_providers, get_provider_message_offset, load_provider_messages,
-        load_provider_messages_paginated, load_provider_sessions, load_provider_sessions_page,
-        scan_all_projects, search_all_providers,
+        detect_providers, get_provider_message_offset, list_filesystem_sources,
+        load_provider_messages, load_provider_messages_paginated, load_provider_sessions,
+        load_provider_sessions_page, scan_all_projects, search_all_providers,
     },
     project::{
         detect_claude_config_dir, get_claude_folder_path, get_git_log, scan_projects,
@@ -68,9 +63,8 @@ use crate::commands::{
     session::{
         delete_session, get_recent_edits, get_session_message_count, get_session_subagents,
         load_project_sessions, load_project_sessions_page, load_session_messages,
-        load_session_messages_paginated, locate_session, open_resume_in_terminal,
-        rename_opencode_session_title, rename_session_native, reset_session_native_name,
-        restore_file, search_messages, search_sessions_by_id,
+        load_session_messages_paginated, open_resume_in_terminal, rename_opencode_session_title,
+        rename_session_native, reset_session_native_name, restore_file, search_messages,
     },
     settings::{delete_preset, get_preset, load_presets, save_preset},
     stats::{
@@ -84,8 +78,6 @@ use crate::commands::{
     watcher::{start_file_watcher, stop_file_watcher},
     wsl::{detect_wsl_distros, is_wsl_available},
 };
-use crate::storage::coordinator::run_sync_pass;
-use crate::storage::index::{rebuild_snapshot_index, snapshot_sync_status};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -189,17 +181,6 @@ fn run_tauri() {
             as Arc<
                 Mutex<Option<notify_debouncer_mini::Debouncer<notify::RecommendedWatcher>>>,
             >)
-        .setup(|_app| {
-            // Filesystem first, from the first second: reconcile any snapshots
-            // finalized before a crash, snapshot available local sources, and
-            // keep syncing periodically while the app runs. All best effort —
-            // browsing serves the latest completed snapshot regardless.
-            tauri::async_runtime::spawn(async {
-                crate::storage::coordinator::sync_all_once().await;
-            });
-            crate::storage::coordinator::spawn_background_sync();
-            Ok(())
-        })
         .invoke_handler(tauri::generate_handler![
             crate::cli::get_startup_session_hint,
             get_claude_folder_path,
@@ -212,8 +193,6 @@ fn run_tauri() {
             load_project_sessions_page,
             load_session_messages,
             load_session_messages_paginated,
-            locate_session,
-            search_sessions_by_id,
             get_session_message_count,
             search_messages,
             get_session_subagents,
@@ -229,8 +208,8 @@ fn run_tauri() {
             open_github_issues,
             // Metadata commands
             get_metadata_folder_path,
-            load_kanban,
-            save_kanban,
+            commands::kanban::load_kanban,
+            commands::kanban::save_kanban,
             load_user_metadata,
             save_user_metadata,
             update_session_metadata,
@@ -253,14 +232,6 @@ fn run_tauri() {
             load_unified_presets,
             get_unified_preset,
             delete_unified_preset,
-            // Claude Code settings commands
-            get_settings_by_scope,
-            save_settings,
-            get_all_settings,
-            get_mcp_servers,
-            get_all_mcp_servers,
-            save_mcp_servers,
-            get_claude_json_config,
             // File I/O commands for export/import
             write_text_file,
             read_text_file,
@@ -276,6 +247,10 @@ fn run_tauri() {
             stop_file_watcher,
             // Multi-provider commands
             detect_providers,
+            list_filesystem_sources,
+            provider_settings::list_provider_settings,
+            provider_settings::read_provider_settings,
+            provider_settings::apply_provider_settings,
             scan_all_projects,
             load_provider_sessions,
             load_provider_sessions_page,
@@ -283,9 +258,6 @@ fn run_tauri() {
             load_provider_messages_paginated,
             get_provider_message_offset,
             search_all_providers,
-            snapshot_sync_status,
-            rebuild_snapshot_index,
-            run_sync_pass,
             // Archive commands
             get_archive_base_path,
             list_archives,
@@ -574,16 +546,6 @@ fn run_server(args: &[String]) {
 
     let rt = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");
     rt.block_on(async {
-        // Filesystem-first sync on serve startup plus a periodic pass, mirroring
-        // the desktop coordinator. Best effort; the file watcher below keeps
-        // serving the latest completed snapshot regardless.
-        tokio::spawn(async {
-            crate::storage::coordinator::sync_all_once().await;
-            loop {
-                tokio::time::sleep(crate::storage::coordinator::SYNC_INTERVAL).await;
-                crate::storage::coordinator::sync_all_once().await;
-            }
-        });
         // Start background file watcher (sends events to broadcast channel)
         let _watcher_handle = start_server_file_watcher(&state);
 
@@ -1016,216 +978,9 @@ fn start_server_file_watcher(
 /// Collect available provider directories to watch for live session file updates.
 #[cfg(feature = "webui-server")]
 fn collect_watch_paths() -> Vec<std::path::PathBuf> {
-    use std::collections::HashSet;
-    use std::path::PathBuf;
-
-    let mut paths: Vec<PathBuf> = Vec::new();
-
-    if let Some(home) = crate::utils::home_dir() {
-        let claude_projects = home.join(".claude").join("projects");
-        if claude_projects.is_dir() {
-            paths.push(claude_projects);
-        }
-
-        // Load custom Claude paths from user-data.json
-        let user_data_path = home.join(".claude-history-viewer").join("user-data.json");
-        if let Ok(content) = std::fs::read_to_string(&user_data_path) {
-            if let Ok(metadata) = serde_json::from_str::<serde_json::Value>(&content) {
-                if let Some(custom_paths) = metadata
-                    .get("settings")
-                    .and_then(|s| s.get("customClaudePaths"))
-                    .and_then(|v| v.as_array())
-                {
-                    for entry in custom_paths {
-                        if let Some(path_str) = entry.get("path").and_then(|p| p.as_str()) {
-                            let custom_base = PathBuf::from(path_str);
-                            if let Ok(canonical_projects) =
-                                crate::utils::validate_custom_claude_path(&custom_base)
-                            {
-                                paths.push(canonical_projects);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    if let Some(codex_base) = providers::codex::get_base_path() {
-        let base = PathBuf::from(codex_base);
-        let sessions = base.join("sessions");
-        let archived_sessions = base.join("archived_sessions");
-        if sessions.is_dir() {
-            paths.push(sessions);
-        }
-        if archived_sessions.is_dir() {
-            paths.push(archived_sessions);
-        }
-    }
-
-    if let Some(kimi_base) = providers::kimi::get_base_path() {
-        let sessions = PathBuf::from(kimi_base).join("sessions");
-        if sessions.is_dir() {
-            paths.push(sessions);
-        }
-    }
-
-    // Kimi Code (the `~/.kimi-code` rewrite) sessions. Symlinked sessions
-    // roots are not registered — `is_dir()` follows symlinks, and watching
-    // through one would observe directories outside the store.
-    if let Some(kimi_code_root) = providers::kimi_code::default_root() {
-        let sessions = kimi_code_root.join("sessions");
-        let is_real_dir = std::fs::symlink_metadata(&sessions)
-            .map(|meta| meta.file_type().is_dir())
-            .unwrap_or(false);
-        if is_real_dir {
-            paths.push(sessions);
-        }
-    }
-
-    // Pi / oh-my-pi: get_base_path() is already the sessions root.
-    if let Some(pi_base) = providers::pi::get_base_path() {
-        let sessions = PathBuf::from(pi_base);
-        if sessions.is_dir() {
-            paths.push(sessions);
-        }
-    }
-
-    if let Some(ompi_base) = providers::ompi::get_base_path() {
-        let sessions = PathBuf::from(ompi_base);
-        if sessions.is_dir() {
-            paths.push(sessions);
-        }
-    }
-
-    if let Some(opencode_base) = providers::opencode::get_base_path() {
-        let base = PathBuf::from(&opencode_base);
-        let storage = base.join("storage");
-        let session = storage.join("session");
-        let message = storage.join("message");
-        if session.is_dir() {
-            paths.push(session);
-        }
-        if message.is_dir() {
-            paths.push(message);
-        }
-        // Watch opencode.db for SQLite-based storage changes
-        let db_path = base.join("opencode.db");
-        if db_path.is_file() {
-            paths.push(base);
-        }
-    }
-
-    if let Some(codebuddy_base) = providers::codebuddy::get_base_path() {
-        let codebuddy_projects = PathBuf::from(codebuddy_base);
-        if codebuddy_projects.is_dir() {
-            paths.push(codebuddy_projects);
-        }
-    }
-
-    if let Some(cursor_agent_base) = providers::cursor_agent::get_base_path() {
-        let cursor_agent_projects = PathBuf::from(cursor_agent_base);
-        if cursor_agent_projects.is_dir() {
-            paths.push(cursor_agent_projects);
-        }
-    }
-
-    if let Some(continue_base) = providers::continue_dev::get_base_path() {
-        let continue_sessions = PathBuf::from(continue_base);
-        if continue_sessions.is_dir() {
-            paths.push(continue_sessions);
-        }
-    }
-
-    if let Some(pearai_base) = providers::pearai::get_base_path() {
-        let pearai_sessions = PathBuf::from(pearai_base);
-        if pearai_sessions.is_dir() {
-            paths.push(pearai_sessions);
-        }
-    }
-
-    if let Some(goose_base) = providers::goose::get_base_path() {
-        let goose_sessions = PathBuf::from(goose_base);
-        if goose_sessions.is_dir() {
-            paths.push(goose_sessions);
-        }
-    }
-
-    if let Some(llm_base) = providers::llm::get_base_path() {
-        let llm_dir = PathBuf::from(llm_base);
-        if llm_dir.is_dir() {
-            paths.push(llm_dir);
-        }
-    }
-
-    if let Some(amazon_q_base) = providers::amazon_q::get_base_path() {
-        let amazon_q_dir = PathBuf::from(amazon_q_base);
-        if amazon_q_dir.is_dir() {
-            paths.push(amazon_q_dir);
-        }
-    }
-
-    if let Some(oi_base) = providers::openinterpreter::get_base_path() {
-        for sub in ["sessions", "archived_sessions"] {
-            let dir = PathBuf::from(&oi_base).join(sub);
-            if dir.is_dir() {
-                paths.push(dir);
-            }
-        }
-    }
-
-    if let Some(qwen_base) = providers::qwen::get_base_path() {
-        let qwen_projects = PathBuf::from(qwen_base);
-        if qwen_projects.is_dir() {
-            paths.push(qwen_projects);
-        }
-    }
-
-    if let Some(zed_base) = providers::zed::get_base_path() {
-        let zed_dir = PathBuf::from(zed_base);
-        if zed_dir.is_dir() {
-            paths.push(zed_dir);
-        }
-    }
-
-    if let Some(oh_base) = providers::openhands::get_base_path() {
-        let oh_dir = PathBuf::from(oh_base);
-        if oh_dir.is_dir() {
-            paths.push(oh_dir);
-        }
-    }
-
-    if let Some(trae_base) = providers::trae::get_base_path() {
-        let trae_dir = PathBuf::from(trae_base);
-        if trae_dir.is_dir() {
-            paths.push(trae_dir);
-        }
-    }
-
-    if let Some(vibe_base) = providers::vibe::get_base_path() {
-        let vibe_sessions = PathBuf::from(vibe_base).join("logs/session");
-        if vibe_sessions.is_dir() {
-            paths.push(vibe_sessions);
-        }
-    }
-
-    if let Some(copilot_base) = providers::copilot_cli::get_base_path() {
-        let session_state = PathBuf::from(copilot_base).join("session-state");
-        if session_state.is_dir() {
-            paths.push(session_state);
-        }
-    }
-
-    for vscode_base in providers::vscode::get_base_paths() {
-        let ws_storage = vscode_base.join("workspaceStorage");
-        if ws_storage.is_dir() {
-            paths.push(ws_storage);
-        }
-    }
-
-    let mut seen = HashSet::new();
-    paths
+    crate::sources::list()
+        .unwrap_or_default()
         .into_iter()
-        .filter(|p| seen.insert(p.clone()))
-        .collect::<Vec<_>>()
+        .map(|source| source.current)
+        .collect()
 }

@@ -128,6 +128,7 @@ mod tests {
 
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[test]
+    #[serial_test::serial]
     fn shell_escape_wraps_in_single_quotes() {
         assert_eq!(
             shell_escape("/Applications/My App.app"),
@@ -137,6 +138,7 @@ mod tests {
 
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[test]
+    #[serial_test::serial]
     fn shell_escape_escapes_embedded_single_quotes() {
         assert_eq!(shell_escape("a'b"), "'a'\\''b'");
     }

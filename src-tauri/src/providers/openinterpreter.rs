@@ -23,14 +23,14 @@ const SCHEME: &str = "openinterpreter://";
 /// Open Interpreter home: `$INTERPRETER_HOME` (if set + exists) else
 /// `~/.openinterpreter`. Returns `None` unless the directory exists.
 fn home_dir() -> Option<PathBuf> {
-    if let Ok(home) = std::env::var("INTERPRETER_HOME") {
+    if let Ok(home) = crate::sources::env_var("INTERPRETER_HOME") {
         let home = home.trim();
         if !home.is_empty() {
             let p = PathBuf::from(home);
             return if p.exists() { Some(p) } else { None };
         }
     }
-    let p = crate::utils::home_dir()?.join(".openinterpreter");
+    let p = crate::sources::home_dir()?.join(".openinterpreter");
     if p.exists() {
         Some(p)
     } else {
@@ -304,6 +304,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn scan_load_and_retag_via_interpreter_home() {
         let tmp = TempDir::new().unwrap();
@@ -345,6 +346,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn load_messages_rejects_path_outside_base() {
         let tmp = TempDir::new().unwrap();

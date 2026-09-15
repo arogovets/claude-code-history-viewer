@@ -853,6 +853,7 @@ pub async fn get_recent_edits(
     grouping: Option<String>,
 ) -> Result<PaginatedRecentEdits, String> {
     tauri::async_runtime::spawn_blocking(move || {
+        crate::sources::require_history_path(&project_path)?;
         get_recent_edits_blocking(project_path, offset, limit, session_file_path, grouping)
     })
     .await
@@ -1145,6 +1146,7 @@ mod tests {
     // ------------------------------------------------------------------
 
     #[test]
+    #[serial_test::serial]
     fn recorded_edit_target_admits_only_files_the_project_edited() {
         let (dir, _a, _b) = project_with_two_sessions();
         let root = dir.path();
@@ -1166,6 +1168,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn recorded_edit_target_respects_session_scope() {
         let (dir, session_a, _b) = project_with_two_sessions();
         let root = dir.path();
@@ -1181,6 +1184,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn restore_refuses_a_file_the_project_never_edited() {
         let (dir, _a, _b) = project_with_two_sessions();
         let root = dir.path();
@@ -1203,6 +1207,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn restore_writes_a_recorded_edit_target() {
         let (dir, _a, _b) = project_with_two_sessions();
         let root = dir.path();
@@ -1221,7 +1226,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_absent_params_reproduce_the_previous_shape() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let (dir, _a, _b) = project_with_two_sessions();
 
         let result = get_recent_edits(
@@ -1243,7 +1250,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_session_file_path_scopes_to_one_session() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let (dir, session_a, _b) = project_with_two_sessions();
 
         let result = get_recent_edits(
@@ -1271,7 +1280,9 @@ mod tests {
     // ---- regressions from the Codex adversarial review ----
 
     #[test]
+    #[serial_test::serial]
     fn test_containment_rejects_traversal_and_sibling_prefixes() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         // A raw string prefix accepts both of these. The edit paths come from
         // session logs rather than a filesystem walk, so they can contain
         // traversal segments, and `/repository` starts with `/repo`.
@@ -1300,7 +1311,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_equal_timestamps_paginate_without_repeating_or_dropping() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         // Ties used to fall back on `HashMap` iteration order, which differs
         // between requests, so page 2 could repeat a row from page 1 and lose
         // another. One tool call writing several files produces exactly this.
@@ -1338,7 +1351,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_limit_is_clamped() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         // Each returned row costs a stat call, so an unbounded caller-supplied
         // limit is an unbounded synchronous syscall loop.
         let (dir, _a, _b) = project_with_two_sessions();
@@ -1361,7 +1376,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_zero_limit_is_rejected() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         // R10. A zero limit returns no rows, but `has_more` counts the
         // population against the offset rather than the page, so it stays true
         // while the page is empty. A caller that advances by `files.len()`
@@ -1389,7 +1406,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_session_file_path_survives_a_session_id_change_mid_file() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         // A resumed session can write a different `sessionId` partway through
         // the same JSONL. `actual_session_id` only ever reports the first id in
         // the file, so filtering by id would silently drop everything after the
@@ -1456,7 +1475,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_session_file_path_requires_a_jsonl_extension() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         // The directory walk filters on the extension; the single-file path did
         // not, so any file in the project could be mmapped and scanned line by
         // line. Harmless output, unbounded cost, and remotely chosen under
@@ -1478,7 +1499,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_file_identity_folds_separator_and_windows_case() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         // Grouping keyed on the raw string counted one file twice whenever two
         // records spelled the same path differently.
         assert_eq!(
@@ -1495,7 +1518,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_session_scope_matches_across_separator_spellings() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         // R11. The provider scope filter compared the loaded session's path to
         // the requested one with raw `==`. Inside the app both sides come from
         // the same loader and agree, but a caller under `--serve` spells the
@@ -1523,7 +1548,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_session_file_path_outside_the_project_is_rejected() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let (dir, _a, _b) = project_with_two_sessions();
         let outside = TempDir::new().unwrap();
         let stray = create_test_jsonl_file(&outside, "stray.jsonl", "{}");
@@ -1544,7 +1571,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_session_file_path_with_traversal_is_rejected() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let (dir, _a, _b) = project_with_two_sessions();
         let traversal = dir
             .path()
@@ -1570,7 +1599,9 @@ mod tests {
     // ubuntu job runs it.
     #[cfg(unix)]
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_session_file_path_through_a_symlinked_directory_is_rejected() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         // R12. `symlink_metadata` resolves the intermediate components before
         // reporting on the final one, so a symlinked directory mid-path passed
         // the single check while `walkdir` refused to descend that same
@@ -1605,7 +1636,9 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_a_symlinked_project_root_is_tolerated() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         // The project root itself being a symlink is fine: the walk starts at
         // its resolved form, so the link is never one of the components it
         // inspects. Distinct from the ancestor case below, which was what an
@@ -1636,7 +1669,9 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_a_symlinked_ancestor_above_the_project_is_tolerated() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         // A genuine ancestor: `link` is above the project root, and the root
         // itself is an ordinary directory reached through it. This is the macOS
         // shape, where `/var` links to `/private/var`. Walking to `/` would
@@ -1669,7 +1704,9 @@ mod tests {
 
     #[cfg(target_os = "windows")]
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_a_differently_cased_spelling_stays_under_the_policy() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         // The boundary that bounds the symlink walk is compared on normalized
         // parts. Were it a raw lexical prefix test, this spelling would fail it,
         // skip the walk entirely, and still pass containment once canonicalized
@@ -1698,7 +1735,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_edit_grouping_keeps_every_edit_newest_first() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let (dir, _a, _b) = project_with_two_sessions();
 
         let result = get_recent_edits(
@@ -1732,7 +1771,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_has_more_follows_the_active_grouping() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let (dir, _a, _b) = project_with_two_sessions();
         let path = dir.path().to_string_lossy().to_string();
 
@@ -1750,7 +1791,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_message_uuid_is_carried_through() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let (dir, _a, _b) = project_with_two_sessions();
 
         let result = get_recent_edits(
@@ -1776,7 +1819,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_exists_on_disk_reflects_the_filesystem() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let (dir, _a, _b) = project_with_two_sessions();
         // alpha.txt is on disk; beta.txt and gamma.txt were never created.
         fs::write(dir.path().join("alpha.txt"), "still here").unwrap();
@@ -1803,7 +1848,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_exists_on_disk_is_only_computed_for_returned_rows() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let (dir, _a, _b) = project_with_two_sessions();
 
         let result = get_recent_edits(
@@ -1823,7 +1870,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_existence_is_unknown_when_a_file_cannot_be_read() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let dir = TempDir::new().unwrap();
         let present = dir.path().join("present.txt");
         fs::write(&present, "x").unwrap();
@@ -1863,7 +1912,9 @@ mod tests {
 
     // Test restore_file security validations
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_restore_file_rejects_null_bytes() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let result = restore_file(
             "/tmp/test\0file.txt".to_string(),
             "content".to_string(),
@@ -1876,7 +1927,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_restore_file_rejects_relative_path() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let result = restore_file(
             "relative/path/file.txt".to_string(),
             "content".to_string(),
@@ -1889,7 +1942,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_restore_file_rejects_path_traversal() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let result = restore_file(
             crate::test_utils::abs("tmp/../etc/passwd"),
             "content".to_string(),
@@ -1902,7 +1957,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_restore_file_success() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let (temp_dir, file_path) = project_recording_edit_to("test_restore.txt");
 
         let result = restore_file(
@@ -1921,7 +1978,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_restore_file_atomic_write_no_temp_file_left() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let (temp_dir, file_path) = project_recording_edit_to("atomic_test.txt");
         let temp_path = temp_dir.path().join("atomic_test.tmp.restore");
 
@@ -1942,7 +2001,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_restore_file_overwrites_existing() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let (temp_dir, file_path) = project_recording_edit_to("existing.txt");
 
         // Create existing file
@@ -1962,7 +2023,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_restore_file_creates_parent_dirs() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let (temp_dir, file_path) = project_recording_edit_to("nested/dir/file.txt");
 
         let result = restore_file(
@@ -1979,7 +2042,9 @@ mod tests {
 
     // Test get_recent_edits
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_get_recent_edits_empty_dir() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         let result = get_recent_edits(
@@ -1999,7 +2064,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_get_recent_edits_with_write_operation() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         // Create a JSONL file with Write tool usage
@@ -2023,7 +2090,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_get_recent_edits_with_edit_operation() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         // Create a JSONL file with Edit tool result
@@ -2047,7 +2116,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_get_recent_edits_with_multi_edit() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         // Create a JSONL file with multi-edit result
@@ -2070,7 +2141,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_get_recent_edits_keeps_latest_per_file() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         // Two edits to the same file
@@ -2099,7 +2172,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_get_recent_edits_with_create_type() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         // File with "type": "create" in toolUseResult
@@ -2126,7 +2201,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_get_recent_edits_filters_by_project_cwd() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         // One edit in project, one outside

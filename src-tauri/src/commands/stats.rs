@@ -620,7 +620,7 @@ fn is_antigravity_path(path: &str) -> bool {
 /// Whether `path` lies under `~/.codebuddy/projects/`. Anchored detection avoids
 /// false positives from arbitrary substrings (e.g. `/work/foo.codebuddy-test`).
 fn is_codebuddy_path(path: &str) -> bool {
-    let Some(home) = crate::utils::home_dir() else {
+    let Some(home) = crate::sources::home_dir() else {
         return false;
     };
     is_codebuddy_path_under(path, &home)
@@ -649,7 +649,7 @@ fn is_kimi_path(path: &str) -> bool {
 /// (`~/.omp/agent/sessions/`). Anchored detection avoids false positives
 /// from arbitrary substrings (e.g. `/work/foo.omp-agent-test`).
 fn is_ompi_path(path: &str) -> bool {
-    let Some(home) = crate::utils::home_dir() else {
+    let Some(home) = crate::sources::home_dir() else {
         return false;
     };
     is_ompi_path_under(path, &home)
@@ -665,7 +665,7 @@ fn is_ompi_path_under(path: &str, home: &Path) -> bool {
 /// Whether `path` lies under the Pi sessions store root
 /// (`~/.pi/agent/sessions/`).
 fn is_pi_path(path: &str) -> bool {
-    let Some(home) = crate::utils::home_dir() else {
+    let Some(home) = crate::sources::home_dir() else {
         return false;
     };
     is_pi_path_under(path, &home)
@@ -1599,7 +1599,7 @@ fn load_stats_messages(
 }
 
 /// Collect global stats rows for a non-Claude provider.
-fn collect_provider_global_file_stats(
+fn collect_provider_global_file_stats_in_source(
     provider: StatsProvider,
     mode: StatsMode,
     s_limit: Option<&DateTime<Utc>>,
@@ -3969,9 +3969,9 @@ fn get_provider_session_comparison(
     })
 }
 
-#[tauri::command]
 /// Return token stats for a single session.
-pub async fn get_session_token_stats(
+#[allow(clippy::unused_async)]
+async fn get_session_token_stats_in_source(
     session_path: String,
     start_date: Option<String>,
     end_date: Option<String>,
@@ -4288,9 +4288,9 @@ fn scan_session_token_stats(
     })
 }
 
-#[tauri::command]
 /// Return paginated token stats for a project.
-pub async fn get_project_token_stats(
+#[allow(clippy::unused_async)]
+async fn get_project_token_stats_in_source(
     project_path: String,
     offset: Option<usize>,
     limit: Option<usize>,
@@ -4383,9 +4383,9 @@ pub async fn get_project_token_stats(
     })
 }
 
-#[tauri::command]
 /// Return an aggregate stats summary for a project.
-pub async fn get_project_stats_summary(
+#[allow(clippy::unused_async)]
+async fn get_project_stats_summary_in_source(
     project_path: String,
     start_date: Option<String>,
     end_date: Option<String>,
@@ -4730,9 +4730,9 @@ fn scan_session_file_for_comparison(
     })
 }
 
-#[tauri::command]
 /// Compare a session against the rest of its project.
-pub async fn get_session_comparison(
+#[allow(clippy::unused_async)]
+async fn get_session_comparison_in_source(
     session_id: String,
     project_path: String,
     start_date: Option<String>,
@@ -4920,6 +4920,34 @@ pub async fn get_global_stats_summary(
     end_date: Option<String>,
     custom_claude_paths: Option<Vec<crate::commands::multi_provider::CustomClaudePathParam>>,
 ) -> Result<GlobalStatsSummary, String> {
+    #[cfg(not(test))]
+    let (claude_path, custom_claude_paths) = {
+        let _ = (claude_path, custom_claude_paths);
+        let mut paths = crate::sources::list()?
+            .into_iter()
+            .map(
+                |source| crate::commands::multi_provider::CustomClaudePathParam {
+                    path: source
+                        .current
+                        .join(".claude")
+                        .to_string_lossy()
+                        .into_owned(),
+                    label: Some(source.label),
+                },
+            )
+            .collect::<Vec<_>>();
+        let first = if paths.is_empty() {
+            crate::sources::root()
+                .ok_or("No mirror root")?
+                .join("_uncollected/.claude")
+                .to_string_lossy()
+                .into_owned()
+        } else {
+            paths.remove(0).path
+        };
+        (first, Some(paths))
+    };
+
     let mode = parse_stats_mode(stats_mode);
     let providers_to_include = parse_active_stats_providers(active_providers);
     let s_limit = parse_date_limit(start_date, "global start_date");
@@ -5004,7 +5032,13 @@ pub async fn get_global_stats_summary(
     let e_ref = e_limit.as_ref();
     let mut file_stats: Vec<SessionFileStats> = session_files
         .par_iter()
-        .filter_map(|path| process_session_file_for_global_stats(path, mode, s_ref, e_ref))
+        .filter_map(|path| {
+            let mut stats = process_session_file_for_global_stats(path, mode, s_ref, e_ref)?;
+            if let Some(source) = crate::sources::for_path(path) {
+                stats.project_name = format!("{}: {}", source.id, stats.project_name);
+            }
+            Some(stats)
+        })
         .collect();
 
     if providers_to_include.contains(&StatsProvider::Codebuddy) {
@@ -5483,9 +5517,11 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     /// #321: Skill (`input.skill`) and Agent (`input.subagent_type`) invocations
     /// are aggregated by their input value, not collapsed into one bucket.
     fn test_track_skill_and_subagent_usage() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let mut msg = make_test_message(None, "assistant", None);
         msg.content = Some(json!([
             { "type": "tool_use", "name": "Skill", "input": { "skill": "triage", "args": "x" } },
@@ -5508,9 +5544,11 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     /// #321: only assistant messages are scanned, and a Skill call missing the
     /// `skill` key is skipped (no empty-named bucket).
     fn test_skill_usage_ignores_user_and_missing_key() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let mut skills: HashMap<String, (u32, u32)> = HashMap::new();
         let mut subagents: HashMap<String, (u32, u32)> = HashMap::new();
 
@@ -5530,8 +5568,10 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     /// Verify try from raw log entry user message.
     fn test_try_from_raw_log_entry_user_message() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let raw = RawLogEntry {
             uuid: Some("test-uuid".to_string()),
             parent_uuid: Some("parent-uuid".to_string()),
@@ -5585,8 +5625,10 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     /// Verify try from raw log entry assistant message.
     fn test_try_from_raw_log_entry_assistant_message() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let raw = RawLogEntry {
             uuid: Some("assistant-uuid".to_string()),
             parent_uuid: None,
@@ -5653,8 +5695,10 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     /// Verify try from raw log entry summary fails.
     fn test_try_from_raw_log_entry_summary_fails() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let raw = RawLogEntry {
             uuid: None,
             parent_uuid: None,
@@ -5696,8 +5740,10 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     /// Verify try from raw log entry missing session and timestamp fails.
     fn test_try_from_raw_log_entry_missing_session_and_timestamp_fails() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let raw = RawLogEntry {
             uuid: Some("uuid".to_string()),
             parent_uuid: None,
@@ -5746,8 +5792,10 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     /// Verify try from raw log entry with only timestamp.
     fn test_try_from_raw_log_entry_with_only_timestamp() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let raw = RawLogEntry {
             uuid: None,
             parent_uuid: None,
@@ -5799,8 +5847,10 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     /// Verify extract token usage from usage field.
     fn test_extract_token_usage_from_usage_field() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let msg = ClaudeMessage {
             uuid: "uuid".to_string(),
             parent_uuid: None,
@@ -5852,8 +5902,10 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     /// Verify extract token usage from content.
     fn test_extract_token_usage_from_content() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let msg = ClaudeMessage {
             uuid: "uuid".to_string(),
             parent_uuid: None,
@@ -5902,8 +5954,10 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     /// Verify extract token usage from tool use result.
     fn test_extract_token_usage_from_tool_use_result() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let msg = ClaudeMessage {
             uuid: "uuid".to_string(),
             parent_uuid: None,
@@ -5950,8 +6004,10 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     /// Verify extract token usage from total tokens.
     fn test_extract_token_usage_from_total_tokens() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let msg = ClaudeMessage {
             uuid: "uuid".to_string(),
             parent_uuid: None,
@@ -5995,8 +6051,10 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     /// Verify extract token usage empty.
     fn test_extract_token_usage_empty() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let msg = ClaudeMessage {
             uuid: "uuid".to_string(),
             parent_uuid: None,
@@ -6038,6 +6096,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     /// Verify detect project provider from virtual prefix.
     fn test_detect_project_provider_from_virtual_prefix() {
         let _home = crate::test_utils::SandboxHome::new();
@@ -6108,6 +6167,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     /// Verify detect session provider from path pattern.
     fn test_detect_session_provider_from_path_pattern() {
         let _home = crate::test_utils::SandboxHome::new();
@@ -6183,6 +6243,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn detect_session_provider_uses_copilot_cli_home_env() {
         let _home = crate::test_utils::SandboxHome::new();
@@ -6203,8 +6264,10 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     /// Verify parse active stats providers defaults to all.
     fn test_parse_active_stats_providers_defaults_to_all() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let providers = parse_active_stats_providers(None);
         assert!(providers.contains(&StatsProvider::Claude));
         assert!(providers.contains(&StatsProvider::Codex));
@@ -6218,7 +6281,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_parse_active_stats_providers_covers_every_supported_provider() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let supported = all_stats_providers();
         let ids = supported
             .iter()
@@ -6231,8 +6296,10 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     /// Verify parse active stats providers filters unknown values.
     fn test_parse_active_stats_providers_filters_unknown_values() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let providers =
             parse_active_stats_providers(Some(vec!["claude".to_string(), "unknown".to_string()]));
         assert_eq!(providers.len(), 1);
@@ -6240,62 +6307,78 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     /// Verify parse active stats providers returns empty for unknown only values.
     fn test_parse_active_stats_providers_returns_empty_for_unknown_only_values() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let providers = parse_active_stats_providers(Some(vec!["invalid".to_string()]));
         assert!(providers.is_empty());
     }
 
     #[test]
+    #[serial_test::serial]
     /// Verify parse active stats providers returns empty for empty list.
     fn test_parse_active_stats_providers_returns_empty_for_empty_list() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let providers = parse_active_stats_providers(Some(vec![]));
         assert!(providers.is_empty());
     }
 
     #[test]
+    #[serial_test::serial]
     /// Verify parse active stats providers supports forgecode.
     fn test_parse_active_stats_providers_supports_forgecode() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let providers = parse_active_stats_providers(Some(vec!["forgecode".to_string()]));
         assert_eq!(providers.len(), 1);
         assert!(providers.contains(&StatsProvider::ForgeCode));
     }
 
     #[test]
+    #[serial_test::serial]
     /// Verify parse active stats providers supports Grok.
     fn test_parse_active_stats_providers_supports_grok() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let providers = parse_active_stats_providers(Some(vec!["grok".to_string()]));
         assert_eq!(providers.len(), 1);
         assert!(providers.contains(&StatsProvider::Grok));
     }
 
     #[test]
+    #[serial_test::serial]
     /// Verify parse active stats providers supports Cursor.
     fn test_parse_active_stats_providers_supports_cursor() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let providers = parse_active_stats_providers(Some(vec!["cursor".to_string()]));
         assert_eq!(providers.len(), 1);
         assert!(providers.contains(&StatsProvider::Cursor));
     }
 
     #[test]
+    #[serial_test::serial]
     /// Verify parse active stats providers supports Kimi.
     fn test_parse_active_stats_providers_supports_kimi() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let providers = parse_active_stats_providers(Some(vec!["kimi".to_string()]));
         assert_eq!(providers.len(), 1);
         assert!(providers.contains(&StatsProvider::Kimi));
     }
 
     #[test]
+    #[serial_test::serial]
     /// Verify parse active stats providers supports Copilot.
     fn test_parse_active_stats_providers_supports_copilot() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let providers = parse_active_stats_providers(Some(vec!["copilot".to_string()]));
         assert_eq!(providers.len(), 1);
         assert!(providers.contains(&StatsProvider::Copilot));
     }
 
     #[test]
+    #[serial_test::serial]
     /// Verify parse stats mode defaults and unknown.
     fn test_parse_stats_mode_defaults_and_unknown() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         assert_eq!(parse_stats_mode(None), StatsMode::BillingTotal);
         assert_eq!(
             parse_stats_mode(Some("billing_total".to_string())),
@@ -6312,8 +6395,10 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     /// Verify should include stats entry sidechain mode switch.
     fn test_should_include_stats_entry_sidechain_mode_switch() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         assert!(should_include_stats_entry(
             "assistant",
             Some(true),
@@ -6377,6 +6462,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     #[serial]
     async fn get_project_stats_summary_accepts_grok_virtual_path() {
         let temp = TempDir::new().expect("temp dir");
@@ -6422,7 +6508,7 @@ mod tests {
 
         assert_eq!(detect_project_provider(&project_path), StatsProvider::Grok);
 
-        let summary = get_project_stats_summary(project_path.clone(), None, None, None)
+        let summary = get_project_stats_summary_in_source(project_path.clone(), None, None, None)
             .await
             .expect("grok virtual project path should load stats");
         assert_eq!(summary.project_name, "demo");
@@ -6467,6 +6553,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     #[serial]
     async fn get_project_stats_summary_accepts_cursor_virtual_path() {
         let temp = TempDir::new().expect("temp dir");
@@ -6567,7 +6654,7 @@ mod tests {
             StatsProvider::Cursor
         );
 
-        let summary = get_project_stats_summary(project_path.clone(), None, None, None)
+        let summary = get_project_stats_summary_in_source(project_path.clone(), None, None, None)
             .await
             .expect("cursor virtual project path should load stats");
         assert_eq!(summary.project_name, "demo");
@@ -6611,6 +6698,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn test_kimi_project_name_resolves_from_session_parent_directory() {
         let _home = crate::test_utils::SandboxHome::new();
@@ -6623,6 +6711,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn test_kimi_code_project_name_falls_back_to_workspace_directory() {
         let _home = crate::test_utils::SandboxHome::new();
@@ -6639,6 +6728,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn test_antigravity_conversation_breakdown_uses_chat_message_tokens() {
         let _home = crate::test_utils::SandboxHome::new();
@@ -6745,7 +6835,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_should_include_stats_message_skips_synthetic_antigravity_prompt() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let synthetic_prompt = make_test_message(Some("antigravity"), "user", None);
         assert!(!should_include_stats_message(
             &synthetic_prompt,
@@ -6772,10 +6864,12 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     /// End-to-end through the command: repeat `get_global_stats_summary`
     /// calls (including a date-filtered one) are served from the per-file
     /// cache, and a file append is detected and re-parsed.
     async fn test_global_stats_summary_serves_cache_and_detects_file_changes() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().expect("failed to create temp dir");
         let claude_path = temp_dir.path();
         let project_dir = claude_path.join("projects").join("cache-project");
@@ -6863,7 +6957,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_global_model_distribution_preserves_source_cost() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().expect("temp dir");
         let project_dir = temp_dir.path().join("projects").join("cost-project");
         fs::create_dir_all(&project_dir).expect("project dir");
@@ -6911,8 +7007,10 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     /// Verify project summary session count matches token list in conversation mode.
     async fn test_project_summary_session_count_matches_token_list_in_conversation_mode() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().expect("failed to create temp dir");
         // Nothing here wants the home directory, but the code under test
         // resolves it while detecting providers. Point it at this test's own
@@ -6936,7 +7034,7 @@ mod tests {
 
         let project_path_str = project_dir.to_string_lossy().to_string();
 
-        let project_summary = get_project_stats_summary(
+        let project_summary = get_project_stats_summary_in_source(
             project_path_str.clone(),
             None,
             None,
@@ -6945,7 +7043,7 @@ mod tests {
         .await
         .expect("failed to get project summary");
 
-        let token_list = get_project_token_stats(
+        let token_list = get_project_token_stats_in_source(
             project_path_str.clone(),
             Some(0),
             Some(20),
@@ -6966,8 +7064,10 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     /// Verify stats mode reconciles global project and session totals.
     async fn test_stats_mode_reconciles_global_project_and_session_totals() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().expect("failed to create temp dir");
         // Nothing here wants the home directory, but the code under test
         // resolves it while detecting providers. Point it at this test's own
@@ -7012,7 +7112,7 @@ mod tests {
         assert_eq!(global_billing.total_tokens, 330);
         assert_eq!(global_conversation.total_tokens, 110);
 
-        let project_billing = get_project_stats_summary(
+        let project_billing = get_project_stats_summary_in_source(
             project_path_str.clone(),
             None,
             None,
@@ -7020,7 +7120,7 @@ mod tests {
         )
         .await
         .expect("failed to get project billing stats");
-        let project_conversation = get_project_stats_summary(
+        let project_conversation = get_project_stats_summary_in_source(
             project_path_str.clone(),
             None,
             None,
@@ -7035,7 +7135,7 @@ mod tests {
             global_conversation.total_tokens
         );
 
-        let project_token_billing = get_project_token_stats(
+        let project_token_billing = get_project_token_stats_in_source(
             project_path_str.clone(),
             Some(0),
             Some(20),
@@ -7045,7 +7145,7 @@ mod tests {
         )
         .await
         .expect("failed to get project token billing stats");
-        let project_token_conversation = get_project_token_stats(
+        let project_token_conversation = get_project_token_stats_in_source(
             project_path_str,
             Some(0),
             Some(20),
@@ -7072,7 +7172,7 @@ mod tests {
             global_conversation.total_tokens
         );
 
-        let session_billing = get_session_token_stats(
+        let session_billing = get_session_token_stats_in_source(
             session_path_str.clone(),
             None,
             None,
@@ -7080,7 +7180,7 @@ mod tests {
         )
         .await
         .expect("failed to get session billing stats");
-        let session_conversation = get_session_token_stats(
+        let session_conversation = get_session_token_stats_in_source(
             session_path_str,
             None,
             None,
@@ -7097,8 +7197,10 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     /// Verify session token stats respects date filter.
     async fn test_session_token_stats_respects_date_filter() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().expect("failed to create temp dir");
         // Nothing here wants the home directory, but the code under test
         // resolves it while detecting providers. Point it at this test's own
@@ -7115,7 +7217,7 @@ mod tests {
         writeln!(file, "{day2}").expect("failed to write day2");
 
         // Per-message filtering: only day2 (Jan 2) is in range.
-        let stats = get_session_token_stats(
+        let stats = get_session_token_stats_in_source(
             session_path.to_string_lossy().to_string(),
             Some("2025-01-02T00:00:00Z".to_string()),
             Some("2025-01-02T23:59:59.999Z".to_string()),
@@ -7130,7 +7232,7 @@ mod tests {
         assert_eq!(stats.total_tokens, 22);
 
         // Per-message filtering: only day1 (Jan 1) is in range.
-        let day1_stats = get_session_token_stats(
+        let day1_stats = get_session_token_stats_in_source(
             session_path.to_string_lossy().to_string(),
             Some("2025-01-01T00:00:00Z".to_string()),
             Some("2025-01-01T23:59:59.999Z".to_string()),
@@ -7145,7 +7247,7 @@ mod tests {
         assert_eq!(day1_stats.total_tokens, 11);
 
         // No messages in range → error.
-        let filtered_out = get_session_token_stats(
+        let filtered_out = get_session_token_stats_in_source(
             session_path.to_string_lossy().to_string(),
             Some("2024-12-01T00:00:00Z".to_string()),
             Some("2024-12-31T23:59:59.999Z".to_string()),
@@ -7156,8 +7258,10 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     /// Verify session comparison respects date filter.
     async fn test_session_comparison_respects_date_filter() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().expect("failed to create temp dir");
         // Nothing here wants the home directory, but the code under test
         // resolves it while detecting providers. Point it at this test's own
@@ -7179,7 +7283,7 @@ mod tests {
 
         let project_path = project_dir.to_string_lossy().to_string();
 
-        let comparison = get_session_comparison(
+        let comparison = get_session_comparison_in_source(
             "s-b".to_string(),
             project_path.clone(),
             Some("2025-01-02T00:00:00Z".to_string()),
@@ -7191,7 +7295,7 @@ mod tests {
         assert_eq!(comparison.session_id, "s-b");
         assert_eq!(comparison.rank_by_tokens, 1);
 
-        let filtered_out = get_session_comparison(
+        let filtered_out = get_session_comparison_in_source(
             "s-a".to_string(),
             project_path,
             Some("2025-01-02T00:00:00Z".to_string()),
@@ -7203,8 +7307,10 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     /// Verify project summary daily session count tracks multiple sessions on same day.
     async fn test_project_summary_daily_session_count_tracks_multiple_sessions_on_same_day() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().expect("failed to create temp dir");
         // Nothing here wants the home directory, but the code under test
         // resolves it while detecting providers. Point it at this test's own
@@ -7224,7 +7330,7 @@ mod tests {
         let line_b = r#"{"uuid":"ub","sessionId":"s-b","timestamp":"2025-01-01T20:00:00Z","type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"b"}],"id":"mb","model":"claude-sonnet-4","usage":{"input_tokens":20,"output_tokens":2}},"isSidechain":false}"#;
         writeln!(file_b, "{line_b}").expect("failed to write session b");
 
-        let summary = get_project_stats_summary(
+        let summary = get_project_stats_summary_in_source(
             project_dir.to_string_lossy().to_string(),
             None,
             None,
@@ -7243,8 +7349,10 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     /// Verify `track_antigravity_tool_usage` honors the `start_date` / `end_date` window.
     fn test_track_antigravity_tool_usage_respects_date_filter() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let mk = |timestamp: &str, tool: &str| {
             let mut msg = make_test_message(Some("antigravity"), "assistant", None);
             msg.content = Some(json!([
@@ -7293,6 +7401,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_antigravity_provider_project_summary_uses_mode_adjusted_daily_tokens() {
         let _home = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().expect("failed to create temp dir");
@@ -7382,6 +7491,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     /// `load_antigravity_usage_records` mirrors the rpc-cache fallback used by
     /// `providers::antigravity::load_messages` so a brain/-only session whose
     /// `usage.jsonl` lives in the rpc-cache contributes records (and therefore
@@ -7440,6 +7550,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     /// When neither in-session nor rpc-cache `usage.jsonl` exists, the helper
     /// returns `Ok(vec![])` (legacy behaviour preserved).
     #[serial]
@@ -7459,8 +7570,10 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     /// Verify global summary total projects respects date filter.
     async fn test_global_summary_total_projects_respects_date_filter() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().expect("failed to create temp dir");
         let claude_path = temp_dir.path();
         let project_a = claude_path.join("projects").join("demo-a");
@@ -7508,9 +7621,11 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     /// Global summary must aggregate custom Claude directories, not just the default
     /// root (#362) — and must NOT when no custom paths are supplied.
     async fn test_global_summary_includes_custom_claude_paths() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let default_dir = TempDir::new().expect("default tempdir");
         let custom_dir = TempDir::new().expect("custom tempdir");
         write_claude_session(default_dir.path(), "proj-default", 10, 1);
@@ -7553,8 +7668,10 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     /// An invalid custom Claude path (no projects/ dir) is skipped, not fatal.
     async fn test_global_summary_skips_invalid_custom_claude_path() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let default_dir = TempDir::new().expect("default tempdir");
         let bogus_dir = TempDir::new().expect("bogus tempdir"); // exists but has no projects/
         write_claude_session(default_dir.path(), "proj-default", 10, 1);
@@ -7581,6 +7698,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     #[serial]
     /// Verify global summary accumulates `token_distribution.reasoning` from
     /// providers that emit reasoning tokens (Antigravity). Pre-fix, the
@@ -7588,6 +7706,7 @@ mod tests {
     /// field was carried through — leaving the UI's reasoning breakdown at 0
     /// no matter how many reasoning tokens the underlying sessions reported.
     async fn test_global_summary_aggregates_reasoning_tokens() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().expect("failed to create temp dir");
         let home = temp_dir.path();
 
@@ -7596,7 +7715,7 @@ mod tests {
         // it cannot race with other HOME-touching tests.
         let original_home = std::env::var("HOME").ok();
         std::env::set_var("HOME", home);
-        // `HOME` is inert on Windows; this is what `crate::utils::home_dir()`
+        // `HOME` is inert on Windows; this is what `crate::sources::home_dir()`
         // reads under `cfg(test)` (#540).
         std::env::set_var("CCHV_TEST_HOME", home);
 
@@ -7727,6 +7846,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     #[serial]
     /// Verify forgecode stats commands use provider paths.
     async fn test_forgecode_stats_commands_use_provider_paths() {
@@ -7741,7 +7861,7 @@ mod tests {
         let session_path =
             "forgecode-db://workspace/workspace-alpha/conversation/conv-001".to_string();
 
-        let session_stats = get_session_token_stats(
+        let session_stats = get_session_token_stats_in_source(
             session_path.clone(),
             None,
             None,
@@ -7754,7 +7874,7 @@ mod tests {
         assert_eq!(session_stats.total_tokens, 165);
         assert_eq!(session_stats.message_count, 2);
 
-        let project_stats = get_project_token_stats(
+        let project_stats = get_project_token_stats_in_source(
             project_path.clone(),
             Some(0),
             Some(20),
@@ -7771,7 +7891,7 @@ mod tests {
         );
         assert_eq!(project_stats.items[0].total_tokens, 165);
 
-        let summary = get_project_stats_summary(
+        let summary = get_project_stats_summary_in_source(
             project_path.clone(),
             None,
             None,
@@ -7810,8 +7930,10 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     /// Verify calculate session active minutes handles long gaps.
     fn test_calculate_session_active_minutes_handles_long_gaps() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let mut timestamps = vec![
             DateTime::parse_from_rfc3339("2026-02-20T10:00:00Z")
                 .unwrap()
@@ -7903,7 +8025,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_dedup_global_stats_same_message_id_counts_usage_once() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         // Two rows representing one assistant turn split across thinking + text
         // content blocks. They share message.id but have distinct uuids.
         let messages = vec![
@@ -7954,7 +8078,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_dedup_global_stats_distinct_message_ids_summed() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         // Two rows representing two different assistant turns with same usage.
         let messages = vec![
             make_assistant_message(
@@ -7991,7 +8117,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_dedup_global_stats_missing_message_id_counted_per_row() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         // Older logs / providers without message.id: fall back to uuid keys
         // so each distinct row still contributes once.
         let messages = vec![
@@ -8026,7 +8154,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_global_model_distribution_keeps_token_usage_without_model_name() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let message = make_test_message(
             Some("qwen"),
             "assistant",
@@ -8062,7 +8192,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_dedup_token_totals_returns_full_when_first_seen() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let mut seen: HashSet<String> = HashSet::new();
         let usage = sample_usage();
         let result = dedup_token_totals(&mut seen, "sess-1", Some("msg_a"), "uuid-1", &usage);
@@ -8070,7 +8202,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_dedup_token_totals_returns_zero_when_duplicate() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let mut seen: HashSet<String> = HashSet::new();
         let usage = sample_usage();
         let _ = dedup_token_totals(&mut seen, "sess-1", Some("msg_a"), "uuid-1", &usage);
@@ -8079,7 +8213,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_dedup_token_totals_distinct_ids_summed_separately() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let mut seen: HashSet<String> = HashSet::new();
         let usage = sample_usage();
         let r1 = dedup_token_totals(&mut seen, "sess-1", Some("msg_a"), "uuid-1", &usage);
@@ -8089,7 +8225,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_dedup_token_totals_missing_message_id_falls_back_to_uuid() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let mut seen: HashSet<String> = HashSet::new();
         let usage = sample_usage();
         // Two distinct uuids with no message_id → both counted (distinct fallback keys).
@@ -8103,7 +8241,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_dedup_token_totals_empty_message_id_falls_back_to_uuid() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let mut seen: HashSet<String> = HashSet::new();
         let usage = sample_usage();
         let r1 = dedup_token_totals(&mut seen, "sess-1", Some(""), "uuid-1", &usage);
@@ -8113,7 +8253,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_dedup_token_totals_cross_session_isolation() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let mut seen: HashSet<String> = HashSet::new();
         let usage = sample_usage();
         let r1 = dedup_token_totals(&mut seen, "sess-1", Some("msg_a"), "uuid-1", &usage);
@@ -8123,7 +8265,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_dedup_token_totals_no_identity_always_counts() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         // Defensive: a row with neither message_id nor uuid (malformed/legacy log)
         // has no identity to dedup by. Each such row must contribute its usage
         // rather than collapse to a shared empty key.
@@ -8137,7 +8281,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_dedup_session_token_stats_same_message_id_counts_once() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let messages = vec![
             make_assistant_message(
                 "uuid-thinking",
@@ -8183,6 +8329,7 @@ mod tests {
     /// Uses an injected home so the assertion is meaningful regardless of
     /// the runner's environment.
     #[test]
+    #[serial_test::serial]
     fn is_codebuddy_path_rejects_substring_lookalikes() {
         let home = Path::new("/test-home/user");
         // Substring-style matches that the OLD `path.contains(".codebuddy")`
@@ -8207,6 +8354,7 @@ mod tests {
     /// Uses an injected home so the test does not silently skip on runners
     /// without `$HOME` and does not depend on the actual user's filesystem.
     #[test]
+    #[serial_test::serial]
     fn is_codebuddy_path_accepts_real_layout() {
         let home = Path::new("/test-home/user");
         let real = home
@@ -8225,6 +8373,7 @@ mod tests {
     /// (e.g. `/work/foo.omp-agent-test`) do not get routed to the ompi
     /// loader.
     #[test]
+    #[serial_test::serial]
     fn is_ompi_path_rejects_substring_lookalikes() {
         let home = Path::new("/test-home/user");
         assert!(
@@ -8244,6 +8393,7 @@ mod tests {
     /// Real-shaped oh-my-pi / Pi paths must be detected. Mirrors the runtime
     /// layout: `~/.omp/agent/sessions/<escaped-cwd>/<session>.jsonl`.
     #[test]
+    #[serial_test::serial]
     fn is_ompi_path_accepts_real_layout() {
         let home = Path::new("/test-home/user");
         let real = home
@@ -8275,6 +8425,7 @@ mod tests {
     /// the frontend sends after the user selects those provider tabs,
     /// instead of silently dropping them (which zeroed all stats).
     #[test]
+    #[serial_test::serial]
     fn parse_active_stats_providers_accepts_ompi_pi_gemini() {
         let parsed = parse_active_stats_providers(Some(vec![
             "ompi".to_string(),
@@ -8294,6 +8445,7 @@ mod tests {
     /// Uses an injected HOME so the assertion is meaningful regardless of
     /// the runner's environment.
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn detect_project_provider_routes_new_providers() {
         let temp = TempDir::new().expect("tempdir");
@@ -8321,6 +8473,7 @@ mod tests {
     /// "No valid messages found in session". Uses an injected HOME so the
     /// assertion is meaningful regardless of the runner's environment.
     #[test]
+    #[serial_test::serial]
     #[serial]
     fn detect_session_provider_routes_new_providers() {
         let temp = TempDir::new().expect("tempdir");
@@ -8386,6 +8539,7 @@ mod tests {
     /// Provider ids emitted by `stats_provider_id` match the ids the frontend
     /// sends in `active_providers` for the new providers.
     #[test]
+    #[serial_test::serial]
     fn stats_provider_id_matches_frontend_ids() {
         assert_eq!(stats_provider_id(StatsProvider::Ompi), "ompi");
         assert_eq!(stats_provider_id(StatsProvider::Pi), "pi");
@@ -8394,6 +8548,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn model_stats_preserve_context_buckets_and_normalize_fast_tier() {
         assert_eq!(
             context_tier_min_tokens("openai/gpt-5.6-terra-2026-01-01", 272_001),
@@ -8431,6 +8586,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn nested_anthropic_cache_usage_is_flattened_with_ttl_split() {
         let usage: TokenUsage = serde_json::from_value(json!({
             "input_tokens": 100,
@@ -8448,4 +8604,109 @@ mod tests {
         assert_eq!(usage.cache_creation_input_tokens_1h, Some(5));
         assert_eq!(usage.service_tier.as_deref(), Some("standard"));
     }
+}
+
+#[tauri::command]
+pub async fn get_session_token_stats(
+    session_path: String,
+    start_date: Option<String>,
+    end_date: Option<String>,
+    stats_mode: Option<String>,
+) -> Result<SessionTokenStats, String> {
+    let (source, session_path) = crate::sources::resolve(&session_path)?;
+    crate::sources::scope(
+        source.current,
+        get_session_token_stats_in_source(session_path, start_date, end_date, stats_mode),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn get_project_token_stats(
+    project_path: String,
+    offset: Option<usize>,
+    limit: Option<usize>,
+    start_date: Option<String>,
+    end_date: Option<String>,
+    stats_mode: Option<String>,
+) -> Result<PaginatedTokenStats, String> {
+    let (source, project_path) = crate::sources::resolve(&project_path)?;
+    crate::sources::scope(
+        source.current,
+        get_project_token_stats_in_source(
+            project_path,
+            offset,
+            limit,
+            start_date,
+            end_date,
+            stats_mode,
+        ),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn get_project_stats_summary(
+    project_path: String,
+    start_date: Option<String>,
+    end_date: Option<String>,
+    stats_mode: Option<String>,
+) -> Result<ProjectStatsSummary, String> {
+    let (source, project_path) = crate::sources::resolve(&project_path)?;
+    crate::sources::scope(
+        source.current,
+        get_project_stats_summary_in_source(project_path, start_date, end_date, stats_mode),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn get_session_comparison(
+    session_id: String,
+    project_path: String,
+    start_date: Option<String>,
+    end_date: Option<String>,
+    stats_mode: Option<String>,
+) -> Result<SessionComparison, String> {
+    let (source, project_path) = crate::sources::resolve(&project_path)?;
+    let session_id = session_id
+        .strip_prefix(&format!("source:{}|", source.id))
+        .unwrap_or(&session_id)
+        .to_owned();
+    crate::sources::scope(
+        source.current,
+        get_session_comparison_in_source(
+            session_id,
+            project_path,
+            start_date,
+            end_date,
+            stats_mode,
+        ),
+    )
+    .await
+}
+
+fn collect_provider_global_file_stats(
+    provider: StatsProvider,
+    mode: StatsMode,
+    s_limit: Option<&DateTime<Utc>>,
+    e_limit: Option<&DateTime<Utc>>,
+) -> (Vec<SessionFileStats>, HashSet<String>) {
+    #[cfg(test)]
+    if crate::sources::list().unwrap_or_default().is_empty() {
+        return collect_provider_global_file_stats_in_source(provider, mode, s_limit, e_limit);
+    }
+    let mut stats = Vec::new();
+    let mut projects = HashSet::new();
+    for source in crate::sources::list().unwrap_or_default() {
+        let (mut found, keys) = crate::sources::sync_scope(source.current, || {
+            collect_provider_global_file_stats_in_source(provider, mode, s_limit, e_limit)
+        });
+        for item in &mut found {
+            item.project_name = format!("{}: {}", source.id, item.project_name);
+        }
+        stats.extend(found);
+        projects.extend(keys.into_iter().map(|key| format!("{}:{key}", source.id)));
+    }
+    (stats, projects)
 }

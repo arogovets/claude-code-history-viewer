@@ -64,8 +64,9 @@ pub async fn get_git_log(actual_path: String, limit: usize) -> Result<Vec<GitCom
 
 #[tauri::command]
 pub async fn get_claude_folder_path() -> Result<String, String> {
-    let home_dir = crate::utils::home_dir()
-        .ok_or("HOME_DIRECTORY_NOT_FOUND:Could not determine home directory")?;
+    let home_dir = crate::sources::home_dir().ok_or(
+        "CLAUDE_FOLDER_NOT_FOUND:No collected sources. Run the separate history collector first.",
+    )?;
     let claude_path = home_dir.join(".claude");
 
     if !claude_path.exists() {
@@ -86,6 +87,7 @@ pub async fn get_claude_folder_path() -> Result<String, String> {
 
 #[tauri::command]
 pub async fn validate_claude_folder(path: String) -> Result<bool, String> {
+    crate::sources::require_history_path(&path)?;
     let path_buf = PathBuf::from(&path);
 
     if !path_buf.exists() {
@@ -113,6 +115,7 @@ pub async fn validate_claude_folder(path: String) -> Result<bool, String> {
 /// and applies symlink safety checks.
 #[tauri::command]
 pub async fn validate_custom_claude_dir(path: String) -> Result<bool, String> {
+    crate::sources::require_history_path(&path)?;
     let path_buf = PathBuf::from(&path);
     match crate::utils::validate_custom_claude_path(&path_buf) {
         Ok(_) => Ok(true),
@@ -163,161 +166,13 @@ pub async fn detect_claude_config_dir() -> Result<Option<String>, String> {
 /// synchronously, so it runs on the blocking pool rather than holding the async
 /// runtime for the length of a scan. On a machine with many projects that was a
 /// visible stall, and under `--serve` a remote caller decided when it happened.
-/// Scan only local Claude projects directory without remote hosts or cache merging.
-pub async fn scan_local_projects(claude_path: String) -> Result<Vec<ClaudeProject>, String> {
+#[tauri::command]
+pub async fn scan_projects(claude_path: String) -> Result<Vec<ClaudeProject>, String> {
+    crate::sources::require_history_path(&claude_path)?;
     tauri::async_runtime::spawn_blocking(move || scan_projects_blocking(claude_path))
         .await
         .map(Ok)
         .map_err(|e| format!("Task join error: {e}"))?
-}
-
-/// Explicit from-root seam for the Claude scanner.
-///
-/// `scan_projects()` historically read a caller-supplied base path; this makes
-/// the seam explicit so the snapshot layer can supply its own root without
-/// duplicating parser logic. The convenience wrappers keep the old behavior.
-#[must_use]
-pub fn scan_projects_from_root(root: &Path) -> Vec<ClaudeProject> {
-    scan_projects_blocking(root.to_string_lossy().to_string())
-}
-
-/// Source identity for a Claude base directory: the canonical `~/.claude` is
-/// a `local` source, anything else is a `custom` source. The id is stable so
-/// restarts agree without a registry write.
-#[must_use]
-pub fn claude_source_for_base(base: &Path, label: Option<&str>) -> crate::storage::Source {
-    let is_default = crate::utils::home_dir()
-        .map(|home| home.join(".claude") == base)
-        .unwrap_or(false);
-    if is_default {
-        crate::storage::Source::local("claude", base)
-    } else {
-        crate::storage::Source::custom("claude", base, label)
-    }
-}
-
-/// Rewrite a snapshot-backed project path to its original location so the
-/// external IPC contract stays stable while parsers read CCHV-owned copies.
-fn rewrite_snapshot_project_path(
-    project: &mut ClaudeProject,
-    snapshot_data_root: &Path,
-    original_base: &Path,
-) {
-    let project_path = Path::new(&project.path);
-    if let Ok(relative) = project_path.strip_prefix(snapshot_data_root) {
-        project.path = original_base.join(relative).to_string_lossy().to_string();
-    }
-}
-
-/// Best-effort filesystem-first scan of one Claude base directory:
-///
-/// ```text
-/// original directory → immutable snapshot → existing parser → caller
-/// ```
-///
-/// Sync failures never fail the scan; browsing falls back to the original
-/// directory and to the latest completed snapshot.
-pub async fn scan_claude_base_with_snapshot(
-    base: String,
-    label: Option<String>,
-) -> Vec<ClaudeProject> {
-    let base_path = PathBuf::from(&base);
-    let source = claude_source_for_base(&base_path, label.as_deref());
-
-    // 1. Filesystem first (best effort, per-source locked inside).
-    let sync_result = tauri::async_runtime::spawn_blocking({
-        let source = source.clone();
-        let base_path = base_path.clone();
-        move || crate::storage::sync_local_directory(&source, &base_path)
-    })
-    .await;
-    match sync_result {
-        Ok(Ok(crate::storage::SyncOutcome::Created(snap))) => {
-            log::info!(
-                "Claude snapshot created for {}: {}",
-                source.id,
-                snap.snapshot_id
-            );
-        }
-        Ok(Ok(crate::storage::SyncOutcome::Unchanged(_))) => {}
-        Ok(Err(e)) => log::warn!("Claude snapshot sync skipped for {}: {e}", source.id),
-        Err(e) => log::warn!("Claude snapshot task failed for {}: {e}", source.id),
-    }
-
-    // 2. Read from the latest completed snapshot when present.
-    if let Some(snapshot_root) = crate::storage::resolve_snapshot_data_root(&source.id) {
-        let snapshot_base = snapshot_root.to_string_lossy().to_string();
-        let mut projects = scan_local_projects(snapshot_base).await.unwrap_or_default();
-        for project in &mut projects {
-            rewrite_snapshot_project_path(project, &snapshot_root, &base_path);
-        }
-        // A valid snapshot directory is authoritative even when empty: an
-        // empty result means the source currently has no sessions, while
-        // deleted history remains preserved in older snapshots + the index.
-        // Fall back to the original dir only when the snapshot is missing.
-        return projects;
-    }
-
-    // 3. No snapshot yet: read the original directory directly.
-    scan_local_projects(base).await.unwrap_or_default()
-}
-
-/// Scan the Claude storage directory for projects, including enabled remote hosts and cached projects.
-#[tauri::command]
-pub async fn scan_projects(claude_path: String) -> Result<Vec<ClaudeProject>, String> {
-    #[cfg(test)]
-    {
-        scan_local_projects(claude_path).await
-    }
-    #[cfg(not(test))]
-    {
-        let mut projects = scan_local_projects(claude_path).await?;
-        for p in &mut projects {
-            if p.provider.is_none() {
-                p.provider = Some("claude".to_string());
-            }
-        }
-
-        // Remote hosts scanning for Claude projects
-        let remote_hosts = crate::remote::get_remote_hosts();
-        if !remote_hosts.is_empty() {
-            let remote_handles: Vec<_> = remote_hosts
-                .into_iter()
-                .filter(|h| h.enabled)
-                .map(|host| {
-                    tauri::async_runtime::spawn(async move {
-                        crate::remote::scan_remote_projects(&host, &["claude".to_string()]).await
-                    })
-                })
-                .collect();
-
-            for handle in remote_handles {
-                match handle.await {
-                    Ok(Ok(remote_projects)) => projects.extend(remote_projects),
-                    Ok(Err(e)) => log::warn!("Remote host scan error in scan_projects: {e}"),
-                    Err(e) => log::warn!("Remote host scan task failed: {e}"),
-                }
-            }
-        }
-
-        projects.retain(|project| project.session_count > 0);
-
-        let mut all_projects =
-            crate::cache::sync_and_save_projects(&projects, None, Some("claude"));
-        all_projects.sort_by(|a, b| {
-            match (
-                crate::utils::parse_rfc3339_utc(&a.last_modified),
-                crate::utils::parse_rfc3339_utc(&b.last_modified),
-            ) {
-                (Some(a_ts), Some(b_ts)) => b_ts.cmp(&a_ts),
-                (Some(_), None) => std::cmp::Ordering::Less,
-                (None, Some(_)) => std::cmp::Ordering::Greater,
-                (None, None) => b.last_modified.cmp(&a.last_modified),
-            }
-        });
-
-        Ok(all_projects)
-    }
 }
 
 /// The scan itself. Separate from the command so the body stays at one indent
@@ -580,14 +435,18 @@ mod tests {
 
     // Test validate_claude_folder
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_validate_claude_folder_nonexistent() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let result = validate_claude_folder("/nonexistent/path".to_string()).await;
         assert!(result.is_ok());
         assert!(!result.unwrap());
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_validate_claude_folder_without_projects() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
         let claude_dir = temp_dir.path().join(".claude");
         fs::create_dir(&claude_dir).unwrap();
@@ -599,7 +458,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_validate_claude_folder_with_projects() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
         let claude_dir = temp_dir.path().join(".claude");
         let projects_dir = claude_dir.join("projects");
@@ -612,7 +473,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_validate_claude_folder_from_parent() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
         let claude_dir = temp_dir.path().join(".claude");
         let projects_dir = claude_dir.join("projects");
@@ -626,7 +489,9 @@ mod tests {
 
     // Test scan_projects
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_scan_projects_empty() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
         let claude_dir = temp_dir.path().join(".claude");
         let projects_dir = claude_dir.join("projects");
@@ -638,7 +503,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_scan_projects_no_projects_dir() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
 
         let result = scan_projects(temp_dir.path().to_string_lossy().to_string()).await;
@@ -647,7 +514,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_scan_projects_single_project() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
         let claude_dir = temp_dir.path().join(".claude");
         let projects_dir = claude_dir.join("projects");
@@ -672,7 +541,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_scan_projects_keeps_missing_worktree_history_visible() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
         let claude_dir = temp_dir.path().join(".claude");
         let project_dir = claude_dir.join("projects").join("-tmp-deleted-worktree");
@@ -710,7 +581,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_scan_projects_multiple_projects() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
         let claude_dir = temp_dir.path().join(".claude");
         let projects_dir = claude_dir.join("projects");
@@ -738,7 +611,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_scan_projects_extracts_project_name() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
         let claude_dir = temp_dir.path().join(".claude");
         let projects_dir = claude_dir.join("projects");
@@ -761,7 +636,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_scan_projects_prefers_jsonl_cwd_over_lossy_storage_name() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
         let claude_dir = temp_dir.path().join(".claude");
         let projects_dir = claude_dir.join("projects");
@@ -804,7 +681,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_scan_projects_prefers_verified_folder_over_stale_cwd() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
         let claude_dir = temp_dir.path().join(".claude");
         let projects_dir = claude_dir.join("projects");
@@ -852,7 +731,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_extract_cwd_from_session_file_ignores_empty_lines_before_limit() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
         let mut lines = vec![String::new(); 150];
         lines.push(
@@ -876,7 +757,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_scan_projects_prefers_top_level_cwd_over_subagent_cwd() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
         let claude_dir = temp_dir.path().join(".claude");
         let projects_dir = claude_dir.join("projects");
@@ -940,7 +823,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_scan_projects_sorted_by_last_modified() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
         let claude_dir = temp_dir.path().join(".claude");
         let projects_dir = claude_dir.join("projects");
@@ -969,7 +854,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_scan_projects_ignores_non_jsonl_files() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
         let claude_dir = temp_dir.path().join(".claude");
         let projects_dir = claude_dir.join("projects");
@@ -991,7 +878,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_scan_projects_nested_sessions() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
         let claude_dir = temp_dir.path().join(".claude");
         let projects_dir = claude_dir.join("projects");
@@ -1013,7 +902,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_scan_projects_skips_empty_project_directories() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
         let claude_dir = temp_dir.path().join(".claude");
         let projects_dir = claude_dir.join("projects");
@@ -1033,7 +924,9 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_scan_projects_follows_symlinked_project_dir() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         use std::os::unix::fs::symlink;
 
         let temp_dir = TempDir::new().unwrap();
@@ -1061,7 +954,9 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_scan_projects_skips_dangling_symlink() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         use std::os::unix::fs::symlink;
 
         let temp_dir = TempDir::new().unwrap();
@@ -1089,7 +984,9 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_scan_projects_deduplicates_symlink_and_real_dir() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         use std::os::unix::fs::symlink;
 
         let temp_dir = TempDir::new().unwrap();
@@ -1118,7 +1015,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_get_git_log_invalid_path() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let result = get_git_log(crate::test_utils::abs("nonexistent/path"), 10).await;
         // Should fail because path doesn't exist
         assert!(result.is_err());
@@ -1129,14 +1028,18 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_get_git_log_not_absolute() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let result = get_git_log("relative/path".to_string(), 10).await;
         assert!(result.is_err());
         assert_eq!(result.unwrap_err(), "Path must be absolute");
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_get_git_log_success() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let temp_dir = TempDir::new().unwrap();
         let path_str = temp_dir.path().to_string_lossy().to_string();
 
@@ -1190,7 +1093,9 @@ mod tests {
     // Tests for detect_claude_config_dir
     // All tests use ENV_MUTEX to prevent race conditions on the global env var.
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_detect_config_dir_unset() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let _guard = lock_env();
         std::env::remove_var("CLAUDE_CONFIG_DIR");
         let result = detect_claude_config_dir().await.unwrap();
@@ -1198,7 +1103,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_detect_config_dir_empty() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let _guard = lock_env();
         std::env::set_var("CLAUDE_CONFIG_DIR", "");
         let result = detect_claude_config_dir().await.unwrap();
@@ -1207,7 +1114,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_detect_config_dir_valid() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let _guard = lock_env();
         let temp_dir = TempDir::new().unwrap();
         let projects_dir = temp_dir.path().join("projects");
@@ -1223,7 +1132,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_detect_config_dir_invalid_no_projects() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let _guard = lock_env();
         let temp_dir = TempDir::new().unwrap();
         // No projects/ subdirectory
@@ -1238,7 +1149,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_detect_config_dir_relative_path() {
+        let _sandbox = crate::test_utils::SandboxHome::new();
         let _guard = lock_env();
         std::env::set_var("CLAUDE_CONFIG_DIR", "relative/path");
         let result = detect_claude_config_dir().await.unwrap();
